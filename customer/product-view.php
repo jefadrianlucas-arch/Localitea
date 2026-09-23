@@ -146,8 +146,9 @@ $addons = $addonStmt->fetchAll();
         background-color: #FDFBF7;
     }
     .btn-brown {
-        background-color: #4A3525;
-        border-color: #4A3525;
+        background-color: #332317;
+        border: 1.5px solid #24170F;
+        border-color: #24170F;
         color: #ffffff;
         border-radius: 50px;
         padding: 0.6rem 1.2rem;
@@ -157,8 +158,8 @@ $addons = $addonStmt->fetchAll();
         box-shadow: 0 2px 6px rgba(74, 53, 37, 0.2);
     }
     .btn-brown:hover {
-        background-color: #332317;
-        border-color: #332317;
+        background-color: #24170F;
+        border-color: #1A100B;
         color: #ffffff;
         transform: translateY(-1px);
         box-shadow: 0 4px 10px rgba(74, 53, 37, 0.3);
@@ -207,7 +208,7 @@ $addons = $addonStmt->fetchAll();
     }
     .custom-box {
         background-color: #ffffff;
-        border: 1px solid #E6DEC9;
+        border: 2px solid #4A3525;
         border-radius: 16px;
         box-shadow: 0 4px 12px rgba(0,0,0,0.03);
     }
@@ -215,15 +216,18 @@ $addons = $addonStmt->fetchAll();
         cursor: pointer;
         font-size: 1.25rem;
         user-select: none;
-        color: #4A3525;
+        color: #332317;
         transition: color 0.2s;
     }
     .qty-btn:hover {
-        color: #332317;
+        color: #24170F;
+    }
+    .form-check-input {
+        border-color: #4A3525;
     }
     .form-check-input:checked {
-        background-color: #4A3525;
-        border-color: #4A3525;
+        background-color: #332317;
+        border-color: #24170F;
     }
 </style>
 
@@ -321,7 +325,7 @@ $addons = $addonStmt->fetchAll();
                 <div class="custom-box p-4">
                     <h4 class="fw-bold mb-4" style="color: #2c221e;">Customize your order</h4>
                     <?php if ($promotion): ?>
-                        <div class="mb-4 p-3 rounded-3" style="background:#F7F0E8; border:1px solid #8B6F5A;">
+                        <div class="mb-4 p-3 rounded-3" style="background:#F7F0E8; border:1.5px solid #4A3525;">
                             <div class="fw-bold mb-1" style="color:#4A3525;">
                                 <i class="bi bi-tag-fill me-1"></i>
                                 <?= htmlspecialchars($promotion['title']) ?>

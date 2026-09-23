@@ -5,28 +5,6 @@ error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
 require_once '../includes/db.php';
-
-$isAjaxRequest =
-    ($_POST['ajax'] ?? $_GET['ajax'] ?? '') === '1' ||
-    strtolower((string)($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '')) === 'xmlhttprequest';
-
-function customerRedirect(string $location): void
-{
-    global $isAjaxRequest;
-
-    if ($isAjaxRequest) {
-        header('Content-Type: application/json; charset=utf-8');
-        echo json_encode([
-            'success' => false,
-            'redirect' => $location
-        ]);
-        exit;
-    }
-
-    header('Location: ' . $location);
-    exit;
-}
-
 require_once '../includes/promotion-engine.php';
 
 $successMessage = '';
@@ -51,7 +29,8 @@ if (
         !isset($_SESSION['cart'][$cartKey]) ||
         !is_array($_SESSION['cart'][$cartKey])
     ) {
-        customerRedirect('cart.php?edit_error=' . urlencode('The selected cart item could not be found.'));
+        header('Location: cart.php?edit_error=' . urlencode('The selected cart item could not be found.'));
+        exit;
     }
 
     $cartItem = $_SESSION['cart'][$cartKey];
@@ -72,7 +51,8 @@ if (
     $allowedSugars = ['0%', '25%', '50%', '75%', '100%'];
 
     if ($productId <= 0 || !in_array($sugarLevel, $allowedSugars, true)) {
-        customerRedirect('cart.php?edit_error=' . urlencode('Please select valid customization options.'));
+        header('Location: cart.php?edit_error=' . urlencode('Please select valid customization options.'));
+        exit;
     }
 
     $editProductStmt = $pdo->prepare("
@@ -85,7 +65,8 @@ if (
     $editProduct = $editProductStmt->fetch(PDO::FETCH_ASSOC);
 
     if (!$editProduct || (int)$editProduct['is_archived'] === 1) {
-        customerRedirect('cart.php?edit_error=' . urlencode('This product is no longer available.'));
+        header('Location: cart.php?edit_error=' . urlencode('This product is no longer available.'));
+        exit;
     }
 
     $basePrice = (float)($editProduct['price'] ?? 0);
@@ -93,15 +74,18 @@ if (
     if ($size === 'Regular') {
         $basePrice = (float)($editProduct['regular_price'] ?? 0);
         if ($basePrice <= 0) {
-            customerRedirect('cart.php?edit_error=' . urlencode('The selected size is not available for this product.'));
+            header('Location: cart.php?edit_error=' . urlencode('The selected size is not available for this product.'));
+            exit;
         }
     } elseif ($size === 'Grande') {
         $basePrice = (float)($editProduct['grande_price'] ?? 0);
         if ($basePrice <= 0) {
-            customerRedirect('cart.php?edit_error=' . urlencode('The selected size is not available for this product.'));
+            header('Location: cart.php?edit_error=' . urlencode('The selected size is not available for this product.'));
+            exit;
         }
     } elseif ($size !== '') {
-        customerRedirect('cart.php?edit_error=' . urlencode('The selected size is invalid.'));
+        header('Location: cart.php?edit_error=' . urlencode('The selected size is invalid.'));
+        exit;
     }
 
     /* Keep active promotion size constraints when editing promo lines. */
@@ -137,7 +121,8 @@ if (
         if (in_array($configuredSize, ['regular', 'grande'], true)) {
             $requiredSize = ucfirst($configuredSize);
             if ($size !== $requiredSize) {
-                customerRedirect('cart.php?edit_error=' . urlencode('This promotion requires the configured ' . $requiredSize . ' size.'));
+                header('Location: cart.php?edit_error=' . urlencode('This promotion requires the configured ' . $requiredSize . ' size.'));
+                exit;
             }
         }
     }
@@ -210,7 +195,8 @@ if (
         $_SESSION['cart'][$cartKey] = $updatedItem;
     }
 
-    customerRedirect('cart.php?edit_success=1');
+    header('Location: cart.php?edit_success=1');
+    exit;
 }
 
 if (empty($_SESSION['cart'])) {
@@ -440,7 +426,7 @@ require_once '../includes/navbar.php';
 
     .custom-box {
         background-color: #ffffff;
-        border: 1px solid #E6DEC9;
+        border: 2px solid #4A3525;
         border-radius: 16px;
         box-shadow: 0 4px 12px rgba(0,0,0,0.02);
     }
@@ -457,8 +443,8 @@ require_once '../includes/navbar.php';
     }
 
     .btn-brown-custom {
-        background-color: #4A3525;
-        border-color: #4A3525;
+        background-color: #332317;
+        border-color: #332317;
         color: #ffffff;
         border-radius: 50px;
         padding: 0.5rem 1.2rem;
@@ -468,15 +454,15 @@ require_once '../includes/navbar.php';
     }
 
     .btn-brown-custom:hover {
-        background-color: #332317;
-        border-color: #332317;
+        background-color: #24170F;
+        border-color: #24170F;
         color: #ffffff;
         transform: translateY(-1px);
     }
 
     .custom-input {
         background-color: #ffffff;
-        border: 1px solid #E6DEC9;
+        border: 1.5px solid #6F4E37;
         border-radius: 8px;
         padding: 7px 10px;
         font-size: 0.85rem;
@@ -489,7 +475,7 @@ require_once '../includes/navbar.php';
     }
 
     .form-check-input {
-        border-color: #ced4da;
+        border-color: #6F4E37;
     }
 
     .form-check-input:focus {
@@ -525,7 +511,7 @@ require_once '../includes/navbar.php';
         height: 30px;
         padding: 0 9px;
         border-radius: 8px;
-        border: 1px solid #E6DEC9;
+        border: 1.5px solid #4A3525;
         background: #ffffff;
         color: #4A3525 !important;
         font-size: .72rem;
@@ -535,14 +521,14 @@ require_once '../includes/navbar.php';
     }
 
     .cart-edit-link:hover {
-        background: #F8F3EA;
-        border-color: #8B6F5A;
+        background: #F1E8DE;
+        border-color: #332317;
         color: #332317 !important;
     }
 
     .cart-free-line {
         background: #F8F3EA;
-        border: 1px solid #E6DEC9;
+        border: 1.5px solid #6F4E37;
         padding: 7px 6px;
         border-radius: 8px;
     }
@@ -560,7 +546,7 @@ require_once '../includes/navbar.php';
     }
 
     .cart-edit-modal .modal-header {
-        background: #4A3525;
+        background: #332317;
         color: #ffffff;
     }
 
@@ -592,14 +578,14 @@ require_once '../includes/navbar.php';
     */
 
     .gcash-modal-header {
-        background-color: #4A3525;
+        background-color: #332317;
         color: #ffffff;
         border-radius: 12px 12px 0 0;
     }
 
     .gcash-qr-container {
         background-color: #FDFBF7;
-        border: 1px solid #E6DEC9;
+        border: 1.5px solid #6F4E37;
         border-radius: 12px;
         padding: 15px;
         text-align: center;
@@ -622,7 +608,7 @@ require_once '../includes/navbar.php';
 
     .gcash-instructions {
         background-color: #F8F3EA;
-        border: 1px solid #E6DEC9;
+        border: 1.5px solid #6F4E37;
         border-radius: 10px;
         padding: 12px;
         font-size: 0.85rem;
@@ -731,8 +717,94 @@ require_once '../includes/navbar.php';
             width: min(220px, 70vw);
         }
     }
+/* =========================================================
+   AJAX CHECKOUT LOADING OVERLAY
+========================================================= */
+.checkout-loading-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background: rgba(74, 53, 37, .28);
+    backdrop-filter: blur(3px);
+}
+
+.checkout-loading-overlay.is-visible {
+    display: flex;
+}
+
+.checkout-loading-box {
+    width: min(92vw, 360px);
+    padding: 28px 24px;
+    background: #FFFFFF;
+    border: 2px solid #6F4E37;
+    border-radius: 18px;
+    box-shadow: 0 16px 40px rgba(44, 34, 30, .18);
+    text-align: center;
+}
+
+.checkout-loading-spinner {
+    width: 44px;
+    height: 44px;
+    margin: 0 auto 14px;
+    border: 4px solid #E8DFD4;
+    border-top-color: #6F4E37;
+    border-radius: 50%;
+    animation: checkoutSpin .75s linear infinite;
+}
+
+.checkout-loading-title {
+    margin: 0;
+    color: #4A3525;
+    font-size: 1rem;
+    font-weight: 800;
+}
+
+.checkout-loading-text {
+    margin: 6px 0 0;
+    color: #8A7A6C;
+    font-size: .82rem;
+}
+
+body.checkout-loading-active {
+    overflow: hidden;
+}
+
+@keyframes checkoutSpin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@media (max-width: 576px) {
+    .checkout-loading-box {
+        padding: 24px 18px;
+        border-radius: 16px;
+    }
+}
+
 </style>
 
+
+<div
+    id="checkoutLoadingOverlay"
+    class="checkout-loading-overlay"
+    aria-hidden="true"
+>
+    <div
+        class="checkout-loading-box"
+        role="status"
+        aria-live="polite"
+        aria-label="Placing order"
+    >
+        <div class="checkout-loading-spinner" aria-hidden="true"></div>
+        <p class="checkout-loading-title">Placing your order...</p>
+        <p class="checkout-loading-text">Please wait while we process your checkout.</p>
+    </div>
+</div>
 
 <div class="container py-5">
 
@@ -1150,7 +1222,7 @@ require_once '../includes/navbar.php';
                                                 <div class="d-flex align-items-center gap-2 flex-wrap">
                                                     <div class="cart-action-links">
                                                         <a
-                                                            href="remove-from-cart.php?key=<?= urlencode($key) ?>" data-ajax-remove="true"
+                                                            href="remove-from-cart.php?key=<?= urlencode($key) ?>"
                                                             class="cart-remove-link text-decoration-none small"
                                                             title="Remove item"
                                                             aria-label="Remove item"
@@ -1208,7 +1280,7 @@ require_once '../includes/navbar.php';
                                                 <div class="d-flex align-items-center gap-2 flex-wrap">
                                                     <div class="cart-action-links">
                                                         <a
-                                                            href="remove-from-cart.php?key=<?= urlencode($key) ?>" data-ajax-remove="true"
+                                                            href="remove-from-cart.php?key=<?= urlencode($key) ?>"
                                                             class="cart-remove-link text-decoration-none small"
                                                             title="Remove free item"
                                                             aria-label="Remove free item"
@@ -1518,7 +1590,7 @@ require_once '../includes/navbar.php';
                                                     ></button>
                                                 </div>
 
-                                                <form method="POST" action="cart.php" data-ajax-form="true" data-ajax-loading-text="Saving changes...">
+                                                <form method="POST" action="cart.php">
                                                     <input type="hidden" name="cart_action" value="edit_cart_item">
                                                     <input type="hidden" name="cart_key" value="<?= htmlspecialchars($key, ENT_QUOTES) ?>">
 
@@ -2004,25 +2076,17 @@ let gcashConfirmed = false;
 function handleCheckoutSubmit(event) {
 
     /*
-     * If the user has already confirmed GCash,
-     * allow the form to submit normally.
+     * Always stop the browser's normal form submission.
+     * Checkout is sent through AJAX so the current page remains visible
+     * while the order is being created.
      */
-
-    if (gcashConfirmed) {
-
-        event.preventDefault();
-        return submitCheckoutAjax(document.getElementById('checkoutForm'));
-    }
+    event.preventDefault();
 
 
     /*
      * Validate pickup first.
      */
-
     if (!validateTime()) {
-
-        event.preventDefault();
-
         return false;
     }
 
@@ -2030,52 +2094,128 @@ function handleCheckoutSubmit(event) {
     /*
      * Check selected payment method.
      */
-
     const selectedPayment = document.querySelector(
         'input[name="payment_method"]:checked'
     );
 
-
     if (!selectedPayment) {
-
-        event.preventDefault();
-
         alert("Please select a payment method.");
-
         return false;
     }
 
 
-    /*
-     * CASH
-     *
-     * Submit normally.
-     */
-
-    if (selectedPayment.value.toLowerCase() === 'cash') {
-
-        event.preventDefault();
-        return submitCheckoutAjax(document.getElementById('checkoutForm'));
-    }
-
+    const paymentValue = selectedPayment.value.toLowerCase().replace(/[- _]/g, '');
 
     /*
-     * GCASH
-     *
-     * Open modal instead of immediately submitting.
+     * GCash still requires the payment screenshot modal first.
      */
-
-    if (selectedPayment.value.toLowerCase().replace(/[- ]/g, '') === 'gcash') {
-
-        event.preventDefault();
-
+    if (paymentValue === 'gcash') {
         showGcashModal();
-
         return false;
     }
 
 
-    return true;
+    /*
+     * Cash can be submitted immediately through AJAX.
+     */
+    processCheckoutAjax();
+    return false;
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| AJAX CHECKOUT
+|--------------------------------------------------------------------------
+*/
+
+let checkoutSubmitting = false;
+
+
+function setCheckoutLoading(isLoading) {
+
+    const overlay = document.getElementById('checkoutLoadingOverlay');
+    const button = document.getElementById('checkoutButton');
+
+    if (overlay) {
+        overlay.classList.toggle('is-visible', isLoading);
+        overlay.setAttribute('aria-hidden', isLoading ? 'false' : 'true');
+    }
+
+    document.body.classList.toggle('checkout-loading-active', isLoading);
+
+    if (button) {
+        button.disabled = isLoading;
+        button.innerHTML = isLoading
+            ? '<span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>Processing...'
+            : 'Checkout';
+    }
+}
+
+
+async function processCheckoutAjax() {
+
+    const form = document.getElementById('checkoutForm');
+
+    if (!form || checkoutSubmitting) {
+        return;
+    }
+
+    checkoutSubmitting = true;
+    setCheckoutLoading(true);
+
+    try {
+        const formData = new FormData(form);
+
+        /* Tell checkout.php to return JSON instead of redirecting itself. */
+        formData.set('ajax', '1');
+
+        const response = await fetch(form.action, {
+            method: 'POST',
+            body: formData,
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest',
+                'Accept': 'application/json'
+            },
+            cache: 'no-store',
+            credentials: 'same-origin'
+        });
+
+        const contentType = response.headers.get('content-type') || '';
+        let data;
+
+        if (contentType.includes('application/json')) {
+            data = await response.json();
+        } else {
+            const text = await response.text();
+            throw new Error(
+                text || 'The server returned an unexpected response.'
+            );
+        }
+
+        if (!response.ok || !data.success) {
+            throw new Error(
+                data.message || 'Unable to place your order right now.'
+            );
+        }
+
+        /*
+         * Keep the loading overlay visible while the browser moves to
+         * dashboard.php. This prevents duplicate submissions/clicks.
+         */
+        window.location.href = data.redirect || 'dashboard.php';
+
+    } catch (error) {
+
+        checkoutSubmitting = false;
+        setCheckoutLoading(false);
+
+        alert(
+            error && error.message
+                ? error.message
+                : 'Unable to place your order right now.'
+        );
+    }
 }
 
 
@@ -2214,39 +2354,17 @@ function submitGcashPayment() {
 
 
     /*
-     * Disable submit buttons to prevent duplicate orders.
+     * Close the payment modal and send the form through the same
+     * AJAX checkout flow used by Cash.
      */
+    const modalElement = document.getElementById('gcashModal');
 
-    const checkoutButton =
-        document.getElementById('checkoutButton');
-
-    if (checkoutButton) {
-
-        checkoutButton.disabled = true;
-
-        checkoutButton.innerHTML =
-            '<span class="spinner-border spinner-border-sm me-2"></span>Processing...';
-
+    if (modalElement) {
+        const modal = bootstrap.Modal.getOrCreateInstance(modalElement);
+        modal.hide();
     }
 
-
-    const modalElement =
-        document.getElementById('gcashModal');
-
-    const modal =
-        bootstrap.Modal.getOrCreateInstance(modalElement);
-
-    modal.hide();
-
-
-    /*
-     * Submit the actual form.
-     *
-     * requestSubmit() keeps the form's validation and submit
-     * event flow intact.
-     */
-
-    form.requestSubmit();
+    processCheckoutAjax();
 }
 
 </script>

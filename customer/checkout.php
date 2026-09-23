@@ -1158,26 +1158,25 @@ try {
      * REDIRECT AFTER CHECKOUT
      * ================================================================
      *
-     * Guests receive a one-time confirmation page in the same browser
-     * session. It shows the Order No. and Claim No. and does not provide
-     * a print-receipt option. They can later use Claim No. + mobile on
-     * monitor-guest-order.php.
+     * After checkout, send the customer directly to the order-monitoring
+     * page instead of a separate receipt/confirmation page.
+     *
+     * Registered customers go to their customer dashboard, which is the
+     * Monitor Order page for logged-in customers.
+     *
+     * Guests go directly to the guest Monitor Order page with the newly
+     * generated Claim Number so the order is shown immediately.
      */
 
     if (!$isRegisteredCustomer) {
 
-        $_SESSION['guest_last_order_id'] = $order_id;
-        $_SESSION['guest_confirmation_token'] = bin2hex(random_bytes(16));
-
         $successRedirect =
-            "guest-order-confirmation.php?token=" .
-            urlencode($_SESSION['guest_confirmation_token']);
+            "monitor-guest-order.php?claim=" .
+            urlencode($claim_number);
 
     } else {
 
-        $successRedirect =
-            "receipt.php?order=" .
-            urlencode($order_number);
+        $successRedirect = "dashboard.php";
     }
 
     if ($isAjaxRequest) {

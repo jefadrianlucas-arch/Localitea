@@ -1064,7 +1064,7 @@ require_once '../includes/navbar.php';
 <div class="dashboard-page">
     <div class="container py-5">
 
-        <h2 class="page-title">My Dashboard & Orders</h2>
+        <h2 class="page-title">Active Orders & Order History</h2>
         <p class="page-subtitle">
             Monitor your current order status and view your previous orders.
         </p> 
