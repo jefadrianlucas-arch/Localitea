@@ -1,0 +1,118 @@
+:root {
+    --primary-brown: #6F4E37;
+    --dark-brown: #5A3E2B;
+    --beige: #E8D8C4;
+    --cream-white: #F8F5F2;
+    --white: #FFFFFF;
+    --dark-gray: #333333;
+    --light-gray: #D9D9D9;
+}
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    min-height: 100vh;
+    background-color: var(--cream-white);
+    color: var(--dark-gray);
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+
+/* =====================================================
+   COLORS
+===================================================== */
+
+.bg-primary-brown {
+    background-color: var(--primary-brown) !important;
+}
+
+.bg-dark-brown {
+    background-color: var(--dark-brown) !important;
+}
+
+.bg-beige {
+    background-color: var(--beige) !important;
+}
+
+.bg-cream {
+    background-color: var(--cream-white) !important;
+}
+
+.text-primary-brown {
+    color: var(--primary-brown) !important;
+}
+
+.text-dark-brown {
+    color: var(--dark-brown) !important;
+}
+
+
+/* =====================================================
+   CUSTOM BUTTON
+===================================================== */
+
+.btn-primary-custom {
+    background-color: var(--primary-brown);
+    color: var(--white);
+    border: none;
+    transition: all 0.3s ease;
+}
+
+.btn-primary-custom:hover {
+    background-color: var(--dark-brown);
+    color: var(--white);
+}
+
+
+/* =====================================================
+   CUSTOM CARD
+===================================================== */
+
+.card-custom {
+    border-radius: 1rem;
+    border: none;
+    box-shadow: 0 4px 15px rgba(111, 78, 55, 0.08);
+
+    /*
+     * IMPORTANT:
+     * Do NOT use transform on the card.
+     * Bootstrap modals can be affected by transformed
+     * parent elements when the modal is inside the card.
+     */
+    transition: box-shadow 0.2s ease;
+}
+
+.card-custom:hover {
+    box-shadow: 0 6px 20px rgba(111, 78, 55, 0.15);
+}
+
+
+/* =====================================================
+   NAVBAR
+===================================================== */
+
+.navbar-custom {
+    background-color: var(--white);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+}
+
+
+/* =====================================================
+   BOOTSTRAP MODAL SAFETY
+===================================================== */
+
+.modal {
+    z-index: 1055;
+}
+
+.modal-backdrop {
+    z-index: 1050;
+}
+
+.modal-dialog {
+    z-index: 1056;
+}

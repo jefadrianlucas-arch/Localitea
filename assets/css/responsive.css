@@ -1,0 +1,2284 @@
+/*
+ * Localitea - Mobile-first responsive layer
+ * Loaded after the existing page styles so old desktop-only rules
+ * cannot force the mobile viewport into a fixed-width layout.
+ */
+
+html,
+body {
+    width: 100%;
+    max-width: 100%;
+}
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+img,
+svg,
+video,
+canvas,
+iframe {
+    max-width: 100%;
+}
+
+img {
+    height: auto;
+}
+
+input,
+select,
+textarea,
+button {
+    max-width: 100%;
+}
+
+p,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+a,
+button,
+label,
+span,
+td,
+th,
+.card-title,
+.card-text {
+    overflow-wrap: anywhere;
+}
+
+.table-responsive {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+.modal-dialog {
+    width: auto;
+    max-width: calc(100vw - 24px);
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.modal-content,
+.card,
+.card-body,
+.container,
+.container-fluid,
+.row,
+[class*="col-"] {
+    min-width: 0;
+}
+
+/* ---------------------------------------------------------
+   CUSTOMER NAVBAR
+--------------------------------------------------------- */
+
+.navbar-custom {
+    width: 100%;
+}
+
+.navbar-custom .navbar-brand {
+    min-width: 0;
+    max-width: calc(100vw - 80px);
+    white-space: normal;
+}
+
+.navbar-custom .navbar-collapse {
+    min-width: 0;
+}
+
+@media (max-width: 991.98px) {
+    .navbar-custom {
+        padding: 10px 0 !important;
+    }
+
+    .navbar-custom .container {
+        padding-left: 14px;
+        padding-right: 14px;
+    }
+
+    .navbar-custom .navbar-brand {
+        font-size: 1.05rem !important;
+        line-height: 1.2;
+    }
+
+    .navbar-custom .navbar-brand i {
+        font-size: 1.1rem !important;
+        margin-right: 4px;
+    }
+
+    .navbar-custom .navbar-nav {
+        width: 100%;
+        align-items: stretch !important;
+        padding: 8px 0 2px;
+    }
+
+    .navbar-custom .nav-item {
+        width: 100%;
+    }
+
+    .navbar-custom .nav-link {
+        margin: 1px 0 !important;
+        padding: 10px 12px !important;
+        border-radius: 10px;
+    }
+
+    .navbar-custom .nav-icon-link {
+        width: 100%;
+        height: auto;
+        justify-content: flex-start;
+        padding: 10px 12px !important;
+        gap: 10px;
+    }
+
+    .navbar-custom .notification-dropdown,
+    .navbar-custom .dropdown-menu {
+        width: min(100%, calc(100vw - 28px)) !important;
+        max-width: calc(100vw - 28px) !important;
+    }
+}
+
+@media (max-width: 575.98px) {
+    .navbar-custom .navbar-brand {
+        font-size: 0.98rem !important;
+        max-width: calc(100vw - 72px);
+    }
+
+    .navbar-custom .navbar-toggler {
+        padding: 5px 7px;
+    }
+}
+
+/* ---------------------------------------------------------
+   AUTH PAGES
+--------------------------------------------------------- */
+
+@media (max-width: 575.98px) {
+    body:has(.login-page),
+    body:has(.register-page),
+    body:has(.staff-login-page),
+    body:has(.verify-page) {
+        overflow-x: hidden !important;
+    }
+
+    .auth-card,
+    .login-card,
+    .register-card,
+    .verify-card,
+    .staff-login-card {
+        width: calc(100% - 24px) !important;
+        max-width: none !important;
+        margin-left: auto !important;
+        margin-right: auto !important;
+    }
+
+    .auth-container,
+    .login-container,
+    .register-container,
+    .verify-container {
+        width: 100% !important;
+        padding-left: 12px !important;
+        padding-right: 12px !important;
+    }
+}
+
+/* =========================================================
+   ADMIN / STAFF NAVIGATION
+   Desktop/Laptop -> Left Sidebar
+   Tablet/Mobile  -> Bottom Navigation
+========================================================= */
+
+
+/* =========================================================
+   DESKTOP + LAPTOP
+   992px and above
+========================================================= */
+
+@media (min-width: 992px) {
+
+    .sidebar-admin,
+    .sidebar-staff {
+        position: fixed;
+
+        top: 0;
+        left: 0;
+        bottom: 0;
+
+        width: clamp(220px, 18vw, 260px);
+        min-width: 220px;
+        max-width: 260px;
+
+        height: 100vh;
+        min-height: 100vh;
+
+        display: flex;
+        flex-direction: column;
+
+        overflow-y: auto;
+        overflow-x: hidden;
+
+        background: #FDF8F2;
+
+        border-right: 1px solid #6F4E37;
+
+        z-index: 1100;
+
+        box-sizing: border-box;
+    }
+
+
+    /*
+     * Main content follows the sidebar.
+     * No fixed 260px width calculation.
+     */
+    .admin-main,
+    .admin-dashboard,
+    .admin-dashboard-page,
+    .sales-page,
+    .settings-page,
+    .profile-page,
+    .admin-shell-main,
+    .staff-page,
+    .staff-dashboard {
+
+        margin-left: clamp(220px, 18vw, 260px);
+
+        width: auto;
+        max-width: none;
+
+        min-width: 0;
+
+        box-sizing: border-box;
+    }
+
+
+    /*
+     * Hamburger is desktop-only unnecessary.
+     */
+    .admin-menu-toggle {
+        display: none !important;
+    }
+
+
+    /*
+     * Drawer backdrop is not used on desktop.
+     */
+    .sidebar-backdrop {
+        display: none !important;
+    }
+}
+
+
+/* =========================================================
+   TABLET
+   768px - 991.98px
+========================================================= */
+
+@media (min-width: 768px) and (max-width: 991.98px) {
+
+    /*
+     * Bottom navigation bar
+     */
+    .sidebar-admin,
+    .sidebar-staff {
+
+        position: fixed !important;
+
+        top: auto !important;
+        right: 0 !important;
+        bottom: 0 !important;
+        left: 0 !important;
+
+        width: 100% !important;
+        min-width: 0 !important;
+        max-width: none !important;
+
+        height: 72px !important;
+        min-height: 72px !important;
+
+        display: flex !important;
+        flex-direction: row !important;
+
+        background: #FDF8F2;
+
+        border-top: 1px solid #6F4E37;
+        border-right: none !important;
+
+        box-shadow:
+            0 -4px 14px rgba(44, 34, 30, .08);
+
+        overflow: hidden !important;
+
+        z-index: 1100;
+
+        box-sizing: border-box;
+    }
+
+
+    /*
+     * Hide desktop sidebar branding.
+     */
+    .sidebar-admin .sidebar-brand,
+    .sidebar-staff .sidebar-brand {
+        display: none;
+    }
+
+    .sidebar-admin .sidebar-close,
+    .sidebar-staff .sidebar-close,
+    .sidebar-close {
+        display: none !important;
+    }
+
+
+    /*
+     * Five navigation items fill the available width.
+     */
+    .sidebar-admin .sidebar-nav,
+    .sidebar-staff .sidebar-nav {
+
+        width: 100% !important;
+        height: 72px !important;
+
+        padding: 5px 8px;
+        margin: 0;
+
+        display: grid;
+
+        grid-template-columns:
+            repeat(5, minmax(0, 1fr));
+
+        gap: 4px;
+
+        align-items: stretch;
+
+        list-style: none;
+
+        box-sizing: border-box;
+    }
+
+
+    .sidebar-admin .sidebar-nav .nav-item,
+    .sidebar-staff .sidebar-nav .nav-item {
+
+        width: 100% !important;
+        min-width: 0 !important;
+
+        position: relative;
+
+        display: flex !important;
+    }
+
+
+    .sidebar-admin .sidebar-nav .nav-link,
+    .sidebar-staff .sidebar-nav .nav-link {
+
+        width: 100% !important;
+        height: 62px;
+
+        min-width: 0 !important;
+        min-height: 0;
+
+        margin: 0;
+
+        padding: 5px 3px;
+
+        border-radius: 9px;
+
+        display: flex !important;
+
+        flex-direction: column;
+
+        align-items: center;
+        justify-content: center;
+
+        gap: 4px;
+
+        text-align: center;
+
+        font-size: .68rem;
+
+        line-height: 1.1;
+
+        white-space: normal;
+
+        box-sizing: border-box;
+    }
+
+
+    .sidebar-admin .sidebar-nav .nav-link i,
+    .sidebar-staff .sidebar-nav .nav-link i {
+
+        width: auto;
+        min-width: 0 !important;
+
+        flex: 0 0 auto;
+
+        font-size: 1.15rem;
+
+        line-height: 1;
+    }
+
+
+    /*
+     * Notification badge
+     */
+    .sidebar-admin .sidebar-notification-badge {
+
+        position: absolute;
+
+        top: 3px;
+        right: 5px;
+
+        margin: 0;
+
+        min-width: 16px;
+        height: 16px;
+
+        padding: 0 4px;
+
+        font-size: .55rem;
+        line-height: 16px;
+    }
+
+
+    /*
+     * Main content uses the full available width.
+     */
+    .admin-main,
+    .admin-dashboard,
+    .admin-dashboard-page,
+    .sales-page,
+    .settings-page,
+    .profile-page,
+    .admin-shell-main,
+    .staff-page,
+    .staff-dashboard {
+
+        margin-left: 0 !important;
+
+        width: 100% !important;
+        max-width: 100% !important;
+
+        min-width: 0 !important;
+
+        padding-bottom: 88px;
+
+        box-sizing: border-box;
+    }
+
+
+    /*
+     * Bottom navigation replaces the hamburger.
+     */
+    .admin-menu-toggle {
+        display: none !important;
+    }
+
+
+    .sidebar-backdrop {
+        display: none !important;
+    }
+}
+
+
+/* =========================================================
+   MOBILE
+   Below 768px
+========================================================= */
+
+@media (max-width: 767.98px) {
+
+    .sidebar-admin,
+    .sidebar-staff {
+
+        position: fixed !important;
+
+        top: auto !important;
+        right: 0 !important;
+        bottom: 0 !important;
+        left: 0 !important;
+
+        width: 100% !important;
+        min-width: 0 !important;
+        max-width: none !important;
+
+        height: 68px !important;
+        min-height: 68px !important;
+
+        display: flex !important;
+        flex-direction: row !important;
+
+        background: #FDF8F2;
+
+        border-top: 1px solid #6F4E37;
+        border-right: none !important;
+
+        box-shadow:
+            0 -4px 14px rgba(44, 34, 30, .08);
+
+        overflow: hidden !important;
+
+        z-index: 1100;
+
+        box-sizing: border-box;
+    }
+
+
+    .sidebar-admin .sidebar-brand,
+    .sidebar-staff .sidebar-brand {
+        display: none;
+    }
+
+    .sidebar-admin .sidebar-close,
+    .sidebar-staff .sidebar-close,
+    .sidebar-close {
+        display: none !important;
+    }
+
+
+    .sidebar-admin .sidebar-nav,
+    .sidebar-staff .sidebar-nav {
+
+        width: 100% !important;
+        height: 68px !important;
+
+        padding: 4px 4px;
+
+        margin: 0;
+
+        display: grid;
+
+        grid-template-columns:
+            repeat(5, minmax(0, 1fr));
+
+        gap: 2px;
+
+        align-items: stretch;
+
+        list-style: none;
+
+        box-sizing: border-box;
+    }
+
+
+    .sidebar-admin .sidebar-nav .nav-item,
+    .sidebar-staff .sidebar-nav .nav-item {
+
+        width: 100% !important;
+        min-width: 0 !important;
+
+        position: relative;
+    }
+
+
+    .sidebar-admin .sidebar-nav .nav-link,
+    .sidebar-staff .sidebar-nav .nav-link {
+
+        width: 100% !important;
+        height: 60px;
+
+        min-width: 0 !important;
+        min-height: 0;
+
+        margin: 0;
+
+        padding: 5px 2px;
+
+        border-radius: 8px;
+
+        display: flex !important;
+
+        flex-direction: column;
+
+        align-items: center;
+        justify-content: center;
+
+        gap: 3px;
+
+        text-align: center;
+
+        font-size: .58rem;
+
+        line-height: 1.05;
+
+        white-space: normal;
+
+        box-sizing: border-box;
+    }
+
+
+    .sidebar-admin .sidebar-nav .nav-link i,
+    .sidebar-staff .sidebar-nav .nav-link i {
+
+        width: auto;
+        min-width: 0 !important;
+
+        flex: 0 0 auto;
+
+        font-size: 1rem;
+
+        line-height: 1;
+    }
+
+
+    /*
+     * Notification badge
+     */
+    .sidebar-admin .sidebar-notification-badge {
+
+        position: absolute;
+
+        top: 2px;
+        right: 6px;
+
+        margin: 0;
+
+        min-width: 15px;
+        height: 15px;
+
+        padding: 0 4px;
+
+        font-size: .52rem;
+        line-height: 15px;
+    }
+
+
+    /*
+     * Full-width content with bottom spacing.
+     */
+    .admin-main,
+    .admin-dashboard,
+    .admin-dashboard-page,
+    .admin-orders-page,
+    .sales-page,
+    .settings-page,
+    .profile-page,
+    .admin-shell-main,
+    .staff-page,
+    .staff-dashboard {
+
+        margin-left: 0 !important;
+
+        width: 100% !important;
+        max-width: 100% !important;
+
+        min-width: 0 !important;
+
+        padding-bottom: 82px;
+
+        box-sizing: border-box;
+    }
+
+
+    /*
+     * No hamburger on mobile.
+     */
+    .admin-menu-toggle {
+        display: none !important;
+    }
+
+
+    .sidebar-backdrop {
+        display: none !important;
+    }
+}
+
+
+/* =========================================================
+   VERY SMALL PHONES
+   Below 360px
+========================================================= */
+
+@media (max-width: 359.98px) {
+
+    .sidebar-admin .sidebar-nav,
+    .sidebar-staff .sidebar-nav {
+        padding-left: 2px;
+        padding-right: 2px;
+        gap: 1px;
+    }
+
+
+    .sidebar-admin .sidebar-nav .nav-link,
+    .sidebar-staff .sidebar-nav .nav-link {
+
+        padding-left: 1px;
+        padding-right: 1px;
+
+        font-size: .54rem;
+
+        gap: 2px;
+    }
+
+
+    .sidebar-admin .sidebar-nav .nav-link i,
+    .sidebar-staff .sidebar-nav .nav-link i {
+
+        font-size: .95rem;
+    }
+}
+
+/* ---------------------------------------------------------
+   ADMIN TOPBARS / STAFF PAGE HEADERS
+--------------------------------------------------------- */
+
+@media (max-width: 991.98px) {
+
+    .admin-topbar,
+    .sales-topbar,
+    .profile-topbar,
+    .settings-topbar,
+    .topbar {
+        width: 100%;
+        min-width: 0;
+        padding: 12px 14px;
+        gap: 10px;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        box-sizing: border-box;
+    }
+
+    .admin-search-top,
+    .sales-search,
+    .profile-search,
+    .settings-search,
+    .topbar-search {
+        min-width: 0;
+        max-width: 100%;
+    }
+
+    .admin-profile {
+        min-width: 0;
+        max-width: 100%;
+    }
+
+    .admin-profile-btn {
+        min-width: 0;
+        max-width: 100%;
+    }
+
+    .admin-content,
+    .sales-content,
+    .profile-content,
+    .settings-content,
+    .dash-content,
+    .staff-content {
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        padding: 16px;
+    }
+}
+
+@media (max-width: 767.98px) {
+
+    .admin-topbar,
+    .sales-topbar,
+    .profile-topbar,
+    .settings-topbar,
+    .topbar {
+        width: 100%;
+        display: flex;
+        flex-direction: row;
+        flex-wrap: nowrap;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px;
+        box-sizing: border-box;
+    }
+
+    .admin-search-top,
+    .sales-search,
+    .profile-search,
+    .settings-search,
+    .topbar-search {
+        flex: 1 1 auto;
+        width: auto;
+        max-width: none;
+        min-width: 0;
+    }
+
+    .admin-search-top input,
+    .sales-search input,
+    .profile-search input,
+    .settings-search input,
+    .topbar-search input {
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
+        font-size: 16px;
+    }
+
+    .admin-profile {
+        flex: 0 0 auto;
+        min-width: 0;
+    }
+
+    .admin-profile-btn {
+        max-width: 44px;
+        min-width: 40px;
+        padding: 4px;
+        gap: 0;
+    }
+
+    .admin-profile-btn > span,
+    .admin-profile-btn .profile-arrow {
+        display: none !important;
+    }
+
+    .admin-content,
+    .sales-content,
+    .profile-content,
+    .settings-content,
+    .dash-content,
+    .staff-content {
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        padding: 16px;
+    }
+}
+
+@media (max-width: 575.98px) {
+
+    .admin-content,
+    .sales-content,
+    .profile-content,
+    .settings-content,
+    .dash-content,
+    .staff-content {
+        padding: 12px;
+    }
+
+    .page-title,
+    .dashboard-title,
+    .profile-heading,
+    .settings-heading,
+    .history-title,
+    .notifications-title,
+    .sales-header h2 {
+        font-size: 1.15rem;
+    }
+
+    .page-description,
+    .dashboard-description,
+    .history-title p,
+    .notifications-title p {
+        font-size: 0.78rem;
+        line-height: 1.45;
+    }
+}
+
+    .admin-content,
+    .sales-content,
+    .profile-content,
+    .settings-content,
+    .dash-content,
+    .staff-content {
+        width: 100% !important;
+        max-width: 100% !important;
+        min-width: 0 !important;
+        padding: 16px !important;
+    }
+
+    .dashboard-header,
+    .history-header,
+    .notifications-header,
+    .sales-header,
+    .settings-header,
+    .profile-heading {
+        flex-direction: column !important;
+        align-items: stretch !important;
+        gap: 10px !important;
+    }
+
+    .notification-actions,
+    .filter-actions,
+    .toolbar-actions,
+    .user-account-toolbar-actions {
+        width: 100% !important;
+        flex-wrap: wrap !important;
+    }
+
+    .notification-actions .btn,
+    .filter-actions .btn,
+    .toolbar-actions .btn,
+    .user-account-toolbar-actions .btn {
+        flex: 1 1 auto;
+        min-width: 0;
+    }
+
+@media (max-width: 575.98px) {
+    .admin-content,
+    .sales-content,
+    .profile-content,
+    .settings-content,
+    .dash-content,
+    .staff-content {
+        padding: 12px !important;
+    }
+
+    .page-title,
+    .dashboard-title,
+    .profile-heading,
+    .settings-heading,
+    .history-title,
+    .notifications-title,
+    .sales-header h2 {
+        font-size: 1.15rem !important;
+    }
+
+    .page-description,
+    .dashboard-description,
+    .history-title p,
+    .notifications-title p {
+        font-size: 0.78rem !important;
+        line-height: 1.45;
+    }
+}
+
+/* ---------------------------------------------------------
+   BOOTSTRAP GRIDS - MOBILE CARD STACKS
+--------------------------------------------------------- */
+
+@media (max-width: 575.98px) {
+    .row.g-4,
+    .row.g-3,
+    .row.g-2,
+    .row.g-1 {
+        --bs-gutter-x: 0.75rem;
+    }
+
+    .container,
+    .container-fluid {
+        padding-left: 12px !important;
+        padding-right: 12px !important;
+    }
+
+    .container.py-5 {
+        padding-top: 20px !important;
+        padding-bottom: 20px !important;
+    }
+}
+
+/* ---------------------------------------------------------
+   CUSTOMER HOME
+--------------------------------------------------------- */
+
+@media (max-width: 767.98px) {
+    .hero-section {
+        padding: 1.5rem 0 1rem !important;
+        margin-top: 0.25rem !important;
+    }
+
+    .hero-title {
+        font-size: clamp(1.6rem, 8vw, 2rem) !important;
+    }
+
+    .hero-text {
+        font-size: 0.86rem !important;
+        line-height: 1.5;
+    }
+
+    .hero-promo-image-wrap {
+        height: auto !important;
+        aspect-ratio: 16 / 7;
+        max-width: none !important;
+    }
+
+    .product-card img,
+    .promotion-card img {
+        height: 125px !important;
+    }
+}
+
+@media (max-width: 400px) {
+    .product-card img,
+    .promotion-card img {
+        height: 108px !important;
+    }
+
+    .product-card .card-body,
+    .promotion-card .card-body {
+        padding: 10px !important;
+    }
+
+    .product-name {
+        font-size: 0.78rem !important;
+        min-height: auto !important;
+    }
+}
+
+/* ---------------------------------------------------------
+   CUSTOMER MENU
+--------------------------------------------------------- */
+
+@media (max-width: 991.98px) {
+    body:has(.menu-layout-wrapper) {
+        overflow-y: auto !important;
+    }
+
+    .menu-layout-wrapper {
+        height: auto !important;
+        min-height: 0 !important;
+        margin-top: 10px !important;
+        margin-bottom: 10px !important;
+        overflow: visible !important;
+    }
+
+    .menu-layout-wrapper > .row {
+        height: auto !important;
+        min-height: 0 !important;
+        flex-direction: column !important;
+    }
+
+    .menu-layout-wrapper .col-lg-3,
+    .menu-layout-wrapper .col-xl-2,
+    .menu-layout-wrapper .col-lg-9,
+    .menu-layout-wrapper .col-xl-10 {
+        width: 100% !important;
+        max-width: 100% !important;
+        height: auto !important;
+    }
+
+    .sidebar-card {
+        height: auto !important;
+        overflow: visible !important;
+        padding: 12px !important;
+        border-radius: 16px !important;
+    }
+
+    .sidebar-card h5 {
+        margin-bottom: 8px !important;
+        font-size: 0.95rem;
+    }
+
+    .sidebar-card .sidebar-link {
+        display: inline-flex !important;
+        width: auto !important;
+        min-width: 0 !important;
+        max-width: 100% !important;
+        margin: 0 5px 5px 0 !important;
+        padding: 8px 11px !important;
+        border: 1px solid #E6DEC9;
+        font-size: 0.76rem !important;
+        line-height: 1.2;
+    }
+
+    .menu-container {
+        height: auto !important;
+        min-height: 0 !important;
+        overflow: visible !important;
+        margin-top: 10px;
+        padding: 16px !important;
+        border-radius: 16px !important;
+    }
+
+    .menu-title {
+        margin-bottom: 15px !important;
+        font-size: 1.2rem;
+    }
+}
+
+@media (max-width: 575.98px) {
+    .menu-container .row > [class*="col-"] {
+        width: 50% !important;
+        flex: 0 0 50% !important;
+    }
+
+    .menu-container .row {
+        --bs-gutter-y: 0.75rem;
+    }
+
+    .menu-container .product-card .card-body {
+        padding: 10px !important;
+    }
+
+    .menu-container .product-card img {
+        height: 112px !important;
+    }
+
+    .menu-container .product-name {
+        font-size: 0.78rem !important;
+        line-height: 1.3;
+        min-height: auto !important;
+    }
+
+    .menu-container .product-price {
+        font-size: 0.84rem !important;
+    }
+
+    .menu-container .btn-order {
+        width: 100% !important;
+        min-height: 34px;
+        font-size: 0.72rem !important;
+        padding: 6px 8px !important;
+    }
+}
+
+/* ---------------------------------------------------------
+   CUSTOMER CART / CHECKOUT
+--------------------------------------------------------- */
+
+@media (max-width: 767.98px) {
+    .custom-box {
+        width: 100% !important;
+        max-width: none !important;
+    }
+
+    .container > .row[style*="max-width"],
+    .container .row[style*="max-width"] {
+        max-width: none !important;
+    }
+
+    .custom-box.p-5 {
+        padding: 18px !important;
+    }
+
+    .cart-item,
+    .cart-row,
+    .checkout-row,
+    .summary-row {
+        min-width: 0 !important;
+    }
+
+    .cart-item,
+    .cart-row {
+        flex-wrap: wrap !important;
+    }
+
+    .gcash-qr {
+        width: min(190px, 100%) !important;
+    }
+
+    .modal-body,
+    .modal-header,
+    .modal-footer {
+        padding-left: 14px !important;
+        padding-right: 14px !important;
+    }
+}
+
+/* ---------------------------------------------------------
+   CUSTOMER DASHBOARD
+--------------------------------------------------------- */
+
+@media (max-width: 767.98px) {
+    .dashboard-page {
+        min-height: calc(100vh - 66px) !important;
+    }
+
+    .dashboard-page .container {
+        padding-top: 18px !important;
+    }
+
+    .dashboard-page .current-order-header,
+    .dashboard-page .order-timeline {
+        padding: 14px !important;
+    }
+
+    .dashboard-page .current-order-card {
+        width: 100% !important;
+    }
+
+    .dashboard-page .timeline {
+        display: block !important;
+    }
+
+    .dashboard-page .history-table {
+        width: 100% !important;
+        min-width: 0 !important;
+    }
+
+    .dashboard-page .order-items-table {
+        min-width: 0 !important;
+        width: 100% !important;
+    }
+
+    .dashboard-page .modal-dialog.modal-lg {
+        width: auto !important;
+        max-width: calc(100vw - 18px) !important;
+        margin: 9px auto !important;
+    }
+}
+
+/* ---------------------------------------------------------
+   ADMIN DASHBOARD / CARDS / REPORTS
+--------------------------------------------------------- */
+
+@media (max-width: 991.98px) {
+    .metric-grid,
+    .dashboard-two-column,
+    .dashboard-panels-grid,
+    .workflow-grid,
+    .orders-grid,
+    .summary-grid,
+    .promotion-grid,
+    .user-account-summary-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    }
+}
+
+@media (max-width: 767.98px) {
+    .metric-grid,
+    .dashboard-two-column,
+    .dashboard-panels-grid,
+    .workflow-grid,
+    .orders-grid,
+    .summary-grid,
+    .promotion-grid,
+    .user-account-summary-grid,
+    .transaction-detail-grid,
+    .profile-grid {
+        grid-template-columns: 1fr !important;
+    }
+
+    .metric-card,
+    .dashboard-panel,
+    .workflow-card,
+    .order-card,
+    .summary-card,
+    .report-card,
+    .overview-card,
+    .filter-card,
+    .profile-card,
+    .panel-card,
+    .promotion-card,
+    .user-account-management-panel {
+        min-width: 0 !important;
+        width: 100% !important;
+    }
+
+    .dashboard-panel-header,
+    .active-section-header,
+    .cancelled-section-heading,
+    .overview-head {
+        flex-wrap: wrap !important;
+        gap: 8px;
+    }
+
+    .dashboard-notification,
+    .notification-card,
+    .order-card,
+    .cancelled-order-card {
+        overflow: hidden !important;
+    }
+
+    .transaction-table-wrap,
+    .user-account-table-wrap,
+    .product-table-wrapper,
+    .transaction-report-card,
+    .table-wrap {
+        width: 100% !important;
+        max-width: 100% !important;
+        min-width: 0 !important;
+        overflow-x: auto !important;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .transaction-table,
+    .product-table,
+    .user-account-table,
+    .table {
+        max-width: 100% !important;
+    }
+
+    .search-box,
+    .order-search-form,
+    .cancelled-filter-form,
+    .user-account-search-form {
+        width: 100% !important;
+        max-width: none !important;
+        flex-wrap: wrap !important;
+    }
+
+    .search-box input,
+    .cancelled-filter-search,
+    .cancelled-filter-date,
+    .user-account-search {
+        width: 100% !important;
+        max-width: none !important;
+        min-width: 0 !important;
+    }
+
+    .order-actions,
+    .cancelled-filter-actions,
+    .active-section-actions {
+        flex-wrap: wrap !important;
+        width: 100% !important;
+    }
+
+    .order-actions .btn,
+    .cancelled-filter-actions .btn,
+    .active-section-actions .btn {
+        flex: 1 1 auto;
+        min-width: 0 !important;
+    }
+}
+
+/* ---------------------------------------------------------
+   SALES REPORT MOBILE
+--------------------------------------------------------- */
+
+@media (max-width: 767.98px) {
+
+    .sales-content .filter-card,
+    .sales-content .report-card,
+    .sales-content .overview-card,
+    .sales-content .transaction-report-card {
+        padding: 12px !important;
+    }
+
+    /* =========================
+       REPORT MODE BUTTONS
+    ========================= */
+
+    .sales-content .mode-tabs {
+        width: 100% !important;
+        display: grid !important;
+        grid-template-columns: 1fr 1fr !important;
+        gap: 7px !important;
+    }
+
+    .sales-content .mode-tab {
+        width: 100% !important;
+        text-align: center !important;
+    }
+
+
+    /* =========================
+       SALES OVERVIEW CHART
+    ========================= */
+
+    .sales-content .chart {
+        width: 100% !important;
+        max-width: 100% !important;
+        min-width: 0 !important;
+
+        min-height: 250px !important;
+
+        padding: 18px 8px 8px !important;
+
+        display: flex !important;
+        justify-content: flex-start !important;
+        align-items: flex-end !important;
+
+        gap: 12px !important;
+
+        overflow-x: auto !important;
+        overflow-y: hidden !important;
+
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: thin;
+    }
+
+
+    /*
+     * DAILY
+     *
+     * Keep daily data readable while still allowing
+     * horizontal scrolling.
+     */
+    .sales-content .sales-chart-daily .chart-column {
+        flex: 0 0 78px !important;
+        width: 78px !important;
+        min-width: 78px !important;
+    }
+
+
+    /*
+     * WEEKLY
+     *
+     * Weekly labels such as:
+     * Aug 31 - Sep 06
+     *
+     * need more horizontal space so the dates
+     * do not look stuck together.
+     */
+    .sales-content .sales-chart-weekly .chart-column {
+        flex: 0 0 120px !important;
+        width: 120px !important;
+        min-width: 120px !important;
+    }
+
+
+    /*
+     * MONTHLY
+     */
+    .sales-content .sales-chart-monthly .chart-column {
+        flex: 0 0 95px !important;
+        width: 95px !important;
+        min-width: 95px !important;
+    }
+
+
+    /* =========================
+       CHART VALUES
+    ========================= */
+
+    .sales-content .chart-value {
+        width: 100% !important;
+        max-width: 100% !important;
+
+        font-size: 0.72rem !important;
+        line-height: 1.15 !important;
+
+        text-align: center !important;
+
+        white-space: nowrap !important;
+    }
+
+
+    /* =========================
+       CHART BARS
+    ========================= */
+
+    .sales-content .chart-bar-wrap {
+        width: 100% !important;
+        height: 155px !important;
+
+        display: flex !important;
+        justify-content: center !important;
+        align-items: flex-end !important;
+    }
+
+    .sales-content .chart-bar {
+        width: 28px !important;
+        max-width: 28px !important;
+        min-height: 3px;
+    }
+
+
+    /* =========================
+       CHART LABELS
+    ========================= */
+
+    .sales-content .chart-label {
+        width: 100% !important;
+
+        font-size: 0.68rem !important;
+        line-height: 1.25 !important;
+
+        text-align: center !important;
+
+        /*
+         * Allow weekly labels to use two lines
+         * instead of crashing into the next label.
+         */
+        white-space: normal !important;
+
+        overflow-wrap: normal !important;
+        word-break: normal !important;
+    }
+    /* =========================
+   TRANSACTION TABLE
+   COMPACT MOBILE CARDS
+   3-column layout keeps #, order info and right-side details close.
+========================= */
+
+/* Keep the transaction list inside the phone width */
+.transaction-report-card .table-responsive {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    overflow: visible !important;
+}
+
+.sales-content .transaction-table {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    margin: 0 !important;
+    font-size: 0.75rem !important;
+}
+
+.sales-content .transaction-table thead {
+    display: none !important;
+}
+
+.sales-content .transaction-table tbody {
+    display: block !important;
+    width: 100% !important;
+}
+
+.sales-content .transaction-table tbody tr {
+    display: grid !important;
+    grid-template-columns: 30px minmax(0, 1fr) auto;
+    grid-template-rows: auto auto auto auto auto auto;
+    column-gap: 8px;
+    row-gap: 3px;
+    width: 100% !important;
+    min-width: 0 !important;
+    margin: 0 0 8px !important;
+    padding: 9px 10px !important;
+    height: auto !important;
+    min-height: 0 !important;
+    align-items: start;
+    background: #ffffff;
+    border: 1px solid #E8DED3;
+    border-radius: 12px;
+    box-shadow: 0 2px 6px rgba(57, 39, 27, .04);
+    box-sizing: border-box;
+}
+
+.sales-content .transaction-table tbody td {
+    display: block !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    line-height: 1.15 !important;
+    overflow-wrap: anywhere;
+}
+
+/* Mobile cards do not need field labels */
+.sales-content .transaction-table tbody td::before {
+    display: none !important;
+}
+
+/* ---------------------------------
+   # COLUMN
+--------------------------------- */
+
+.sales-content .transaction-table tbody td:first-child {
+    grid-column: 1;
+    grid-row: 1 / span 5;
+    align-self: start;
+    justify-self: start;
+
+    width: 26px !important;
+    height: 26px;
+
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+
+    margin-top: 1px !important;
+    border-radius: 50% !important;
+
+    background: #F7F1E8;
+    color: #4A3525;
+
+    font-size: 0.64rem !important;
+    font-weight: 800 !important;
+
+    white-space: nowrap;
+}
+
+/* ---------------------------------
+   ORDER NUMBER
+--------------------------------- */
+
+.sales-content .transaction-table tbody td[data-label="Order #"] {
+    grid-column: 2;
+    grid-row: 1;
+
+    font-size: 0.80rem !important;
+    font-weight: 800 !important;
+    color: #2C221E;
+
+    line-height: 1.15 !important;
+    white-space: nowrap;
+}
+
+/* ---------------------------------
+   CLAIM NUMBER UNDER ORDER NUMBER
+--------------------------------- */
+
+.sales-content .transaction-table tbody td[data-label="Claim #"] {
+    grid-column: 2;
+    grid-row: 2;
+
+    font-size: 0.62rem !important;
+    font-weight: 500 !important;
+    color: #8A7F75;
+
+    line-height: 1.05 !important;
+    white-space: nowrap !important;
+}
+
+/* ---------------------------------
+   AMOUNT
+   Place directly below the claim number.
+--------------------------------- */
+
+.sales-content .transaction-table tbody td.amount,
+.sales-content .transaction-table tbody td[data-label="Amount"] {
+    grid-column: 2;
+    grid-row: 3;
+    align-self: start;
+    justify-self: start;
+
+    text-align: left !important;
+
+    font-size: 0.88rem !important;
+    font-weight: 800 !important;
+
+    color: #4A3525;
+    white-space: nowrap !important;
+
+    /* Add a clear visual gap below the claim number. */
+    padding-top: 7px !important;
+}
+
+/* ---------------------------------
+   PAYMENT
+   Place directly below the amount.
+--------------------------------- */
+
+.sales-content .transaction-table tbody td[data-label="Payment"] {
+    grid-column: 2;
+    grid-row: 4;
+
+    align-self: start;
+    justify-self: start;
+
+    text-align: left !important;
+    white-space: nowrap !important;
+
+    margin-top: 3px !important;
+}
+
+.sales-content .transaction-table .payment-badge {
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+
+    min-width: 0 !important;
+    padding: 4px 7px !important;
+
+    border-radius: 6px !important;
+    font-size: 0.66rem !important;
+    font-weight: 800 !important;
+    line-height: 1 !important;
+
+    white-space: nowrap !important;
+}
+
+/* GCash stays visibly blue */
+.sales-content .transaction-table .payment-badge.gcash {
+    color: #1677FF !important;
+    background: #E7F1FF !important;
+    border: 1px solid #1677FF !important;
+}
+
+/* ---------------------------------
+   DATE / TIME
+   Keep on the right side of the card.
+--------------------------------- */
+
+.sales-content .transaction-table tbody td[data-label="Date"] {
+    grid-column: 3;
+    grid-row: 1 / span 4;
+
+    align-self: start;
+    justify-self: end;
+
+    text-align: right !important;
+
+    font-size: 0.65rem !important;
+    color: #8A7F75;
+    line-height: 1.1 !important;
+    white-space: nowrap;
+}
+
+/* ---------------------------------
+   CUSTOMER
+   Keep hidden on the compact mobile card.
+   Customer remains available in View Details.
+--------------------------------- */
+
+.sales-content .transaction-table tbody td[data-label="Customer"] {
+    display: none !important;
+}
+
+/* ---------------------------------
+   VIEW DETAILS
+   Keep on the right, below the date/time.
+--------------------------------- */
+
+.sales-content .transaction-table tbody td[data-label="Details"] {
+    grid-column: 3;
+    grid-row: 5;
+
+    display: flex !important;
+    justify-content: flex-end !important;
+    align-items: center !important;
+
+    padding-top: 4px !important;
+    margin-top: 2px !important;
+}
+
+.sales-content .transaction-table tbody td[data-label="Details"] .btn-view-transaction {
+    display: inline-flex !important;
+    width: auto !important;
+    min-width: 0 !important;
+    min-height: 30px !important;
+    height: 30px !important;
+
+    padding: 5px 9px !important;
+
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+
+    border-radius: 7px !important;
+    font-size: 0.64rem !important;
+    line-height: 1 !important;
+    white-space: nowrap !important;
+}
+
+/* ---------------------------------
+   SMALL PHONES
+--------------------------------- */
+
+@media (max-width: 360px) {
+
+    .sales-content .transaction-table tbody tr {
+        grid-template-columns: 28px minmax(0, 1fr) auto;
+        column-gap: 7px;
+        row-gap: 2px;
+        margin-bottom: 7px !important;
+        padding: 8px 9px !important;
+    }
+
+    .sales-content .transaction-table tbody td:first-child {
+        width: 24px !important;
+        height: 24px;
+        font-size: 0.60rem !important;
+    }
+
+    .sales-content .transaction-table tbody td[data-label="Order #"] {
+        font-size: 0.75rem !important;
+    }
+
+    .sales-content .transaction-table tbody td[data-label="Claim #"] {
+        font-size: 0.60rem !important;
+    }
+
+    .sales-content .transaction-table tbody td.amount,
+    .sales-content .transaction-table tbody td[data-label="Amount"] {
+        font-size: 0.82rem !important;
+    }
+
+    .sales-content .transaction-table tbody td[data-label="Date"] {
+        font-size: 0.62rem !important;
+    }
+
+    .sales-content .transaction-table tbody td[data-label="Details"] .btn-view-transaction {
+        min-height: 28px !important;
+        height: 28px !important;
+        padding: 4px 8px !important;
+        font-size: 0.60rem !important;
+    }
+}
+
+/* =========================
+   REPORT FOOTER
+========================= */
+
+.sales-content .report-footer-summary {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 8px !important;
+}
+}
+
+/* ---------------------------------------------------------
+   SETTINGS - tables/forms/cards must fit phone width
+--------------------------------------------------------- */
+
+@media (max-width: 767.98px) {
+    .settings-page .settings-tabs,
+    .settings-page .settings-tab-list {
+        width: 100% !important;
+        max-width: 100% !important;
+        overflow-x: auto !important;
+        -webkit-overflow-scrolling: touch;
+        display: flex !important;
+        flex-wrap: nowrap !important;
+    }
+
+    .settings-page .settings-tab,
+    .settings-page .settings-tabs a,
+    .settings-page .settings-tabs button {
+        flex: 0 0 auto !important;
+        white-space: nowrap !important;
+    }
+
+    .settings-page .product-table-wrapper,
+    .settings-page .user-account-table-wrap,
+    .settings-page .addon-management-table,
+    .settings-page .promotion-grid {
+        max-width: 100% !important;
+        min-width: 0 !important;
+    }
+
+    .settings-page .product-table,
+    .settings-page .user-account-table,
+    .settings-page .addon-management-table {
+        min-width: 0 !important;
+        width: 100% !important;
+        font-size: 0.72rem !important;
+    }
+
+    .settings-page .promotion-card {
+        flex-direction: column !important;
+    }
+
+    .settings-page .promotion-card-media {
+        flex-basis: auto !important;
+        width: 100% !important;
+        min-height: 140px !important;
+        border-right: 0 !important;
+        border-bottom: 1px solid #8B6A55 !important;
+    }
+
+    .settings-page .buy-get-fields,
+    .settings-page .promotion-rule-grid,
+    .settings-page .bundle-products-list,
+    .settings-page .size-option-grid {
+        grid-template-columns: 1fr !important;
+    }
+}
+
+/* ---------------------------------------------------------
+   STAFF MOBILE CONTENT
+--------------------------------------------------------- */
+
+@media (max-width: 767.98px) {
+    .staff-content {
+        padding-bottom: 88px !important;
+    }
+
+    .status-grid,
+    .summary-grid {
+        grid-template-columns: 1fr !important;
+        gap: 10px !important;
+    }
+
+    .status-card,
+    .summary-card {
+        padding: 14px !important;
+    }
+
+    .history-tabs {
+        overflow-x: auto !important;
+        flex-wrap: nowrap !important;
+        padding-bottom: 2px;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .history-tabs > * {
+        flex: 0 0 auto !important;
+        white-space: nowrap !important;
+    }
+
+    .notifications-header,
+    .history-header {
+        margin-bottom: 16px !important;
+    }
+
+    .notification-actions {
+        align-items: stretch !important;
+    }
+
+    .notification-actions .unread-badge,
+    .notification-actions .btn-mark-all {
+        width: 100% !important;
+        text-align: center;
+        justify-content: center;
+    }
+
+    .notification-card {
+        padding: 13px !important;
+    }
+
+    .notification-content {
+        gap: 9px !important;
+    }
+
+    .notification-icon {
+        width: 40px !important;
+        min-width: 40px !important;
+        height: 40px !important;
+    }
+
+    .order-info-grid {
+        grid-template-columns: 1fr !important;
+    }
+
+    .order-top {
+        display: block !important;
+    }
+
+    .order-top .status-badge {
+        margin-top: 8px !important;
+    }
+}
+
+/* ---------------------------------------------------------
+   GENERIC MOBILE SAFETY OVERRIDES
+--------------------------------------------------------- */
+
+@media (max-width: 767.98px) {
+    /* Neutralize common desktop widths used in inline page styles. */
+    .w-fixed,
+    .fixed-width,
+    .desktop-width,
+    [style*="width: 820px"],
+    [style*="width:820px"],
+    [style*="width: 850px"],
+    [style*="width:850px"],
+    [style*="min-width: 820px"],
+    [style*="min-width:820px"],
+    [style*="min-width: 850px"],
+    [style*="min-width:850px"] {
+        width: 100% !important;
+        max-width: 100% !important;
+        min-width: 0 !important;
+    }
+
+    [style*="margin-left: 260px"],
+    [style*="margin-left:260px"] {
+        margin-left: 0 !important;
+    }
+
+    [style*="left: 260px"],
+    [style*="left:260px"] {
+        left: 0 !important;
+    }
+
+    [style*="calc(100% - 260px)"] {
+        width: 100% !important;
+    }
+
+    /* Keep long code/order/reference values readable. */
+    .order-number,
+    .claim-number,
+    .claim-history-number,
+    .order-record-link,
+    .transaction-page-info {
+        overflow-wrap: anywhere !important;
+        word-break: break-word !important;
+    }
+
+    /* Buttons should never force a row wider than the screen. */
+    .btn,
+    .button,
+    button {
+        white-space: normal;
+    }
+
+    /* Dropdowns and popovers stay inside the phone viewport. */
+    .dropdown-menu,
+    .admin-profile-dropdown {
+        max-width: calc(100vw - 20px) !important;
+    }
+
+    /* Prevent flex children from creating accidental horizontal overflow. */
+    .d-flex > *,
+    .row > * {
+        min-width: 0;
+    }
+}
+
+/* ---------------------------------------------------------
+   SMALL PHONE TYPOGRAPHY / TOUCH TARGETS
+--------------------------------------------------------- */
+
+@media (max-width: 430px) {
+    body {
+        font-size: 0.92rem;
+    }
+
+    .btn,
+    .form-control,
+    .form-select {
+        min-height: 40px;
+    }
+
+    .modal-footer {
+        flex-wrap: wrap !important;
+    }
+
+    .modal-footer .btn {
+        width: 100% !important;
+        flex: 1 1 100% !important;
+    }
+
+    .logout-modal-box {
+        width: calc(100vw - 28px) !important;
+        max-width: none !important;
+        padding: 18px !important;
+    }
+
+    .logout-modal-actions {
+        flex-direction: column !important;
+    }
+
+    .logout-cancel,
+    .logout-confirm {
+        width: 100% !important;
+    }
+}
+/* =========================================================
+   TRANSACTION DETAILS MODAL - COMPACT LAYOUT
+========================================================= */
+
+/* Desktop / tablet */
+@media (min-width: 768px) {
+
+    /* Make the modal itself smaller */
+    .transaction-modal .modal-dialog,
+    #transactionDetailsModal .modal-dialog {
+        max-width: 760px !important;
+        width: 92% !important;
+        margin: 1.5rem auto !important;
+    }
+
+    .transaction-modal .modal-content,
+    #transactionDetailsModal .modal-content {
+        border-radius: 14px !important;
+        overflow: hidden !important;
+    }
+
+    /* Reduce empty space inside modal */
+    .transaction-modal .modal-body,
+    #transactionDetailsModal .modal-body {
+        padding: 16px !important;
+        min-height: 0 !important;
+        height: auto !important;
+    }
+
+    /* Compact details grid */
+    .transaction-details-grid {
+        display: grid !important;
+        grid-template-columns: 1fr 1fr !important;
+        gap: 8px !important;
+    }
+
+    /* Each information box */
+    .transaction-detail-box {
+        min-height: 0 !important;
+        height: auto !important;
+
+        padding: 9px 12px !important;
+
+        border-radius: 10px !important;
+    }
+
+    .transaction-detail-box .detail-label {
+        font-size: 0.68rem !important;
+        margin-bottom: 3px !important;
+    }
+
+    .transaction-detail-box .detail-value {
+        font-size: 0.82rem !important;
+        line-height: 1.2 !important;
+    }
+
+    /* Reduce spacing around totals */
+    .transaction-total {
+        margin-top: 10px !important;
+        padding-top: 10px !important;
+        padding-bottom: 10px !important;
+    }
+
+    .transaction-total .amount {
+        font-size: 1rem !important;
+    }
+
+    /* Reduce footer size */
+    .transaction-modal .modal-footer,
+    #transactionDetailsModal .modal-footer {
+        padding: 10px 16px !important;
+    }
+}
+
+
+/* =========================================================
+   MOBILE
+========================================================= */
+
+@media (max-width: 767.98px) {
+
+    .transaction-modal .modal-dialog,
+    #transactionDetailsModal .modal-dialog {
+        width: calc(100% - 20px) !important;
+        max-width: none !important;
+        margin: 10px auto !important;
+    }
+
+    .transaction-modal .modal-content,
+    #transactionDetailsModal .modal-content {
+        border-radius: 12px !important;
+        max-height: calc(100vh - 20px) !important;
+        overflow: hidden !important;
+    }
+
+    .transaction-modal .modal-body,
+    #transactionDetailsModal .modal-body {
+        padding: 12px !important;
+        min-height: 0 !important;
+        height: auto !important;
+        overflow-y: auto !important;
+    }
+
+    /* One clean column on phones */
+    .transaction-details-grid {
+        display: grid !important;
+        grid-template-columns: 1fr !important;
+        gap: 7px !important;
+    }
+
+    /* Small compact boxes */
+    .transaction-detail-box {
+        min-height: 0 !important;
+        height: auto !important;
+
+        padding: 8px 10px !important;
+
+        border-radius: 9px !important;
+    }
+
+    .transaction-detail-box .detail-label {
+        font-size: 0.62rem !important;
+        margin-bottom: 2px !important;
+    }
+
+    .transaction-detail-box .detail-value {
+        font-size: 0.76rem !important;
+        line-height: 1.2 !important;
+    }
+
+    .transaction-total {
+        margin-top: 8px !important;
+        padding-top: 8px !important;
+        padding-bottom: 8px !important;
+    }
+
+    .transaction-total .amount {
+        font-size: 0.95rem !important;
+        white-space: nowrap !important;
+    }
+
+    .transaction-modal .modal-footer,
+    #transactionDetailsModal .modal-footer {
+        padding: 8px 12px !important;
+    }
+}   
+
+
+
+
+/* =========================================================
+   SALES REPORT - LAPTOP
+   992px - 1199.98px
+========================================================= */
+
+@media (min-width: 992px) and (max-width: 1199.98px) {
+
+    /* Keep the sales report inside the available
+       laptop content width */
+    .sales-page {
+        min-width: 0 !important;
+        width: auto !important;
+        max-width: 100% !important;
+    }
+
+    .sales-content {
+        min-width: 0 !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        box-sizing: border-box;
+    }
+
+
+    /* -----------------------------------------
+       SALES OVERVIEW CHART
+       Stop daily values from crushing together.
+    ----------------------------------------- */
+
+    .sales-content .chart {
+        width: 100% !important;
+        max-width: 100% !important;
+        min-width: 0 !important;
+
+        display: flex !important;
+        justify-content: flex-start !important;
+        align-items: flex-end !important;
+
+        gap: 8px !important;
+
+        overflow-x: auto !important;
+        overflow-y: hidden !important;
+
+        -webkit-overflow-scrolling: touch;
+
+        padding-left: 8px !important;
+        padding-right: 8px !important;
+        padding-bottom: 8px !important;
+    }
+
+
+    /* Give every chart column enough room for
+       its amount and date label */
+    .sales-content .chart-column {
+        flex: 0 0 58px !important;
+        width: 58px !important;
+        min-width: 58px !important;
+    }
+
+
+    .sales-content .chart-value {
+        width: 100% !important;
+
+        font-size: 0.72rem !important;
+        line-height: 1.2 !important;
+
+        text-align: center !important;
+
+        white-space: nowrap !important;
+    }
+
+
+    .sales-content .chart-bar-wrap {
+        width: 100% !important;
+        height: 165px !important;
+
+        display: flex !important;
+        align-items: flex-end !important;
+        justify-content: center !important;
+    }
+
+
+    .sales-content .chart-bar {
+        width: 28px !important;
+        max-width: 28px !important;
+    }
+
+
+    .sales-content .chart-label {
+        width: 100% !important;
+
+        font-size: 0.70rem !important;
+        line-height: 1.25 !important;
+
+        text-align: center !important;
+
+        white-space: normal !important;
+    }
+}
