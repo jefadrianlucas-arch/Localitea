@@ -212,6 +212,11 @@ $addons = $addonStmt->fetchAll();
         border-radius: 16px;
         box-shadow: 0 4px 12px rgba(0,0,0,0.03);
     }
+
+    .customize-order-box {
+        background-color: #C4A484;
+    }
+
     .qty-btn {
         cursor: pointer;
         font-size: 1.25rem;
@@ -322,7 +327,7 @@ $addons = $addonStmt->fetchAll();
 
             <!-- Kanang Bahagi: Customize your order Panel -->
             <div class="col-md-7">
-                <div class="custom-box p-4">
+                <div class="custom-box customize-order-box p-4">
                     <h4 class="fw-bold mb-4" style="color: #2c221e;">Customize your order</h4>
                     <?php if ($promotion): ?>
                         <div class="mb-4 p-3 rounded-3" style="background:#F7F0E8; border:1.5px solid #4A3525;">

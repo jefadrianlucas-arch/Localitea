@@ -460,6 +460,113 @@ body{
     font-size:.82rem;
 }
 
+
+/* ===============================
+   PROMOTION SLIDER
+=============================== */
+.promotion-slider{
+    position:relative;
+    max-width:320px;
+    margin:0 auto;
+    padding:0 42px 34px;
+}
+
+.promotion-slides{
+    position:relative;
+    width:100%;
+}
+
+.promotion-slide{
+    display:none;
+}
+
+.promotion-slide.is-active{
+    display:block;
+}
+
+.promotion-slider .promotion-card{
+    width:100%;
+}
+
+.promotion-slider-btn{
+    position:absolute;
+    top:50%;
+    transform:translateY(-50%);
+    width:36px;
+    height:36px;
+    border:2px solid #4A3525;
+    border-radius:50%;
+    background:#4A3525;
+    color:#fff;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    box-shadow:0 4px 10px rgba(74,53,37,.18);
+    transition:.2s ease;
+    z-index:3;
+}
+
+.promotion-slider-btn:hover{
+    background:#332317;
+    border-color:#332317;
+    color:#fff;
+}
+
+.promotion-slider-prev{ left:0; }
+.promotion-slider-next{ right:0; }
+
+.promotion-slider-dots{
+    position:absolute;
+    left:0;
+    right:0;
+    bottom:4px;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    gap:7px;
+}
+
+.promotion-slider-dot{
+    width:8px;
+    height:8px;
+    padding:0;
+    border:1px solid #6F4E37;
+    border-radius:50%;
+    background:#E8DFD4;
+    transition:.2s ease;
+}
+
+.promotion-slider-dot.is-active{
+    width:10px;
+    height:10px;
+    background:#4A3525;
+}
+
+@media (max-width:767.98px){
+    .promotion-slider{
+        max-width:290px;
+        padding-left:38px;
+        padding-right:38px;
+    }
+    .promotion-slider-btn{
+        width:32px;
+        height:32px;
+    }
+}
+
+@media (max-width:399.98px){
+    .promotion-slider{
+        max-width:280px;
+        padding-left:34px;
+        padding-right:34px;
+    }
+    .promotion-slider-btn{
+        width:30px;
+        height:30px;
+        font-size:.8rem;
+    }
+}
+
 /* ===============================
    LARGE TABLETS / SMALL LAPTOPS
 =============================== */
@@ -663,6 +770,427 @@ body{
         font-size:.59rem;
     }
 }
+
+
+/* =========================================================
+   LANDING PAGE VISUAL REFRESH — LOOK ONLY
+   No PHP, ordering, promotion, or JavaScript behavior changed.
+========================================================= */
+.hero-section{
+    padding:1.1rem .75rem 1.5rem;
+}
+
+.hero-section > .row{
+    position:relative;
+    overflow:hidden;
+    background:#C4A484;
+    border:2px solid #4A3525;
+    border-radius:30px;
+    padding:38px 38px;
+    box-shadow:0 14px 34px rgba(74,53,37,.14);
+}
+
+.hero-section > .row::before,
+.hero-section > .row::after{
+    content:"";
+    position:absolute;
+    border-radius:50%;
+    pointer-events:none;
+    z-index:0;
+}
+
+.hero-section > .row::before{
+    width:240px;
+    height:240px;
+    left:-95px;
+    bottom:-135px;
+    background:rgba(255,255,255,.14);
+}
+
+.hero-section > .row::after{
+    width:290px;
+    height:290px;
+    right:-150px;
+    top:-155px;
+    background:rgba(255,255,255,.11);
+}
+
+.hero-section > .row > *{
+    position:relative;
+    z-index:1;
+}
+
+.hero-title{
+    font-size:2.55rem;
+    font-weight:900;
+    line-height:1.02;
+    letter-spacing:-.8px;
+    color:#24170F;
+    margin-bottom:.9rem;
+    text-wrap:balance;
+}
+
+.hero-text{
+    max-width:590px;
+    color:#4B382B;
+    font-size:.95rem;
+    line-height:1.65;
+    font-weight:500;
+}
+
+.hero-section .btn{
+    background:#332317 !important;
+    border:2px solid #24170F !important;
+    color:#fff !important;
+    font-weight:700;
+    box-shadow:0 7px 16px rgba(36,23,15,.18) !important;
+    transition:transform .2s ease, box-shadow .2s ease, background .2s ease;
+}
+
+.hero-section .btn:hover{
+    background:#24170F !important;
+    transform:translateY(-2px);
+    box-shadow:0 10px 20px rgba(36,23,15,.22) !important;
+}
+
+.hero-promo-image-wrap{
+    max-width:600px;
+    height:245px;
+    border:3px solid #4A3525;
+    border-radius:22px;
+    background:#F5EBDD;
+    box-shadow:0 8px 22px rgba(74,53,37,.16);
+}
+
+.hero-promo-image{
+    object-fit:cover;
+}
+
+/* Section containers */
+.container.my-4:not(#promotions){
+    background:#fff;
+    border:1px solid #E3D6C8;
+    border-radius:28px;
+    padding:28px 24px 30px;
+    box-shadow:0 8px 24px rgba(74,53,37,.07);
+}
+
+#promotions{
+    background:#F1E5D8;
+    border:1px solid #D8C5B2;
+    border-radius:28px;
+    padding:28px 24px 34px;
+    box-shadow:0 8px 24px rgba(74,53,37,.07);
+}
+
+.section-title{
+    color:#2D1E15;
+    font-size:1.55rem;
+    font-weight:900;
+    letter-spacing:-.2px;
+    margin-bottom:.45rem;
+}
+
+.title-line{
+    width:58px;
+    height:3px;
+    background:#6F4E37;
+    margin:0 auto 24px;
+    border-radius:999px;
+}
+
+/* Best seller cards */
+.product-card{
+    border:1.5px solid #BFA993;
+    border-radius:20px;
+    background:#fff;
+    box-shadow:0 7px 18px rgba(74,53,37,.08);
+    transition:transform .22s ease, box-shadow .22s ease, border-color .22s ease;
+}
+
+.product-card:hover{
+    transform:translateY(-6px);
+    border-color:#6F4E37;
+    box-shadow:0 14px 28px rgba(74,53,37,.15);
+}
+
+.product-image-wrap{
+    height:170px;
+    flex-basis:170px;
+    background:linear-gradient(135deg,#F4E9DD 0%,#EAD8C7 100%);
+}
+
+.product-image-wrap img{
+    padding:8px;
+    transition:transform .25s ease;
+}
+
+.product-card:hover .product-image-wrap img{
+    transform:scale(1.05);
+}
+
+.product-image-wrap::after{
+    content:"BEST SELLER";
+    position:absolute;
+    top:12px;
+    left:12px;
+    padding:5px 9px;
+    border-radius:999px;
+    background:#332317;
+    border:1px solid #24170F;
+    color:#fff;
+    font-size:.58rem;
+    font-weight:800;
+    letter-spacing:.35px;
+    box-shadow:0 4px 9px rgba(36,23,15,.16);
+    z-index:2;
+}
+
+.product-card .card-body{
+    padding:15px 12px 16px !important;
+    background:#fff;
+}
+
+.product-name{
+    font-size:.9rem;
+    font-weight:800;
+    color:#332317;
+}
+
+.product-price{
+    color:#6F4E37;
+    font-size:.95rem;
+    font-weight:900;
+    margin-top:6px !important;
+}
+
+.order-btn{
+    background:#332317 !important;
+    border:1.5px solid #24170F !important;
+    color:#fff !important;
+    border-radius:999px;
+    font-weight:700;
+    padding:.38rem 1rem;
+    box-shadow:0 4px 9px rgba(36,23,15,.13);
+    transition:transform .18s ease, background .18s ease, box-shadow .18s ease;
+}
+
+.order-btn:hover{
+    background:#24170F !important;
+    transform:translateY(-1px);
+    box-shadow:0 7px 14px rgba(36,23,15,.18);
+}
+
+/* Promotion slider */
+.promotion-slider{
+    max-width:500px;
+    padding:0 48px 38px;
+}
+
+.promotion-card{
+    border-color:#B99B7E;
+    box-shadow:0 10px 24px rgba(74,53,37,.11);
+}
+
+.promotion-image-wrap{
+    height:230px;
+    flex-basis:230px;
+    background:linear-gradient(135deg,#E7D4C0 0%,#F7EFE7 100%);
+}
+
+.promotion-image-wrap img{
+    object-fit:cover;
+}
+
+.promotion-card .card-body{
+    padding:16px 14px 18px !important;
+}
+
+.promotion-badge{
+    background:#332317;
+    border:1px solid #24170F;
+    color:#fff;
+    padding:5px 10px;
+    font-size:.62rem;
+}
+
+.promotion-description{
+    color:#5D4A3E;
+    font-size:.78rem;
+}
+
+.promotion-validity{
+    color:#7A685C;
+    font-size:.7rem;
+}
+
+.promotion-slider-btn{
+    width:40px;
+    height:40px;
+    background:#332317;
+    border-color:#24170F;
+    box-shadow:0 7px 14px rgba(74,53,37,.18);
+}
+
+.promotion-slider-btn:hover{
+    background:#24170F;
+    border-color:#24170F;
+}
+
+.promotion-slider-dot{
+    width:9px;
+    height:9px;
+    background:#D6C2AE;
+}
+
+.promotion-slider-dot.is-active{
+    width:11px;
+    height:11px;
+    background:#332317;
+}
+
+.promo-empty{
+    background:rgba(255,255,255,.55);
+    border:1px dashed #B99B7E;
+    border-radius:18px;
+    padding:18px;
+}
+
+@media (max-width:991.98px){
+    .hero-section > .row{
+        padding:30px 26px;
+        border-radius:25px;
+    }
+
+    .hero-title{
+        font-size:2.15rem;
+    }
+
+    .hero-promo-image-wrap{
+        height:215px;
+    }
+
+    .product-image-wrap{
+        height:145px;
+        flex-basis:145px;
+    }
+}
+
+@media (max-width:767.98px){
+    .hero-section > .row{
+        padding:24px 18px;
+        border-radius:22px;
+    }
+
+    .hero-title{
+        font-size:1.75rem;
+        letter-spacing:-.4px;
+    }
+
+    .hero-text{
+        font-size:.84rem;
+    }
+
+    .hero-promo-image-wrap{
+        height:175px;
+        border-radius:17px;
+    }
+
+    .container.my-4:not(#promotions),
+    #promotions{
+        border-radius:22px;
+        padding:22px 12px 26px;
+    }
+
+    .section-title{
+        font-size:1.3rem;
+    }
+
+    .title-line{
+        margin-bottom:18px;
+    }
+
+    .product-image-wrap{
+        height:118px;
+        flex-basis:118px;
+    }
+
+    .product-image-wrap::after{
+        top:8px;
+        left:8px;
+        padding:4px 7px;
+        font-size:.5rem;
+    }
+
+    .product-card .card-body{
+        padding:11px 7px 13px !important;
+    }
+
+    .product-name{
+        font-size:.78rem;
+    }
+
+    .product-price{
+        font-size:.82rem;
+    }
+
+    .order-btn{
+        font-size:.68rem;
+        padding:.3rem .8rem;
+    }
+
+    .promotion-slider{
+        max-width:390px;
+        padding-left:39px;
+        padding-right:39px;
+    }
+
+    .promotion-image-wrap{
+        height:185px;
+        flex-basis:185px;
+    }
+}
+
+@media (max-width:399.98px){
+    .hero-section > .row{
+        padding:20px 13px;
+    }
+
+    .hero-title{
+        font-size:1.48rem;
+    }
+
+    .hero-text{
+        font-size:.77rem;
+    }
+
+    .hero-promo-image-wrap{
+        height:150px;
+    }
+
+    .container.my-4:not(#promotions),
+    #promotions{
+        padding-left:8px;
+        padding-right:8px;
+    }
+
+    .product-image-wrap{
+        height:100px;
+        flex-basis:100px;
+    }
+
+    .promotion-slider{
+        max-width:320px;
+        padding-left:34px;
+        padding-right:34px;
+    }
+
+    .promotion-image-wrap{
+        height:155px;
+        flex-basis:155px;
+    }
+}
+
 </style>
 
 <!-- HERO -->
@@ -734,7 +1262,7 @@ body{
                         <div class="product-price mt-1">
                             ₱<?= number_format((float)$prod['price'],2) ?>
                         </div>
-                        <a href="menu.php" class="btn btn-dark order-btn mt-auto mx-auto">
+                        <a href="product-view.php?id=<?= (int)$prod['id'] ?>" class="btn btn-dark order-btn mt-auto mx-auto">
                             Order
                         </a>
                     </div>
@@ -750,54 +1278,158 @@ body{
     <h2 class="section-title">Promo Featured</h2>
     <div class="title-line"></div>
 
-    <div class="row g-3 justify-content-center">
-        <?php if(empty($promotions)): ?>
-            <div class="text-center py-3 promo-empty">
-                <p class="mb-0">No active promotions available at the moment.</p>
+    <?php if(empty($promotions)): ?>
+        <div class="text-center py-3 promo-empty">
+            <p class="mb-0">No active promotions available at the moment.</p>
+        </div>
+    <?php else: ?>
+        <div class="promotion-slider" id="promotionSlider">
+            <div class="promotion-slides">
+                <?php foreach($promotions as $promotionIndex => $promotion): ?>
+                    <div class="promotion-slide <?= $promotionIndex === 0 ? 'is-active' : '' ?>">
+                        <div class="card product-card promotion-card">
+                            <div class="promotion-image-wrap">
+                                <img
+                                    src="<?= htmlspecialchars(customerPromotionImagePath($promotion['image'])) ?>"
+                                    alt="<?= htmlspecialchars($promotion['title']) ?>"
+                                    onerror="this.onerror=null;this.src='../assets/uploads/products/default-product.png';"
+                                >
+                            </div>
+
+                            <div class="card-body text-center d-flex flex-column">
+                                <div class="promotion-badge">
+                                    Special Offer
+                                </div>
+
+                                <div class="product-name">
+                                    <?= htmlspecialchars($promotion['title']) ?>
+                                </div>
+
+                                <?php if (trim((string)$promotion['description']) !== ''): ?>
+                                    <div class="promotion-description mt-1">
+                                        <?= htmlspecialchars($promotion['description']) ?>
+                                    </div>
+                                <?php endif; ?>
+
+                                <?php $dateRange = customerPromotionDateRange($promotion['start_date'], $promotion['end_date']); ?>
+                                <?php if ($dateRange !== ''): ?>
+                                    <div class="promotion-validity">
+                                        <i class="bi bi-calendar3 me-1"></i><?= htmlspecialchars($dateRange) ?>
+                                    </div>
+                                <?php endif; ?>
+
+                                <a href="index.php?order_promotion=<?= (int)$promotion['id'] ?>" class="btn btn-dark order-btn mt-auto mx-auto">
+                                    Order Now
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                <?php endforeach; ?>
             </div>
-        <?php else: ?>
-            <?php foreach($promotions as $promotion): ?>
-            <div class="col-xl-3 col-lg-3 col-md-4 col-sm-6 col-6">
-                <div class="card product-card promotion-card h-100">
-                    <div class="promotion-image-wrap">
-                        <img
-                            src="<?= htmlspecialchars(customerPromotionImagePath($promotion['image'])) ?>"
-                            alt="<?= htmlspecialchars($promotion['title']) ?>"
-                            onerror="this.onerror=null;this.src='../assets/uploads/products/default-product.png';"
-                        >
-                    </div>
 
-                    <div class="card-body text-center d-flex flex-column">
-                        <div class="promotion-badge">
-                            Special Offer
-                        </div>
+            <?php if (count($promotions) > 1): ?>
+                <button type="button" class="promotion-slider-btn promotion-slider-prev" id="promotionPrev" aria-label="Previous promotion">
+                    <i class="bi bi-chevron-left"></i>
+                </button>
+                <button type="button" class="promotion-slider-btn promotion-slider-next" id="promotionNext" aria-label="Next promotion">
+                    <i class="bi bi-chevron-right"></i>
+                </button>
 
-                        <div class="product-name">
-                            <?= htmlspecialchars($promotion['title']) ?>
-                        </div>
-
-                        <?php if (trim((string)$promotion['description']) !== ''): ?>
-                            <div class="promotion-description mt-1">
-                                <?= htmlspecialchars($promotion['description']) ?>
-                            </div>
-                        <?php endif; ?>
-
-                        <?php $dateRange = customerPromotionDateRange($promotion['start_date'], $promotion['end_date']); ?>
-                        <?php if ($dateRange !== ''): ?>
-                            <div class="promotion-validity">
-                                <i class="bi bi-calendar3 me-1"></i><?= htmlspecialchars($dateRange) ?>
-                            </div>
-                        <?php endif; ?>
-
-                        <a href="index.php?order_promotion=<?= (int)$promotion['id'] ?>" class="btn btn-dark order-btn mt-auto mx-auto">
-                            Order Now
-                        </a>
-                    </div>
+                <div class="promotion-slider-dots" id="promotionDots" aria-label="Promotion navigation">
+                    <?php foreach($promotions as $promotionIndex => $promotion): ?>
+                        <button
+                            type="button"
+                            class="promotion-slider-dot <?= $promotionIndex === 0 ? 'is-active' : '' ?>"
+                            data-slide="<?= $promotionIndex ?>"
+                            aria-label="Show promotion <?= $promotionIndex + 1 ?>"
+                            aria-current="<?= $promotionIndex === 0 ? 'true' : 'false' ?>"
+                        ></button>
+                    <?php endforeach; ?>
                 </div>
-            </div>
-            <?php endforeach; ?>
-        <?php endif; ?>
-    </div>
+            <?php endif; ?>
+        </div>
+    <?php endif; ?>
 </div>
+
+
+<script>
+(function () {
+    const slider = document.getElementById('promotionSlider');
+    if (!slider) return;
+
+    const slides = Array.from(slider.querySelectorAll('.promotion-slide'));
+    const dots = Array.from(slider.querySelectorAll('.promotion-slider-dot'));
+    const prevButton = document.getElementById('promotionPrev');
+    const nextButton = document.getElementById('promotionNext');
+
+    if (slides.length <= 1) return;
+
+    let currentIndex = 0;
+    let autoPlayTimer = null;
+
+    function showSlide(index) {
+        currentIndex = (index + slides.length) % slides.length;
+
+        slides.forEach(function (slide, i) {
+            slide.classList.toggle('is-active', i === currentIndex);
+        });
+
+        dots.forEach(function (dot, i) {
+            const active = i === currentIndex;
+            dot.classList.toggle('is-active', active);
+            dot.setAttribute('aria-current', active ? 'true' : 'false');
+        });
+    }
+
+    function startAutoPlay() {
+        stopAutoPlay();
+        autoPlayTimer = setInterval(function () {
+            showSlide(currentIndex + 1);
+        }, 5000);
+    }
+
+    function stopAutoPlay() {
+        if (autoPlayTimer) {
+            clearInterval(autoPlayTimer);
+            autoPlayTimer = null;
+        }
+    }
+
+    if (prevButton) {
+        prevButton.addEventListener('click', function () {
+            showSlide(currentIndex - 1);
+            startAutoPlay();
+        });
+    }
+
+    if (nextButton) {
+        nextButton.addEventListener('click', function () {
+            showSlide(currentIndex + 1);
+            startAutoPlay();
+        });
+    }
+
+    dots.forEach(function (dot) {
+        dot.addEventListener('click', function () {
+            showSlide(Number(dot.dataset.slide) || 0);
+            startAutoPlay();
+        });
+    });
+
+    slider.addEventListener('mouseenter', stopAutoPlay);
+    slider.addEventListener('mouseleave', startAutoPlay);
+    slider.addEventListener('focusin', stopAutoPlay);
+    slider.addEventListener('focusout', function () {
+        setTimeout(function () {
+            if (!slider.contains(document.activeElement)) {
+                startAutoPlay();
+            }
+        }, 0);
+    });
+
+    showSlide(0);
+    startAutoPlay();
+})();
+</script>
 
 <?php require_once '../includes/footer.php'; ?>
