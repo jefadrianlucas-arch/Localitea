@@ -48,6 +48,25 @@ if (
         $discountType = 'none';
     }
 
+    /* PWD / Senior Citizen ID details (cleared when the discount is removed). */
+    $discountIdName = '';
+    $discountIdNumber = '';
+
+    if ($discountType !== 'none') {
+        $discountIdName = trim(preg_replace('/\s+/', ' ', (string)($_POST['discount_id_name'] ?? '')));
+        $discountIdNumber = strtoupper(trim((string)($_POST['discount_id_number'] ?? '')));
+
+        if ($discountIdName === '' || mb_strlen($discountIdName) > 100) {
+            header('Location: cart.php?edit_error=' . urlencode('Please enter the name on your ID for the discount.'));
+            exit;
+        }
+
+        if (!preg_match('/^[A-Z0-9][A-Z0-9\-\/ ]{2,29}$/', $discountIdNumber)) {
+            header('Location: cart.php?edit_error=' . urlencode('Please enter a valid ID number (letters, numbers and dashes only).'));
+            exit;
+        }
+    }
+
     if (!is_array($addons)) {
         $addons = [$addons];
     }
@@ -184,6 +203,8 @@ if (
     $updatedItem['addons'] = $validAddons;
     $updatedItem['sugar_level'] = $sugarLevel;
     $updatedItem['discount_type'] = $discountType;
+    $updatedItem['discount_id_name'] = $discountIdName;
+    $updatedItem['discount_id_number'] = $discountIdNumber;
     $updatedItem['price'] = $unitPrice;
     $updatedItem['quantity'] = $quantity;
 
@@ -1734,6 +1755,13 @@ require_once '../includes/navbar.php';
                                             <?php elseif ($itemDiscountType === 'senior'): ?>
                                                 <span class="ck-chip is-discount">Senior Citizen Discount</span>
                                             <?php endif; ?>
+
+                                            <?php if ($itemDiscountType !== 'none' && !empty($item['discount_id_number'])): ?>
+                                                <span class="ck-chip">
+                                                    ID: <?= htmlspecialchars((string)($item['discount_id_name'] ?? '')) ?>
+                                                    (<?= htmlspecialchars((string)$item['discount_id_number']) ?>)
+                                                </span>
+                                            <?php endif; ?>
                                         </div>
 
                                         <div class="ck-item-actions cart-action-links">
@@ -2212,6 +2240,35 @@ require_once '../includes/navbar.php';
                                                                     >
                                                                         Senior Citizen (20%)
                                                                     </label>
+                                                                </div>
+                                                            </div>
+
+                                                            <div class="cart-discount-details row g-2 mt-1" <?= $editDiscountType === 'none' ? 'hidden' : '' ?>>
+                                                                <div class="col-12 col-sm-6">
+                                                                    <label class="form-label small mb-1">Name on ID</label>
+                                                                    <input
+                                                                        type="text"
+                                                                        class="form-control form-control-sm"
+                                                                        name="discount_id_name"
+                                                                        maxlength="100"
+                                                                        placeholder="Full name as shown on the ID"
+                                                                        autocomplete="off"
+                                                                        value="<?= htmlspecialchars((string)($item['discount_id_name'] ?? '')) ?>"
+                                                                        <?= $editDiscountType === 'none' ? '' : 'required' ?>
+                                                                    >
+                                                                </div>
+                                                                <div class="col-12 col-sm-6">
+                                                                    <label class="form-label small mb-1">ID Number</label>
+                                                                    <input
+                                                                        type="text"
+                                                                        class="form-control form-control-sm"
+                                                                        name="discount_id_number"
+                                                                        maxlength="30"
+                                                                        placeholder="PWD / Senior Citizen ID number"
+                                                                        autocomplete="off"
+                                                                        value="<?= htmlspecialchars((string)($item['discount_id_number'] ?? '')) ?>"
+                                                                        <?= $editDiscountType === 'none' ? '' : 'required' ?>
+                                                                    >
                                                                 </div>
                                                             </div>
 
@@ -2856,5 +2913,29 @@ function submitGcashPayment() {
 
 </script>
 
+<script>
+/* PWD / Senior ID fields inside the cart "Edit item" modals. */
+document.addEventListener('change', function (event) {
+    const radio = event.target;
+    if (!radio || radio.name !== 'discount_type') return;
+
+    const form = radio.closest('form');
+    const details = form ? form.querySelector('.cart-discount-details') : null;
+    if (!details) return;
+
+    const needsId = radio.value === 'pwd' || radio.value === 'senior';
+    details.hidden = !needsId;
+
+    details.querySelectorAll('input').forEach(function (input) {
+        input.required = needsId;
+        if (!needsId) input.value = '';
+    });
+
+    if (needsId) {
+        const first = details.querySelector('input');
+        if (first) first.focus();
+    }
+});
+</script>
 
 <?php require_once '../includes/footer.php'; ?>

@@ -6,7 +6,7 @@ $isAjaxRequest =
     ($_POST['ajax'] ?? $_GET['ajax'] ?? '') === '1' ||
     strtolower((string)($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '')) === 'xmlhttprequest';
 
-function customerRedirect(string $location): void
+function customerRedirect(string $location, string $message = ''): void
 {
     global $isAjaxRequest;
 
@@ -14,7 +14,8 @@ function customerRedirect(string $location): void
         header('Content-Type: application/json; charset=utf-8');
         echo json_encode([
             'success' => false,
-            'redirect' => $location
+            'redirect' => $location,
+            'message' => $message
         ]);
         exit;
     }
@@ -49,6 +50,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 if (!in_array($discountType, ['none', 'pwd', 'senior'], true)) {
     $discountType = 'none';
 }
+
+    /*
+     * PWD / Senior Citizen: the customer must give the name and
+     * ID number shown on the ID. They are printed on the receipt.
+     */
+    $discountIdName = '';
+    $discountIdNumber = '';
+
+    if ($discountType !== 'none') {
+        $discountIdName = trim(preg_replace('/\s+/', ' ', (string)($_POST['discount_id_name'] ?? '')));
+        $discountIdNumber = strtoupper(trim((string)($_POST['discount_id_number'] ?? '')));
+
+        $idBackUrl = 'product-view.php?id=' . (int)($_POST['product_id'] ?? 0);
+
+        if ($discountIdName === '' || mb_strlen($discountIdName) > 100) {
+            customerRedirect(
+                $idBackUrl . '&error=discount_id',
+                'Please enter the name on your ' . strtoupper($discountType) . ' ID.'
+            );
+        }
+
+        if (!preg_match('/^[A-Z0-9][A-Z0-9\-\/ ]{2,29}$/', $discountIdNumber)) {
+            customerRedirect(
+                $idBackUrl . '&error=discount_id',
+                'Please enter a valid ID number (letters, numbers and dashes only).'
+            );
+        }
+
+        /* One discount = one cardholder per order. */
+        foreach ($_SESSION['cart'] ?? [] as $existingItem) {
+            $existingId = strtoupper((string)($existingItem['discount_id_number'] ?? ''));
+            if (
+                ($existingItem['discount_type'] ?? 'none') === $discountType
+                && $existingId !== ''
+                && $existingId !== $discountIdNumber
+            ) {
+                customerRedirect(
+                    $idBackUrl . '&error=discount_id',
+                    'Your cart already uses ID ' . $existingId . ' for the discount. Use the same ID for the whole order.'
+                );
+            }
+        }
+    }
 
     $quantity = isset($_POST['quantity'])
         ? (int)$_POST['quantity']
@@ -518,6 +562,8 @@ if (!in_array($discountType, ['none', 'pwd', 'senior'], true)) {
     $_SESSION['cart'][$cartKey]['quantity'] += $quantity;
 
     $_SESSION['cart'][$cartKey]['discount_type'] = $discountType;
+    $_SESSION['cart'][$cartKey]['discount_id_name'] = $discountIdName;
+    $_SESSION['cart'][$cartKey]['discount_id_number'] = $discountIdNumber;
 
 
 
@@ -550,6 +596,8 @@ if (!in_array($discountType, ['none', 'pwd', 'senior'], true)) {
     'addons' => $validAddons,
     'sugar_level' => $sugarLevel,
     'discount_type' => $discountType,
+    'discount_id_name' => $discountIdName,
+    'discount_id_number' => $discountIdNumber,
     'price' => $unitPrice,
     'quantity' => $quantity
 ];

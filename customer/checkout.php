@@ -762,6 +762,70 @@ try {
 
     /*
      * ================================================================
+     * SAVE PWD / SENIOR CITIZEN ID DETAILS
+     * ================================================================
+     *
+     * The customer typed the name and ID number on the product page.
+     * They are saved in orders.notes (read by the admin and staff
+     * receipt) and, when the optional columns exist, in
+     * discount_id_name / discount_id_number.
+     */
+
+    if ($appliedDiscountType !== 'none') {
+
+        $discountIdName = '';
+        $discountIdNumber = '';
+
+        foreach ($_SESSION['cart'] as $discountCartItem) {
+
+            $lineDiscountType = strtolower(
+                trim((string)($discountCartItem['discount_type'] ?? 'none'))
+            );
+
+            if (
+                $lineDiscountType === $appliedDiscountType &&
+                !empty($discountCartItem['discount_id_number'])
+            ) {
+                $discountIdName = trim((string)($discountCartItem['discount_id_name'] ?? ''));
+                $discountIdNumber = trim((string)$discountCartItem['discount_id_number']);
+                break;
+            }
+        }
+
+        if ($discountIdName !== '' && $discountIdNumber !== '') {
+
+            $discountNote =
+                strtoupper($appliedDiscountType) .
+                ' ID: ' . $discountIdName . ' / ' . $discountIdNumber;
+
+            $pdo->prepare("
+                UPDATE orders
+                SET notes = CASE
+                    WHEN notes IS NULL OR notes = '' THEN ?
+                    ELSE CONCAT(notes, ' | ', ?)
+                END
+                WHERE id = ?
+            ")->execute([$discountNote, $discountNote, $order_id]);
+
+            try {
+                $colCheck = $pdo->query("SHOW COLUMNS FROM orders LIKE 'discount_id_number'");
+
+                if ($colCheck && $colCheck->fetch()) {
+                    $pdo->prepare("
+                        UPDATE orders
+                        SET discount_id_name = ?, discount_id_number = ?
+                        WHERE id = ?
+                    ")->execute([$discountIdName, $discountIdNumber, $order_id]);
+                }
+            } catch (Throwable $discountColumnError) {
+                error_log('Checkout discount ID columns skipped: ' . $discountColumnError->getMessage());
+            }
+        }
+    }
+
+
+    /*
+     * ================================================================
      * GENERATE ORDER NUMBER
      * ================================================================
      *

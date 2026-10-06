@@ -205,6 +205,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $discountType = 'none';
         }
 
+        /* PWD / Senior: the cashier must record the name and ID number shown on the customer's ID. */
+        $discountIdName = '';
+        $discountIdNumber = '';
+        if ($discountType !== 'none') {
+            $discountIdName = trim(preg_replace('/\s+/', ' ', (string)($_POST['discount_id_name'] ?? '')));
+            $discountIdNumber = strtoupper(trim((string)($_POST['discount_id_number'] ?? '')));
+
+            if ($discountIdName === '' || mb_strlen($discountIdName) > 100) {
+                walkinRedirect(walkinBackUrl($returnCategory, 'error=' . urlencode('Please enter the name on the ' . strtoupper($discountType) . ' ID.')));
+            }
+            if (!preg_match('/^[A-Z0-9][A-Z0-9\-\/ ]{2,29}$/', $discountIdNumber)) {
+                walkinRedirect(walkinBackUrl($returnCategory, 'error=' . urlencode('Please enter a valid ' . strtoupper($discountType) . ' ID number (letters, numbers, dashes only).')));
+            }
+        }
+
         if (!is_array($selectedAddons)) {
             $selectedAddons = [$selectedAddons];
         }
@@ -220,6 +235,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $existingType = (string)($existing['discount_type'] ?? 'none');
                 if ($existingType !== 'none' && $existingType !== $discountType) {
                     walkinRedirect(walkinBackUrl($returnCategory, 'error=' . urlencode('This order already uses a ' . strtoupper($existingType) . ' discount. Only one discount type is allowed per order.')));
+                }
+                /* One discount = one cardholder per order. */
+                $existingId = strtoupper((string)($existing['discount_id_number'] ?? ''));
+                if ($existingType === $discountType && $existingId !== '' && $existingId !== $discountIdNumber) {
+                    walkinRedirect(walkinBackUrl($returnCategory, 'error=' . urlencode('This order already uses ID ' . $existingId . ' for the discount. Use the same cardholder for the whole order.')));
                 }
             }
         }
@@ -297,6 +317,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'addons' => $validAddons,
                 'sugar_level' => $sugarLevel,
                 'discount_type' => $discountType,
+                'discount_id_name' => $discountIdName,
+                'discount_id_number' => $discountIdNumber,
                 'price' => $unitPrice,
                 'quantity' => $quantity,
             ];
@@ -377,6 +399,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $subtotal = 0.00;
         $discountEligibleBase = 0.00;
         $selectedDiscountTypes = [];
+        $discountIdName = '';
+        $discountIdNumber = '';
         $lineData = [];
 
         $productStmt = $pdo->prepare("
@@ -411,6 +435,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($discountType !== 'none') {
                 $selectedDiscountTypes[$discountType] = true;
                 $discountEligibleBase += $lineSubtotal;
+                if ($discountIdNumber === '') {
+                    $discountIdName = trim((string)($item['discount_id_name'] ?? ''));
+                    $discountIdNumber = trim((string)($item['discount_id_number'] ?? ''));
+                }
             }
 
             $subtotal += $lineSubtotal;
@@ -442,6 +470,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ? 'pwd'
             : (isset($selectedDiscountTypes['senior']) ? 'senior' : 'none');
 
+        if ($discountType !== 'none' && ($discountIdName === '' || $discountIdNumber === '')) {
+            walkinRedirect(walkinBackUrl($returnCategory, 'error=' . urlencode('Discount ID details are missing. Please re-add the discounted item.')));
+        }
+
         $discountRate = $discountType === 'none' ? 0.00 : (float)$discountRates[$discountType];
         $discountAmount = round($discountEligibleBase * ($discountRate / 100), 2);
         $totalAmount = round(max(0, $subtotal - $discountAmount), 2);
@@ -453,6 +485,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $pickupDate = date('Y-m-d');
             $pickupTime = date('H:i:s');
             $orderNotes = 'Walk-in order';
+            if ($discountType !== 'none') {
+                $orderNotes .= ' | ' . strtoupper($discountType) . ' ID: ' . $discountIdName . ' / ' . $discountIdNumber;
+            }
             if ($notes !== '') {
                 $orderNotes .= ' | ' . $notes;
             }
@@ -487,6 +522,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $orderId = (int)$pdo->lastInsertId();
             if ($orderId <= 0) {
                 throw new RuntimeException('Failed to create the walk-in order.');
+            }
+
+            /* Optional dedicated columns (see optional_discount_columns.sql). Skipped if they don't exist yet. */
+            if ($discountType !== 'none') {
+                try {
+                    $colCheck = $pdo->query("SHOW COLUMNS FROM orders LIKE 'discount_id_number'");
+                    if ($colCheck && $colCheck->fetch()) {
+                        $pdo->prepare("UPDATE orders SET discount_id_name = ?, discount_id_number = ? WHERE id = ?")
+                            ->execute([$discountIdName, $discountIdNumber, $orderId]);
+                    }
+                } catch (Throwable $e) {
+                    error_log('Walk-in discount ID save skipped: ' . $e->getMessage());
+                }
             }
 
             $orderNumber = 'ORD-' . date('Ymd') . '-' . str_pad((string)$orderId, 4, '0', STR_PAD_LEFT);
@@ -680,6 +728,19 @@ if (isset($walkinDiscountTypes['pwd']) && !isset($walkinDiscountTypes['senior'])
 }
 $walkinDiscountAmount = round($walkinDiscountEligibleBase * ($walkinDiscountRate / 100), 2);
 $walkinTotal = round(max(0, $walkinSubtotal - $walkinDiscountAmount), 2);
+
+/* Discount cardholder already recorded in the cart (used to auto-fill the modal). */
+$walkinActiveDiscount = ['type' => '', 'name' => '', 'id' => ''];
+foreach ($_SESSION['walkin_cart'] as $cartItem) {
+    if (($cartItem['discount_type'] ?? 'none') !== 'none' && !empty($cartItem['discount_id_number'])) {
+        $walkinActiveDiscount = [
+            'type' => (string)$cartItem['discount_type'],
+            'name' => (string)($cartItem['discount_id_name'] ?? ''),
+            'id'   => (string)$cartItem['discount_id_number'],
+        ];
+        break;
+    }
+}
 
 $walkinSuccess = $_SESSION['walkin_success'] ?? null;
 unset($_SESSION['walkin_success']);
@@ -886,6 +947,10 @@ body.walkin-drawer-open .walkin-toast { right: 432px; width: min(380px, calc(100
 .walkin-addon-grid .walkin-radio-card label span { color: #8A7A6C; font-weight: 600; }
 
 .walkin-discount-note { color: #8A7A6C; font-size: .7rem; margin-top: 6px; }
+.walkin-discount-details { margin-top: 10px; padding: 12px; border: 1px dashed #D8C9BD; border-radius: 10px; background: #FDF8F2; }
+.walkin-discount-details[hidden] { display: none; }
+.walkin-field-label { display: block; color: #6A5546; font-size: .74rem; margin-bottom: 4px; }
+.walkin-discount-details .form-control.is-invalid { border-color: #B3402F; }
 
 .walkin-qty-stepper { display: inline-flex; align-items: center; border: 1px solid #D8C9BD; border-radius: 10px; overflow: hidden; }
 .walkin-qty-stepper button { border: 0; background: #F6EEE7; width: 40px; height: 40px; font-size: 1.1rem; color: #4A3525; }
@@ -979,7 +1044,7 @@ body.walkin-drawer-open .walkin-toast { right: 432px; width: min(380px, calc(100
                     if (!empty($item['size'])) { $metaParts[] = 'Size: ' . $item['size']; }
                     if (!empty($item['sugar_level'])) { $metaParts[] = 'Sugar: ' . $item['sugar_level']; }
                     if (!empty($item['addons']) && is_array($item['addons'])) { $metaParts[] = 'Add-ons: ' . implode(', ', $item['addons']); }
-                    if (($item['discount_type'] ?? 'none') !== 'none') { $metaParts[] = strtoupper((string)$item['discount_type']) . ' discount'; }
+                    if (($item['discount_type'] ?? 'none') !== 'none') { $metaParts[] = strtoupper((string)$item['discount_type']) . ' discount'; if (!empty($item['discount_id_number'])) { $metaParts[] = 'ID: ' . $item['discount_id_name'] . ' (' . $item['discount_id_number'] . ')'; } }
                     ?>
                     <div class="walkin-cart-item">
                         <div class="d-flex align-items-start gap-2">
@@ -1115,6 +1180,18 @@ body.walkin-drawer-open .walkin-toast { right: 432px; width: min(380px, calc(100
                             <div class="walkin-radio-card">
                                 <input type="radio" name="discount_type" value="senior" id="walkinDiscountSenior">
                                 <label for="walkinDiscountSenior">Senior (<?= walkinFmtRate((float)$discountRates['senior']) ?>)</label>
+                            </div>
+                        </div>
+                        <div id="walkinDiscountDetails" class="walkin-discount-details" hidden>
+                            <div class="mb-2">
+                                <label for="walkinDiscountIdName" class="walkin-field-label">Name on ID</label>
+                                <input type="text" class="form-control" name="discount_id_name" id="walkinDiscountIdName"
+                                       maxlength="100" placeholder="Full name as shown on the ID" autocomplete="off">
+                            </div>
+                            <div>
+                                <label for="walkinDiscountIdNumber" class="walkin-field-label">ID Number</label>
+                                <input type="text" class="form-control" name="discount_id_number" id="walkinDiscountIdNumber"
+                                       maxlength="30" placeholder="PWD / Senior Citizen ID number" autocomplete="off">
                             </div>
                         </div>
                         <div class="walkin-discount-note">Verify the customer's valid ID. Only one discount type is allowed per order.</div>
@@ -1415,6 +1492,7 @@ body.walkin-drawer-open .walkin-toast { right: 432px; width: min(380px, calc(100
         const discountNone = document.getElementById('walkinDiscountNone');
         if (sugar50) sugar50.checked = true;
         if (discountNone) discountNone.checked = true;
+        resetDiscountFields();
         updateModalTotal();
         openModal(productModal);
     }
@@ -1451,6 +1529,66 @@ body.walkin-drawer-open .walkin-toast { right: 432px; width: min(380px, calc(100
     }, true);
 
     if (addForm) addForm.addEventListener('change', updateModalTotal);
+
+    /* ---------- PWD / Senior ID fields ---------- */
+    const discountDetails = document.getElementById('walkinDiscountDetails');
+    const discountIdName = document.getElementById('walkinDiscountIdName');
+    const discountIdNumber = document.getElementById('walkinDiscountIdNumber');
+    /* Details of the discount already used in the cart (one cardholder per order). */
+    const activeDiscount = <?= json_encode($walkinActiveDiscount, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+
+    function resetDiscountFields() {
+        if (!discountDetails) return;
+        discountDetails.hidden = true;
+        discountIdName.value = '';
+        discountIdNumber.value = '';
+        discountIdName.required = false;
+        discountIdNumber.required = false;
+        discountIdName.classList.remove('is-invalid');
+        discountIdNumber.classList.remove('is-invalid');
+    }
+
+    function syncDiscountFields() {
+        if (!discountDetails || !addForm) return;
+        const checked = addForm.querySelector('input[name="discount_type"]:checked');
+        const type = checked ? checked.value : 'none';
+
+        if (type === 'none') { resetDiscountFields(); return; }
+
+        const wasHidden = discountDetails.hidden;
+        discountDetails.hidden = false;
+        discountIdName.required = true;
+        discountIdNumber.required = true;
+
+        /* Auto-fill when the cart already has this discount type, so the cashier doesn't retype it. */
+        if (wasHidden && activeDiscount && activeDiscount.type === type) {
+            discountIdName.value = activeDiscount.name || '';
+            discountIdNumber.value = activeDiscount.id || '';
+        }
+        if (wasHidden) discountIdName.focus();
+    }
+
+    if (addForm && discountDetails) {
+        addForm.querySelectorAll('input[name="discount_type"]').forEach(function (r) {
+            r.addEventListener('change', syncDiscountFields);
+        });
+
+        addForm.addEventListener('submit', function (e) {
+            if (discountDetails.hidden) return;
+            const nameOk = discountIdName.value.trim() !== '';
+            const idOk = /^[A-Za-z0-9][A-Za-z0-9\-\/ ]{2,29}$/.test(discountIdNumber.value.trim());
+            discountIdName.classList.toggle('is-invalid', !nameOk);
+            discountIdNumber.classList.toggle('is-invalid', !idOk);
+            if (!nameOk || !idOk) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                (nameOk ? discountIdNumber : discountIdName).focus();
+                const btn = addForm.querySelector('button[type="submit"]');
+                if (btn) btn.disabled = false;
+                showToast(!nameOk ? 'Enter the name on the ID.' : 'Enter a valid ID number.', true);
+            }
+        }, true);
+    }
     if (qtyInput) qtyInput.addEventListener('input', updateModalTotal);
 
     const minus = document.getElementById('walkinQtyMinus');
@@ -1656,7 +1794,7 @@ body.walkin-drawer-open .walkin-toast { right: 432px; width: min(380px, calc(100
                 if (!r.ok) showToast(r.message, true);
             }).catch(function (err) {
                 if (err && err.network) {
-                    form.submit();   /* normal full-page submit as a safety net */
+                    form.submit();  
                 } else {
                     showToast('Unable to update the order. Please try again.', true);
                     if (btn) btn.disabled = false;

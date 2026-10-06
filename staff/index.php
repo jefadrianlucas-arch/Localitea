@@ -2135,6 +2135,31 @@ function adminAssetPath(?string $path): string {
     return '../assets/uploads/receipts/' . ltrim($path, '/');
 }
 
+/* Name + ID number of the PWD / Senior cardholder.
+   Uses the dedicated columns when they exist, otherwise reads the line
+   "PWD ID: Name / 12345" that walk-in-order.php writes into orders.notes. */
+function adminDiscountCardholder(array $order): array
+{
+    $name = trim((string)($order['discount_id_name'] ?? ''));
+    $idNumber = trim((string)($order['discount_id_number'] ?? ''));
+
+    if ($name === '' || $idNumber === '') {
+        foreach (explode(' | ', (string)($order['notes'] ?? '')) as $part) {
+            $part = trim($part);
+            if (preg_match('/^(?:PWD|SENIOR) ID:\s*(.+)$/i', $part, $m)) {
+                $pos = strrpos($m[1], ' / ');
+                if ($pos !== false) {
+                    $name = trim(substr($m[1], 0, $pos));
+                    $idNumber = trim(substr($m[1], $pos + 3));
+                }
+                break;
+            }
+        }
+    }
+
+    return ['name' => $name, 'id' => $idNumber];
+}
+
 function adminGetAddonPriceMap(): array
 {
     static $priceMap = null;
@@ -5843,6 +5868,7 @@ require_once '../includes/header.php';
                         );
                         $discount_rate = (float)($order['discount_rate'] ?? 0);
                         $discount_amount = (float)($order['discount_amount'] ?? 0);
+                        $discount_holder = adminDiscountCardholder($order);
                         ?>
 
                         <!-- =================================================
@@ -6003,6 +6029,19 @@ require_once '../includes/header.php';
                                                     -₱<?= number_format($discount_amount, 2) ?>
                                                 </div>
                                             </div>
+
+                                            <?php if ($discount_holder['id'] !== ''): ?>
+                                                <div class="row g-3 mb-4">
+                                                    <div class="col-md-6">
+                                                        <div class="info-label">Name on ID</div>
+                                                        <div class="info-value"><?= htmlspecialchars($discount_holder['name']) ?></div>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <div class="info-label">ID Number</div>
+                                                        <div class="info-value"><?= htmlspecialchars($discount_holder['id']) ?></div>
+                                                    </div>
+                                                </div>
+                                            <?php endif; ?>
                                         <?php endif; ?>
 
                                         <hr class="order-modal-divider">
@@ -6479,6 +6518,66 @@ require_once '../includes/header.php';
                                             </div>
 
                                         <?php endforeach; ?>
+
+                                        <div class="receipt-line"></div>
+
+                                        <div class="d-flex justify-content-between small">
+                                            <span>Subtotal</span>
+                                            <strong>₱<?= number_format((float)$order['subtotal'], 2) ?></strong>
+                                        </div>
+
+                                        <?php if (
+                                            in_array($discount_type, ['pwd', 'senior'], true)
+                                            && $discount_amount > 0
+                                        ): ?>
+                                            <div class="d-flex justify-content-between small">
+                                                <span>
+                                                    <?= $discount_type === 'pwd' ? 'PWD Discount' : 'Senior Citizen Discount' ?>
+                                                    (<?= number_format($discount_rate, 0) ?>%)
+                                                </span>
+                                                <strong>-₱<?= number_format($discount_amount, 2) ?></strong>
+                                            </div>
+                                        <?php endif; ?>
+
+                                        <div class="d-flex justify-content-between mt-1">
+                                            <span class="fw-bold">Total</span>
+                                            <span class="fw-bold">₱<?= number_format((float)$order['total_amount'], 2) ?></span>
+                                        </div>
+
+                                        <?php if (
+                                            in_array($discount_type, ['pwd', 'senior'], true)
+                                            && $discount_amount > 0
+                                        ): ?>
+                                            <div class="receipt-line"></div>
+
+                                            <div class="small fw-bold mb-1">
+                                                <?= $discount_type === 'pwd' ? 'PWD' : 'Senior Citizen' ?> Discount Details
+                                            </div>
+
+                                            <div class="d-flex justify-content-between small">
+                                                <span>Name</span>
+                                                <strong>
+                                                    <?= $discount_holder['name'] !== ''
+                                                        ? htmlspecialchars($discount_holder['name'])
+                                                        : '______________________' ?>
+                                                </strong>
+                                            </div>
+
+                                            <div class="d-flex justify-content-between small">
+                                                <span>ID No.</span>
+                                                <strong>
+                                                    <?= $discount_holder['id'] !== ''
+                                                        ? htmlspecialchars($discount_holder['id'])
+                                                        : '______________________' ?>
+                                                </strong>
+                                            </div>
+                                        <?php endif; ?>
+
+                                        <div class="receipt-line"></div>
+
+                                        <div class="text-center small text-muted">
+                                            Thank you for your order!
+                                        </div>
 
                                     </div>
                                     <!-- /.receipt-paper -->
