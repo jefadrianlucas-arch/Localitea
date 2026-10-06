@@ -1,15 +1,4 @@
 <?php
-/* =========================================================
-   LOCALITEA ADMIN NAVBAR
-   Shared navbar for all files inside /admin
-
-   - Does NOT include db.php
-   - Does NOT include header.php
-   - Parent Admin page loads required files
-   - sidebar.php handles the sidebar
-   - This file owns the single navbar hamburger
-   - Search is a GLOBAL ADMIN SYSTEM SEARCH
-========================================================= */
 
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
@@ -692,6 +681,46 @@ $navbarAdminInitial =
 .navbar-logout-link:hover {
     background: #FCE3E3;
     color: #9E3030;
+}
+
+/* Account header inside the dropdown */
+.localitea-admin-navbar-dropdown-head {
+    padding: 8px 12px 10px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid #EFE6DA;
+    min-width: 0;
+}
+
+.localitea-admin-navbar-dropdown-head strong {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #2C221E;
+    font-size: .86rem;
+    font-weight: 700;
+}
+
+.localitea-admin-navbar-dropdown-head small {
+    display: block;
+    color: #7B6D62;
+    font-size: .74rem;
+}
+
+/* Log Out sits apart from the other links, in a warning color */
+.localitea-admin-navbar-dropdown .navbar-logout-link {
+    margin-top: 4px;
+    border-top: 1px solid #EFE6DA;
+    border-radius: 0 0 8px 8px;
+    padding-top: 12px;
+    color: #9E3030;
+}
+
+.localitea-admin-navbar-dropdown a:focus-visible,
+.localitea-admin-logout-cancel:focus-visible,
+.localitea-admin-logout-confirm:focus-visible {
+    outline: 3px solid #C69C6D;
+    outline-offset: 2px;
 }
 
 /* =========================================================
@@ -1396,6 +1425,11 @@ $navbarAdminInitial =
             class="localitea-admin-navbar-dropdown"
             id="localiteaAdminNavbarDropdown"
         >
+            <div class="localitea-admin-navbar-dropdown-head">
+                <strong><?= htmlspecialchars($navbarAdminName, ENT_QUOTES, 'UTF-8') ?></strong>
+                <small>Administrator</small>
+            </div>
+
 
             <a href="profile.php">
 
@@ -1464,7 +1498,7 @@ $navbarAdminInitial =
         </h5>
 
         <p>
-            Are you sure you want to logout?
+            Are you sure you want to log out? You will need to sign in again to use the Admin panel.
         </p>
 
         <div class="localitea-admin-logout-actions">
@@ -2370,7 +2404,11 @@ $navbarAdminInitial =
        LOGOUT MODAL
     ===================================================== */
 
+    let logoutReturnFocus = null;
+
     function openLogoutModal() {
+
+        logoutReturnFocus = document.activeElement;
 
         closeProfileDropdown();
 
@@ -2394,6 +2432,10 @@ $navbarAdminInitial =
         document.body.style.overflow =
             'hidden';
 
+        if (logoutCancel) {
+            logoutCancel.focus({ preventScroll: true });
+        }
+
     }
 
     function closeLogoutModal() {
@@ -2415,6 +2457,13 @@ $navbarAdminInitial =
 
         document.body.style.overflow =
             '';
+
+        if (
+            logoutReturnFocus &&
+            typeof logoutReturnFocus.focus === 'function'
+        ) {
+            logoutReturnFocus.focus({ preventScroll: true });
+        }
 
     }
 

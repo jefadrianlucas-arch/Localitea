@@ -1,4 +1,8 @@
 <?php
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
 require_once '../includes/db.php';
 
 /* =========================================================
@@ -118,7 +122,6 @@ if (
             SET is_read = 1
             WHERE id = ?
               AND recipient_role = 'staff'
-              AND is_read = 0
         ");
 
         $stmt->execute([
@@ -1510,29 +1513,64 @@ require_once '../includes/header.php';
 
 
                         /*
-                         * Order status link
+                         * View Order link
+                         *
+                         * Pass the exact order ID and notification ID.
+                         * index.php uses these values to:
+                         * 1. open the correct workflow section,
+                         * 2. calculate the correct pagination page,
+                         * 3. scroll to the exact order card,
+                         * 4. highlight that order, and
+                         * 5. mark the related staff notification(s) as read.
                          */
 
-                        $orderStatus = $notification['order_status'] ?? '';
+                        $orderStatus =
+                            $notification['order_status'] ?? '';
 
-                            $orderStatusUrl = 'orders.php';
+                        $orderId =
+                            (int)($notification['reference_id'] ?? 0);
 
-                            if (
-                                in_array(
-                                    $orderStatus,
-                                    [
-                                        'pending_verification',
-                                        'confirmed',
-                                        'preparing',
-                                        'ready'
-                                    ],
-                                    true
-                                )
-                            ) {
-                                $orderStatusUrl =
-                                    'orders.php?status=' .
-                                    urlencode($orderStatus);
+                        $notificationId =
+                            (int)($notification['id'] ?? 0);
+
+                        $activeOrderStatuses = [
+                            'pending_verification',
+                            'order_queue',
+                            'confirmed',
+                            'preparing',
+                            'ready'
+                        ];
+
+                        $orderCanBeViewed =
+                            $orderId > 0
+                            && in_array(
+                                $orderStatus,
+                                $activeOrderStatuses,
+                                true
+                            );
+
+                        $orderStatusUrl =
+                            'index.php';
+
+                        $orderViewMessage =
+                            'Order not found or finished.';
+
+                        if ($orderCanBeViewed) {
+
+                            $orderQuery = [
+                                'status' => $orderStatus,
+                                'order_id' => $orderId
+                            ];
+
+                            if ($notificationId > 0) {
+                                $orderQuery['notification_id'] =
+                                    $notificationId;
                             }
+
+                            $orderStatusUrl =
+                                'index.php?' .
+                                http_build_query($orderQuery);
+                        }
 
 
                         /*
@@ -1697,23 +1735,41 @@ require_once '../includes/header.php';
                             <div class="notification-card-actions">
 
 
-                                <?php if (
-                                    !empty($notification['reference_id']) &&
-                                    !empty($notification['order_number'])
-                                ): ?>
+                                <?php if ($orderId > 0): ?>
 
-                                    <a
-                                        href="<?= htmlspecialchars(
-                                            $orderStatusUrl
-                                        ) ?>"
-                                        class="btn-view-order"
-                                    >
+                                    <?php if ($orderCanBeViewed): ?>
 
-                                        <i class="bi bi-eye"></i>
+                                        <a
+                                            href="<?= htmlspecialchars(
+                                                $orderStatusUrl
+                                            ) ?>"
+                                            class="btn-view-order"
+                                        >
 
-                                        View Order
+                                            <i class="bi bi-eye"></i>
 
-                                    </a>
+                                            View Order
+
+                                        </a>
+
+                                    <?php else: ?>
+
+                                        <button
+                                            type="button"
+                                            class="btn-view-order"
+                                            onclick="window.showNotificationToast('<?= htmlspecialchars(
+                                                $orderViewMessage,
+                                                ENT_QUOTES
+                                            ) ?>');"
+                                        >
+
+                                            <i class="bi bi-eye"></i>
+
+                                            View Order
+
+                                        </button>
+
+                                    <?php endif; ?>
 
                                 <?php endif; ?>
 
@@ -1966,7 +2022,7 @@ require_once '../includes/header.php';
    complete notification list without refreshing the page.
 ========================================================= */
 
-window.LocaliteaNotificationPageUpdater = function (
+,window.LocaliteaNotificationPageUpdater = function (
     data,
     hasNewNotifications = false
 ) {
@@ -2197,26 +2253,42 @@ if (hasNewNotifications) {
 
         const allowedStatuses = [
             'pending_verification',
+            'order_queue',
             'confirmed',
             'preparing',
             'ready'
         ];
 
         if (
-            notification.reference_id &&
-            notification.order_number &&
-            allowedStatuses.includes(
+            !notification
+            || Number(notification.reference_id || 0) <= 0
+            || !allowedStatuses.includes(
                 notification.order_status
             )
         ) {
-
-            return 'orders.php?status='
-                + encodeURIComponent(
-                    notification.order_status
-                );
+            return '';
         }
 
-        return 'orders.php';
+        const params = new URLSearchParams();
+
+        params.set(
+            'status',
+            notification.order_status
+        );
+
+        params.set(
+            'order_id',
+            String(notification.reference_id)
+        );
+
+        if (Number(notification.id || 0) > 0) {
+            params.set(
+                'notification_id',
+                String(notification.id)
+            );
+        }
+
+        return 'index.php?' + params.toString();
     }
 
 
@@ -2322,23 +2394,52 @@ if (hasNewNotifications) {
             }
 
 
+            const canViewOrder =
+                Number(notification.reference_id || 0) > 0
+                && notification.order_status
+                && [
+                    'pending_verification',
+                    'order_queue',
+                    'confirmed',
+                    'preparing',
+                    'ready'
+                ].includes(
+                    notification.order_status
+                );
+
+            const hasReferencedOrder =
+                Number(notification.reference_id || 0) > 0;
+
             const actionHtml =
-                (
-                    notification.reference_id &&
-                    notification.order_number
+                hasReferencedOrder
+                ? (
+                    canViewOrder
+                    ? `
+                        <a
+                            href="${escapeHtml(orderUrl)}"
+                            class="btn-view-order"
+                        >
+
+                            <i class="bi bi-eye"></i>
+
+                            View Order
+
+                        </a>
+                    `
+                    : `
+                        <button
+                            type="button"
+                            class="btn-view-order"
+                            onclick="window.showNotificationToast('Order not found or finished.');"
+                        >
+
+                            <i class="bi bi-eye"></i>
+
+                            View Order
+
+                        </button>
+                    `
                 )
-                ? `
-                    <a
-                        href="${escapeHtml(orderUrl)}"
-                        class="btn-view-order"
-                    >
-
-                        <i class="bi bi-eye"></i>
-
-                        View Order
-
-                    </a>
-                `
                 : '';
 
 
@@ -2664,7 +2765,7 @@ if (totalNotificationPages > 1) {
 section.innerHTML =
     cards.join('') +
     paginationHtml;
-};
+});
 </script>
 
 <script>
@@ -2721,6 +2822,14 @@ section.innerHTML =
 
         }
     }
+
+
+    /*
+     * Expose the same notification toast so other notification
+     * actions (including View Order when an order is finished)
+     * use the exact same alert UI.
+     */
+    window.showNotificationToast = showNotificationToast;
 
 
     /* ---------------------------------------------------------
@@ -2853,7 +2962,59 @@ section.innerHTML =
                             'Notification marked as read.'
                         );
 
-                        await refreshNotificationPage();
+                        /* Update this card immediately. */
+                        const card =
+                            form.closest('.notification-card');
+
+                        if (card) {
+                            card.classList.remove('unread');
+                            card.classList.add('read');
+
+                            const newBadge =
+                                card.querySelector('.new-badge');
+
+                            if (newBadge) {
+                                newBadge.remove();
+                            }
+
+                            const formContainer =
+                                markReadButton.closest('form');
+
+                            if (formContainer) {
+                                const readState = document.createElement('span');
+                                readState.className = 'text-muted';
+                                readState.style.fontSize = '11px';
+                                readState.innerHTML =
+                                    '<i class="bi bi-check2-all me-1"></i> Read';
+
+                                formContainer.replaceWith(readState);
+                            }
+                        }
+
+                        /* Sync the unread counter with the server response. */
+                        const actions =
+                            document.querySelector('.notification-actions');
+
+                        if (actions) {
+                            const unreadBadge =
+                                actions.querySelector('.unread-badge');
+
+                            if (Number(data.unread_count || 0) > 0) {
+                                if (unreadBadge) {
+                                    unreadBadge.innerHTML =
+                                        '<i class="bi bi-bell-fill me-1"></i> ' +
+                                        Number(data.unread_count) +
+                                        ' unread';
+                                }
+                            } else {
+                                actions.innerHTML = `
+                                    <span class="unread-badge">
+                                        <i class="bi bi-check-circle me-1"></i>
+                                        All caught up
+                                    </span>
+                                `;
+                            }
+                        }
 
                     } else {
 
@@ -2971,6 +3132,3 @@ section.innerHTML =
 
 </div>
 
-<?php
-require_once '../includes/footer.php';
-?>

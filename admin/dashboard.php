@@ -295,7 +295,7 @@ require_once '../includes/header.php';
         margin: 0;
         color: #4A3525;
         font-size: 1.65rem;
-        font-weight: 900;
+        font-weight: 600;
         letter-spacing: -.02em;
     }
 
@@ -312,7 +312,7 @@ require_once '../includes/header.php';
         background: #FFFFFF;
         color: #6F4E37;
         font-size: .78rem;
-        font-weight: 800;
+        font-weight: 500;
         white-space: nowrap;
     }
 
@@ -351,7 +351,7 @@ require_once '../includes/header.php';
     .metric-label {
         color: #7B6D62;
         font-size: .72rem;
-        font-weight: 800;
+        font-weight: 500;
         text-transform: uppercase;
         letter-spacing: .35px;
     }
@@ -360,7 +360,7 @@ require_once '../includes/header.php';
         margin-top: 8px;
         color: #4A3525;
         font-size: 1.8rem;
-        font-weight: 900;
+        font-weight: 700;
         line-height: 1.05;
     }
 
@@ -402,7 +402,7 @@ require_once '../includes/header.php';
         margin: 0;
         color: #4A3525;
         font-size: .98rem;
-        font-weight: 900;
+        font-weight: 600;
     }
 
     .panel-subheading {
@@ -414,7 +414,7 @@ require_once '../includes/header.php';
     .panel-total {
         color: #4A3525;
         font-size: .95rem;
-        font-weight: 900;
+        font-weight: 600;
         white-space: nowrap;
     }
 
@@ -443,7 +443,7 @@ require_once '../includes/header.php';
     .chart-amount {
         color: #6F4E37;
         font-size: .65rem;
-        font-weight: 800;
+        font-weight: 500;
         text-align: center;
         white-space: nowrap;
     }
@@ -472,7 +472,7 @@ require_once '../includes/header.php';
     .chart-day-label {
         color: #6B5B50;
         font-size: .68rem;
-        font-weight: 800;
+        font-weight: 500;
     }
 
     .chart-date-label {
@@ -508,7 +508,7 @@ require_once '../includes/header.php';
         gap: 9px;
         color: #5E5148;
         font-size: .78rem;
-        font-weight: 700;
+        font-weight: 500;
     }
 
     .status-dot {
@@ -538,7 +538,7 @@ require_once '../includes/header.php';
         background: #FBF9F6;
         color: #4A3525;
         font-size: .74rem;
-        font-weight: 900;
+        font-weight: 600;
         text-align: center;
     }
 
@@ -549,7 +549,7 @@ require_once '../includes/header.php';
         color: #6F4E37;
         text-decoration: none;
         font-size: .72rem;
-        font-weight: 800;
+        font-weight: 500;
     }
 
     .quick-link:hover {
@@ -582,7 +582,7 @@ require_once '../includes/header.php';
     .transaction-summary-label {
         color: #7B6D62;
         font-size: .68rem;
-        font-weight: 900;
+        font-weight: 500;
         text-transform: uppercase;
         letter-spacing: .35px;
     }
@@ -591,7 +591,7 @@ require_once '../includes/header.php';
         margin-top: 3px;
         color: #4A3525;
         font-size: 1.18rem;
-        font-weight: 900;
+        font-weight: 700;
         line-height: 1;
     }
 
@@ -623,7 +623,7 @@ require_once '../includes/header.php';
         border-bottom: 2px solid #8B6A55;
         color: #7B6D62;
         font-size: .66rem;
-        font-weight: 900;
+        font-weight: 500;
         text-transform: uppercase;
         letter-spacing: .35px;
         text-align: left;
@@ -648,7 +648,7 @@ require_once '../includes/header.php';
 
     .order-number {
         color: #4A3525;
-        font-weight: 900;
+        font-weight: 600;
     }
 
     .claim-number {
@@ -660,7 +660,7 @@ require_once '../includes/header.php';
     .payment-method {
         text-transform: uppercase;
         font-size: .65rem;
-        font-weight: 900;
+        font-weight: 500;
         letter-spacing: .3px;
     }
 
@@ -678,7 +678,7 @@ require_once '../includes/header.php';
         padding: 5px 8px;
         border-radius: 999px;
         font-size: .63rem;
-        font-weight: 900;
+        font-weight: 500;
         white-space: nowrap;
     }
 
@@ -735,7 +735,7 @@ require_once '../includes/header.php';
         color: #6F4E37;
         text-decoration: none;
         font-size: .65rem;
-        font-weight: 800;
+        font-weight: 500;
         white-space: nowrap;
     }
 
@@ -789,7 +789,7 @@ require_once '../includes/header.php';
     .notification-title {
         color: #4B2E1E;
         font-size: .72rem;
-        font-weight: 900;
+        font-weight: 600;
     }
 
     .notification-new {
@@ -798,7 +798,7 @@ require_once '../includes/header.php';
         background: #5A3825;
         color: #FFFFFF;
         font-size: .55rem;
-        font-weight: 900;
+        font-weight: 500;
     }
 
     .notification-message {
@@ -1407,5 +1407,3 @@ require_once '../includes/header.php';
     </main>
 
 </div>
-
-<?php require_once '../includes/footer.php'; ?>

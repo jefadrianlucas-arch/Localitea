@@ -339,11 +339,170 @@ $gross_subtotal = round(
     2
 );
 
-$total_amount = round(
-    max(0, $gross_subtotal - $promotion_discount),
+/*
+ * ================================================================
+ * PWD / SENIOR CITIZEN DISCOUNT
+ * ================================================================
+ *
+ * The discount selection is stored on each session-cart line by
+ * add-to-cart.php. Only paid quantities are eligible; free
+ * promotion quantities are excluded.
+ */
+$selectedDiscountTypes = [];
+$discountEligibleBase = 0.00;
+
+foreach ($_SESSION['cart'] as $cartKey => $item) {
+
+    $discountType = strtolower(
+        trim((string)($item['discount_type'] ?? 'none'))
+    );
+
+    if (!in_array($discountType, ['none', 'pwd', 'senior'], true)) {
+        $discountType = 'none';
+    }
+
+    if ($discountType === 'none') {
+        continue;
+    }
+
+    $quantity = max(0, (int)($item['quantity'] ?? 0));
+    $unitPrice = max(0, (float)($item['price'] ?? 0));
+
+    $freeQuantity = (int)(
+        $promotion_free_allocations[(string)$cartKey] ?? 0
+    );
+
+    $freeQuantity = max(
+        0,
+        min($quantity, $freeQuantity)
+    );
+
+    $paidQuantity = $quantity - $freeQuantity;
+
+    if ($paidQuantity <= 0) {
+        continue;
+    }
+
+    $selectedDiscountTypes[$discountType] = true;
+
+    $discountEligibleBase +=
+        $unitPrice * $paidQuantity;
+}
+
+$discountEligibleBase = round(
+    $discountEligibleBase,
     2
 );
 
+if (count($selectedDiscountTypes) > 1) {
+    checkoutFail(
+        "Please use only one discount type per order: PWD or Senior Citizen."
+    );
+}
+
+$selectedDiscountType =
+    !empty($selectedDiscountTypes)
+        ? array_key_first($selectedDiscountTypes)
+        : 'none';
+
+/*
+ * Read discount rates from the existing settings table.
+ * Keep 20% as the safe default if the setting has not been added yet.
+ */
+$pwdDiscountRate = 20.00;
+$seniorDiscountRate = 20.00;
+
+$discountSettingsStmt = $pdo->prepare("
+    SELECT setting_key, setting_value
+    FROM settings
+    WHERE setting_key IN (
+        'pwd_discount_rate',
+        'senior_discount_rate'
+    )
+");
+
+$discountSettingsStmt->execute();
+
+foreach (
+    $discountSettingsStmt->fetchAll(PDO::FETCH_ASSOC)
+    as $setting
+) {
+
+    $value = (float)$setting['setting_value'];
+
+    if ($value < 0 || $value > 100) {
+        continue;
+    }
+
+    if ($setting['setting_key'] === 'pwd_discount_rate') {
+        $pwdDiscountRate = $value;
+    }
+
+    if ($setting['setting_key'] === 'senior_discount_rate') {
+        $seniorDiscountRate = $value;
+    }
+}
+
+$selectedDiscountRate = 0.00;
+
+if ($selectedDiscountType === 'pwd') {
+    $selectedDiscountRate = $pwdDiscountRate;
+} elseif ($selectedDiscountType === 'senior') {
+    $selectedDiscountRate = $seniorDiscountRate;
+}
+
+$customer_discount = round(
+    $discountEligibleBase *
+    ($selectedDiscountRate / 100),
+    2
+);
+
+/*
+ * Do not stack PWD/Senior with an active promotion.
+ * The larger applicable discount is used.
+ *
+ * When the promotion is selected, its own reward items remain intact.
+ * When PWD/Senior is larger, the promotion is removed for this order.
+ */
+$appliedDiscountType = 'none';
+$appliedDiscountRate = 0.00;
+$discount_amount = 0.00;
+
+if (
+    $selectedDiscountType !== 'none' &&
+    $customer_discount > $promotion_discount
+) {
+
+    $appliedDiscountType = $selectedDiscountType;
+    $appliedDiscountRate = $selectedDiscountRate;
+    $discount_amount = $customer_discount;
+
+    $promotion_discount = 0.00;
+    $promotion_reward_items = [];
+    $promotion_free_allocations = [];
+    $promotion_added_reward_value = 0.00;
+
+    $gross_subtotal = $subtotal;
+} elseif (
+    $selectedDiscountType !== 'none' &&
+    $customer_discount > 0 &&
+    $promotion_discount <= 0
+) {
+
+    $appliedDiscountType = $selectedDiscountType;
+    $appliedDiscountRate = $selectedDiscountRate;
+    $discount_amount = $customer_discount;
+}
+
+$total_amount = round(
+    max(
+        0,
+        $gross_subtotal
+            - $promotion_discount
+            - $discount_amount
+    ),
+    2
+);
 
 if ($total_amount < 0) {
 
@@ -495,18 +654,14 @@ if ($payment_method === 'gcash') {
 /*
  * Initial order status.
  *
- * GCash orders and guest cash orders stay in Pending Verification so
- * Staff/Admin can review them before the order moves to preparation.
- * Registered-customer cash orders keep the existing fast workflow.
+ * GCash orders stay in Pending until the payment proof is verified.
+ * All cash orders (registered customers and guests) enter the Order Queue,
+ * the same place walk-in orders go. Admin then moves them to Confirmed.
  */
 if ($payment_method === 'gcash') {
     $initial_status = 'pending_verification';
-} elseif ($isRegisteredCustomer) {
-    $initial_status = 'confirmed';
 } else {
-    /* Guest cash orders use the same Pending Verification queue.
-       Staff/Admin must confirm them before preparation. */
-    $initial_status = 'pending_verification';
+    $initial_status = 'order_queue';
 }
 
 
@@ -540,11 +695,17 @@ try {
             payment_method,
             payment_screenshot,
             subtotal,
+            discount_type,
+            discount_rate,
+            discount_amount,
             total_amount,
             status
         )
         VALUES
         (
+            ?,
+            ?,
+            ?,
             ?,
             ?,
             ?,
@@ -576,6 +737,9 @@ try {
         $payment_method,
         $payment_screenshot,
         $gross_subtotal,
+        $appliedDiscountType,
+        $appliedDiscountRate,
+        $discount_amount,
         $total_amount,
         $initial_status
     ]);
@@ -716,10 +880,16 @@ try {
             subtotal,
             size,
             addons,
-            sugar_level
+            sugar_level,
+            discount_type,
+            discount_rate,
+            discount_amount
         )
         VALUES
         (
+            ?,
+            ?,
+            ?,
             ?,
             ?,
             ?,
@@ -793,6 +963,31 @@ try {
                 2
             );
 
+        $item_discount_type = strtolower(
+            trim((string)($item['discount_type'] ?? 'none'))
+        );
+
+        if (!in_array($item_discount_type, ['none', 'pwd', 'senior'], true)) {
+            $item_discount_type = 'none';
+        }
+
+        $item_discount_rate = 0.00;
+        $item_discount_amount = 0.00;
+
+        if (
+            $appliedDiscountType !== 'none' &&
+            $item_discount_type === $appliedDiscountType &&
+            $item_subtotal > 0
+        ) {
+            $item_discount_rate = $appliedDiscountRate;
+
+            $item_discount_amount = round(
+                $item_subtotal *
+                ($item_discount_rate / 100),
+                2
+            );
+        }
+
 
         /*
          * ================================================================
@@ -842,7 +1037,10 @@ try {
             $item_subtotal,
             $item_size !== '' ? $item_size : null,
             $item_addons,
-            $item_sugar_level !== '' ? $item_sugar_level : null
+            $item_sugar_level !== '' ? $item_sugar_level : null,
+            $item_discount_type,
+            $item_discount_rate,
+            $item_discount_amount
         ]);
     }
 
@@ -936,7 +1134,10 @@ try {
             $rewardSubtotal,
             $rewardSize !== '' ? $rewardSize : null,
             $rewardAddons,
-            $rewardSugar !== '' ? $rewardSugar : null
+            $rewardSugar !== '' ? $rewardSugar : null,
+            'none',
+            0.00,
+            0.00
         ]);
     }
 

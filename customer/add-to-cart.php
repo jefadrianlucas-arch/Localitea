@@ -42,6 +42,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         (string)($_POST['sugar_level'] ?? '')
     );
 
+    $discountType = strtolower(
+    trim((string)($_POST['discount_type'] ?? 'none'))
+);
+
+if (!in_array($discountType, ['none', 'pwd', 'senior'], true)) {
+    $discountType = 'none';
+}
+
     $quantity = isset($_POST['quantity'])
         ? (int)$_POST['quantity']
         : 1;
@@ -478,12 +486,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
      */
 
     $cartKey = md5(
-        $productId .
-        $size .
-        $sugarLevel .
-        implode(',', $validAddons) .
-        $validPromotionId .
-        $validPromotionRole
+    $productId .
+    $size .
+    $sugarLevel .
+    $discountType .
+    implode(',', $validAddons) .
+    $validPromotionId .
+    $validPromotionRole
     );
 
 
@@ -506,8 +515,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if (isset($_SESSION['cart'][$cartKey])) {
 
-        $_SESSION['cart'][$cartKey]['quantity'] +=
-            $quantity;
+    $_SESSION['cart'][$cartKey]['quantity'] += $quantity;
+
+    $_SESSION['cart'][$cartKey]['discount_type'] = $discountType;
+
+
 
 
         /*
@@ -531,31 +543,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } else {
 
         $_SESSION['cart'][$cartKey] = [
-
-            'product_id' =>
-                $productId,
-
-            'name' =>
-                $product['name'],
-
-            'image' =>
-                $product['image'],
-
-            'size' =>
-                $size,
-
-            'addons' =>
-                $validAddons,
-
-            'sugar_level' =>
-                $sugarLevel,
-
-            'price' =>
-                $unitPrice,
-
-            'quantity' =>
-                $quantity
-        ];
+    'product_id' => $productId,
+    'name' => $product['name'],
+    'image' => $product['image'],
+    'size' => $size,
+    'addons' => $validAddons,
+    'sugar_level' => $sugarLevel,
+    'discount_type' => $discountType,
+    'price' => $unitPrice,
+    'quantity' => $quantity
+];
 
 
         /*
@@ -704,11 +701,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     /*
      * =========================================================
-     * GO TO CART
+     * RETURN TO MENU AFTER ADDING TO CART
      * =========================================================
+     *
+     * The item has already been saved in the session cart above.
+     * Keep the customer on the menu so they can continue selecting
+     * additional products before opening the cart or checking out.
+     *
+     * For AJAX requests, return a success message that the
+     * customer-side AJAX handler can display as an alert/toast.
      */
 
-    customerRedirect("cart.php");
+    $_SESSION['added_to_cart_toast'] = true;
+
+    if ($isAjaxRequest) {
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode([
+            'success' => true,
+            'message' => 'Added to cart.',
+            'redirect' => 'menu.php'
+        ]);
+        exit;
+    }
+
+    customerRedirect("menu.php");
 
 } else {
 

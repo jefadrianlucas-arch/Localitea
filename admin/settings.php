@@ -3,7 +3,6 @@
 if (session_status() !== PHP_SESSION_ACTIVE) {
     session_start();
 }
-
 require_once '../includes/db.php';
 require_once '../includes/mailer.php';
 
@@ -15,11 +14,6 @@ if (
     exit;
 }
 
-/*
- * Admin ID is used to protect the currently logged-in administrator
- * from being archived or having their administrator role removed
- * from User Account Settings.
- */
 $loggedInAdminId = (int)(
     $_SESSION['admin_id']
     ?? $_SESSION['user_id']
@@ -246,8 +240,32 @@ if (
                 time() + (30 * 60)
             );
 
+            /*
+             * Build the verification URL dynamically from the current
+             * request instead of hardcoding a host/port, so it keeps
+             * working whether the app is served via XAMPP on port 80,
+             * `php -S localhost:PORT`, or anything else.
+             */
+            $protocol = (
+                !empty($_SERVER['HTTPS']) &&
+                $_SERVER['HTTPS'] !== 'off'
+            ) ? 'https' : 'http';
+
+            $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+
+            // e.g. "/admin/settings.php" or
+            // "/Localitea_Fixed Best Sellers/admin/settings.php"
+            $scriptDir = dirname(dirname($_SERVER['SCRIPT_NAME']));
+
+            // On Windows, dirname() can return "\\" instead of "/"
+            // once it collapses down to the root. Normalize before
+            // it goes into a URL.
+            $scriptDir = str_replace('\\', '/', $scriptDir);
+
+            $baseUrl = $protocol . '://' . $host . rtrim($scriptDir, '/');
+
             $verificationLink =
-                'http://localhost/Localitea_Fixed%20Working%20Staff%20Orders%20No%20Admin%20orders%20yet/auth/verify-staff-admin.php?token=' .
+                $baseUrl . '/auth/verify-staff-admin.php?token=' .
                 urlencode($verificationToken);
 
             $pdo->beginTransaction();
@@ -352,8 +370,32 @@ if (
                 time() + (30 * 60)
             );
 
+            /*
+             * Build the verification URL dynamically from the current
+             * request instead of hardcoding a host/port, so it keeps
+             * working whether the app is served via XAMPP on port 80,
+             * `php -S localhost:PORT`, or anything else.
+             */
+            $protocol = (
+                !empty($_SERVER['HTTPS']) &&
+                $_SERVER['HTTPS'] !== 'off'
+            ) ? 'https' : 'http';
+
+            $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+
+            // e.g. "/admin/settings.php" or
+            // "/Localitea_Fixed Best Sellers/admin/settings.php"
+            $scriptDir = dirname(dirname($_SERVER['SCRIPT_NAME']));
+
+            // On Windows, dirname() can return "\\" instead of "/"
+            // once it collapses down to the root. Normalize before
+            // it goes into a URL.
+            $scriptDir = str_replace('\\', '/', $scriptDir);
+
+            $baseUrl = $protocol . '://' . $host . rtrim($scriptDir, '/');
+
             $verificationLink =
-                'http://localhost/Localitea_Fixed%20Working%20Staff%20Orders%20No%20Admin%20orders%20yet/auth/verify-staff-admin.php?token=' .
+                $baseUrl . '/auth/verify-staff-admin.php?token=' .
                 urlencode($verificationToken);
 
             $pdo->beginTransaction();
@@ -4079,7 +4121,7 @@ body {
     margin: 0 0 8px;
     color: #2C221E;
     font-size: 1.08rem;
-    font-weight: 800;
+    font-weight: 700;
 }
 
 .promotion-delete-message {
@@ -4093,7 +4135,7 @@ body {
     display: block;
     margin-top: 6px;
     color: #4A3525;
-    font-weight: 800;
+    font-weight: 700;
     overflow-wrap: anywhere;
 }
 
@@ -4111,7 +4153,7 @@ body {
     padding: 9px 18px;
     border-radius: 9px;
     font-size: .8rem;
-    font-weight: 800;
+    font-weight: 700;
 }
 
 .promotion-delete-cancel {
@@ -4415,7 +4457,7 @@ body {
 .size-option-name {
     color: #3B2C24;
     font-size: .92rem;
-    font-weight: 800;
+    font-weight: 700;
 }
 
 .size-option-note {
@@ -4486,7 +4528,7 @@ body {
 .promotion-management-heading .panel-title {
     font-size: 1.18rem;
     color: #2C221E;
-    font-weight: 800;
+    font-weight: 700;
 }
 
 .promotion-management-subtitle {
@@ -4549,7 +4591,7 @@ body {
     color: #4A3525;
     border: 1px solid #6F4E37;
     font-size: .66rem;
-    font-weight: 800;
+    font-weight: 700;
     box-shadow: 0 2px 8px rgba(44,34,30,.12);
 }
 
@@ -4573,7 +4615,7 @@ body {
     color: #2C221E;
     font-size: 1rem;
     line-height: 1.3;
-    font-weight: 850;
+    font-weight: 700;
 }
 
 .promotion-status {
@@ -4581,7 +4623,7 @@ body {
     padding: 6px 10px;
     border-radius: 999px;
     font-size: .78rem;
-    font-weight: 850;
+    font-weight: 700;
     line-height: 1.15;
     border: 1px solid currentColor;
 }
@@ -4608,7 +4650,7 @@ body {
     background: #FBF8F4;
     color: #4A3525;
     font-size: .76rem;
-    font-weight: 750;
+    font-weight: 700;
     line-height: 1.35;
 }
 
@@ -4641,7 +4683,7 @@ body {
     border-radius: 9px;
     padding: 8px 14px;
     font-size: .76rem;
-    font-weight: 800;
+    font-weight: 700;
     line-height: 1.1;
     border-width: 2px;
     display: inline-flex;
@@ -4745,7 +4787,7 @@ body {
 
 .promotion-empty-title {
     color: #4A3525;
-    font-weight: 850;
+    font-weight: 700;
     font-size: 1rem;
 }
 
@@ -4799,7 +4841,7 @@ body {
 .buy-get-section-label {
     color: #4A3525;
     font-size: .78rem;
-    font-weight: 850;
+    font-weight: 700;
     letter-spacing: .4px;
 }
 
@@ -4817,7 +4859,7 @@ body {
     background: #F5ECE2;
     color: #4A3525;
     font-size: .68rem;
-    font-weight: 800;
+    font-weight: 700;
 }
 
 .buy-get-fields {
@@ -4840,7 +4882,7 @@ body {
 .promotion-rule-panel-title {
     color: #4A3525;
     font-size: .78rem;
-    font-weight: 850;
+    font-weight: 700;
     margin-bottom: 8px;
 }
 
@@ -4864,7 +4906,7 @@ body {
 .bundle-selected-summary-title {
     color: #4A3525;
     font-size: .72rem;
-    font-weight: 850;
+    font-weight: 700;
     margin-bottom: 5px;
 }
 
@@ -4975,7 +5017,7 @@ body {
     padding: 8px 16px;
     border-radius: 999px;
     font-size: .78rem;
-    font-weight: 800;
+    font-weight: 700;
     border-width: 2px;
     white-space: nowrap;
 }
@@ -5089,7 +5131,7 @@ body {
 .user-account-toolbar-actions .btn {
     border-radius: 999px;
     font-size: .72rem;
-    font-weight: 800;
+    font-weight: 700;
 }
 
 .user-account-actions {
@@ -5114,7 +5156,7 @@ body {
     padding: 7px 14px;
     border-radius: 999px;
     font-size: .76rem;
-    font-weight: 800;
+    font-weight: 700;
     letter-spacing: .01em;
     white-space: nowrap;
     border-width: 1.5px;
@@ -5164,7 +5206,7 @@ body {
     padding: 7px 16px;
     border-radius: 999px;
     font-size: .77rem;
-    font-weight: 800;
+    font-weight: 700;
     letter-spacing: .01em;
     border-width: 2px;
     box-shadow: none;
@@ -5222,7 +5264,7 @@ body {
     text-transform: uppercase;
     letter-spacing: .04em;
     font-size: .68rem;
-    font-weight: 800;
+    font-weight: 700;
     text-align: left;
 }
 
@@ -5264,12 +5306,12 @@ body {
     align-items: center;
     justify-content: center;
     font-size: .72rem;
-    font-weight: 900;
+    font-weight: 700;
 }
 
 .user-account-name {
     color: #2C221E;
-    font-weight: 800;
+    font-weight: 700;
 }
 
 .user-account-you {
@@ -5299,7 +5341,7 @@ body {
     padding: 6px 9px;
     border-radius: 50px;
     font-size: .68rem;
-    font-weight: 800;
+    font-weight: 700;
 }
 
 .user-account-role.role-customer {
@@ -5362,7 +5404,7 @@ body {
 
 .user-account-empty-title {
     color: #4A3525;
-    font-weight: 800;
+    font-weight: 700;
     margin-bottom: 5px;
 }
 
@@ -5599,7 +5641,7 @@ body {
     border-bottom: 1px solid #E7DED5;
     color: #8A7D72;
     font-size: .68rem;
-    font-weight: 800;
+    font-weight: 700;
     text-transform: uppercase;
     letter-spacing: .07em;
     white-space: nowrap;
@@ -5673,7 +5715,7 @@ body {
     border-radius: 9px;
     padding: 6px 10px;
     font-size: .68rem;
-    font-weight: 800;
+    font-weight: 700;
     transition: .15s ease;
 }
 
@@ -5698,7 +5740,7 @@ body {
     padding: 6px 9px;
     border-radius: 999px;
     font-size: .62rem;
-    font-weight: 800;
+    font-weight: 700;
     white-space: nowrap;
 }
 
@@ -5942,7 +5984,7 @@ body {
     justify-content: center;
     border-radius: 999px;
     font-size: .74rem;
-    font-weight: 800;
+    font-weight: 700;
     line-height: 1;
     text-decoration: none;
     background: #FFFFFF;
@@ -5994,7 +6036,7 @@ body {
 }
 
 .product-management-panel .modal-title {
-    font-weight: 800;
+    font-weight: 700;
 }
 
 .bestseller-badge {
@@ -6007,7 +6049,7 @@ body {
     border: 1px solid #D6AA45;
     color: #7A5600;
     font-size: .66rem;
-    font-weight: 800;
+    font-weight: 700;
     line-height: 1;
 }
 
@@ -6524,6 +6566,41 @@ body {
 }
 
 </style>
+
+<!-- =====================================================
+     BOOTSTRAP JS SAFETY NET
+     3-dot dropdown, Add/Edit Product, Create Promotion, Add Account
+     and Edit/Delete modals all depend on Bootstrap's JS bundle.
+     Loads it only if the page does not already have it.
+====================================================== -->
+<script>
+(function () {
+    var alreadyLoaded =
+        window.bootstrap ||
+        document.querySelector('script[src*="bootstrap"][src*=".js"]');
+
+    if (!alreadyLoaded) {
+        document.write(
+            '<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"><\/script>'
+        );
+    }
+})();
+
+/* Keep the 3-dot dropdown from being clipped by the table wrapper */
+document.addEventListener('DOMContentLoaded', function () {
+    if (!window.bootstrap || !bootstrap.Dropdown) return;
+
+    document
+        .querySelectorAll('.product-table [data-bs-toggle="dropdown"]')
+        .forEach(function (btn) {
+            bootstrap.Dropdown.getOrCreateInstance(btn, {
+                popperConfig: function (defaultConfig) {
+                    return Object.assign({}, defaultConfig, { strategy: 'fixed' });
+                }
+            });
+        });
+});
+</script>
 
 
 <div class="settings-page">
@@ -10805,5 +10882,3 @@ document.addEventListener('DOMContentLoaded', function () {
     filterBundleProducts();
 });
 </script>
-
-<?php require_once '../includes/footer.php'; ?>

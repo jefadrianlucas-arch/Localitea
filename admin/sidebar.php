@@ -1,8 +1,25 @@
 <?php
 $sidebarUnreadNotifications = 0;
 
+$sidebarNotificationId = max(0, (int)($_GET['notification_id'] ?? 0));
+
 try {
     if (isset($pdo)) {
+
+        if ($sidebarNotificationId > 0) {
+            $markSidebarNotificationStmt = $pdo->prepare("
+                UPDATE notifications
+                SET is_read = 1
+                WHERE id = ?
+                  AND recipient_role = 'admin'
+                  AND is_read = 0
+            ");
+
+            $markSidebarNotificationStmt->execute([
+                $sidebarNotificationId
+            ]);
+        }
+
         $sidebarNotificationStmt = $pdo->prepare("
             SELECT COUNT(*)
             FROM notifications
@@ -15,6 +32,31 @@ try {
 } catch (Throwable $e) {
     $sidebarUnreadNotifications = 0;
 }
+
+$adminLogoPath = $adminLogoPath ?? null;
+$adminLogoUrl  = null;
+
+if ($adminLogoPath === null) {
+    $logoDirs = ['../assets/images', '../assets/img', '../assets/logo', '../assets/uploads', '../assets'];
+    $logoExts = ['png', 'svg', 'webp', 'jpg', 'jpeg'];
+
+    foreach ($logoDirs as $logoDir) {
+        foreach ($logoExts as $logoExt) {
+            $candidate = $logoDir . '/logo.' . $logoExt;
+            if (is_file(__DIR__ . '/' . $candidate)) {
+                $adminLogoPath = $candidate;
+                break 2;
+            }
+        }
+    }
+}
+
+if ($adminLogoPath !== null && is_file(__DIR__ . '/' . $adminLogoPath)) {
+    $adminLogoUrl = $adminLogoPath . '?v=' . (int)@filemtime(__DIR__ . '/' . $adminLogoPath);
+}
+
+
+$adminShowBrandText = $adminShowBrandText ?? ($adminLogoUrl === null);
 ?>
 
 <style>
@@ -75,6 +117,20 @@ try {
 .sidebar-brand .logo-circle i {
     color: #E6DEC9;
     font-size: 1.5rem;
+}
+
+.sidebar-brand .sidebar-logo-img {
+    display: block;
+
+    width: auto;
+    height: auto;
+
+    max-width: 170px;
+    max-height: 90px;
+
+    object-fit: contain;
+
+    margin: 0 auto 4px;
 }
 
 .sidebar-brand span {
@@ -374,10 +430,21 @@ try {
 <div class="d-flex flex-column sidebar-admin" id="adminSidebar" aria-label="Admin navigation">
 
     <div class="sidebar-brand">
-        <div class="logo-circle">
-            <i class="bi bi-cup-hot-fill"></i>
-        </div>
-        <span>LOCAL</span>
+        <?php if ($adminLogoUrl !== null): ?>
+            <img
+                src="<?= htmlspecialchars($adminLogoUrl, ENT_QUOTES, 'UTF-8') ?>"
+                alt="Logo"
+                class="sidebar-logo-img"
+            >
+        <?php else: ?>
+            <div class="logo-circle">
+                <i class="bi bi-cup-hot-fill"></i>
+            </div>
+        <?php endif; ?>
+
+        <?php if ($adminShowBrandText): ?>
+            <span>LOCAL</span>
+        <?php endif; ?>
     </div>
 
     <ul class="nav flex-column sidebar-nav flex-grow-1">
@@ -393,6 +460,17 @@ try {
             </a>
         </li>
 
+        <!-- WALK-IN ORDER -->
+        <li class="nav-item">
+            <a
+                href="walk-in-order.php"
+                class="nav-link <?= basename($_SERVER['PHP_SELF']) === 'walk-in-order.php' ? 'active' : '' ?>"
+            >
+                <i class="bi bi-cart-plus-fill"></i>
+                Walk-in Order
+            </a>
+        </li>
+
         <!-- ORDERS -->
         <li class="nav-item">
             <a
@@ -400,7 +478,7 @@ try {
                 class="nav-link <?= basename($_SERVER['PHP_SELF']) === 'orders.php' ? 'active' : '' ?>"
             >
                 <i class="bi bi-bag-check-fill"></i>
-                Order Queue
+                Order
             </a>
         </li>
 
@@ -1006,7 +1084,6 @@ try {
         );
 
     }
-
 
     if (
         document.readyState === 'loading'

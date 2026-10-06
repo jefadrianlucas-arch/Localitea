@@ -22,6 +22,13 @@ $products = $stmt->fetchAll();
 
 $isAjaxRequest = isset($_GET['ajax']) && $_GET['ajax'] === '1';
 
+$showAddedToCartToast = false;
+
+if (!$isAjaxRequest && !empty($_SESSION['added_to_cart_toast'])) {
+    $showAddedToCartToast = true;
+    unset($_SESSION['added_to_cart_toast']);
+}
+
 if ($isAjaxRequest) {
     ?>
     <div class="menu-container" id="menuContainer">
@@ -103,27 +110,157 @@ require_once '../includes/header.php';
 require_once '../includes/navbar.php';
 ?>
 
+<?php if ($showAddedToCartToast): ?>
+<div class="localitea-toast-wrap" id="addedToCartToast" aria-live="polite" aria-atomic="true">
+    <div class="localitea-toast" role="status">
+        <span class="localitea-toast-icon" aria-hidden="true">
+            <i class="bi bi-check2-all"></i>
+        </span>
+        <span class="localitea-toast-message">Added to cart.</span>
+        <button type="button" class="localitea-toast-close" id="closeAddedToCartToast" aria-label="Close notification">
+            <i class="bi bi-x-lg"></i>
+        </button>
+        <span class="localitea-toast-progress" aria-hidden="true"></span>
+    </div>
+</div>
+<?php endif; ?>
+
 <style>
+
+/* =========================================================
+   LOCALITEA ADD-TO-CART TOAST
+   Shown on menu.php after a successful add-to-cart redirect.
+========================================================= */
+.localitea-toast-wrap {
+    position: fixed;
+    top: 88px;
+    right: 24px;
+    z-index: 2000;
+    width: min(420px, calc(100vw - 32px));
+    pointer-events: none;
+}
+
+.localitea-toast {
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 13px 14px;
+    background: #ffffff;
+    border: 2px solid #6F4E37;
+    border-left: 6px solid #4A8B5A;
+    border-radius: 12px;
+    box-shadow: 0 10px 28px rgba(44,34,30,.18);
+    color: #2C221E;
+    pointer-events: auto;
+    overflow: hidden;
+    animation: localiteaToastIn .22s ease-out;
+}
+
+.localitea-toast-icon {
+    flex: 0 0 30px;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: #EAF6EE;
+    color: #2F6E3E;
+    font-size: 15px;
+    margin-top: 1px;
+}
+
+.localitea-toast-message {
+    flex: 1;
+    padding-top: 3px;
+    font-size: .9rem;
+    line-height: 1.45;
+    font-weight: 700;
+}
+
+.localitea-toast-close {
+    flex: 0 0 auto;
+    border: 0;
+    background: transparent;
+    color: #6F4E37;
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+
+.localitea-toast-close:hover {
+    background: #F0E6D6;
+    color: #2C221E;
+}
+
+.localitea-toast-progress {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    height: 3px;
+    width: 100%;
+    background: #4A8B5A;
+    transform-origin: left center;
+    animation: localiteaToastProgress 3.5s linear forwards;
+}
+
+.localitea-toast.is-closing {
+    animation: localiteaToastOut .18s ease-in forwards;
+}
+
+@keyframes localiteaToastIn {
+    from { opacity: 0; transform: translateY(-8px) translateX(8px); }
+    to { opacity: 1; transform: translateY(0) translateX(0); }
+}
+
+@keyframes localiteaToastOut {
+    from { opacity: 1; transform: translateY(0) translateX(0); }
+    to { opacity: 0; transform: translateY(-6px) translateX(8px); }
+}
+
+@keyframes localiteaToastProgress {
+    from { transform: scaleX(1); }
+    to { transform: scaleX(0); }
+}
+
+@media (max-width: 576px) {
+    .localitea-toast-wrap {
+        top: 78px;
+        right: 16px;
+        width: calc(100vw - 32px);
+    }
+}
+
 body {
     background: #f8f9fa;
-    overflow-x: hidden;
+    overflow: hidden;
 }
 
 /* Binigyan natin ng margin sa taas at ibaba para may breathing room mula navbar hanggang footer */
 .menu-layout-wrapper {
-    min-height: calc(100vh - 84px);
+    height: calc(100vh - 84px);
     margin-top: 18px;
     margin-bottom: 18px;
-    overflow: visible;
+    overflow: hidden;
+}
+
+.menu-layout-wrapper > .row {
+    height: 100%;
 }
 
 .menu-sidebar-column {
-    min-height: calc(100vh - 84px);
+    height: 100%;
+    overflow: hidden;
 }
 
 .sidebar-card {
     position: sticky;
-    top: 102px;
+    top: 0;
     align-self: flex-start;
     height: auto;
     max-height: calc(100vh - 120px);
@@ -170,9 +307,10 @@ body {
     background: #fff;
     border-radius: 20px;
     padding: 30px;
+    height: 100%;
+    overflow-y: auto;
+    overflow-x: hidden;
     box-shadow: 0 5px 20px rgba(0,0,0,.05);
-    min-height: 100%;
-    overflow: visible;
 }
 
 .menu-title {
@@ -204,7 +342,7 @@ body {
 .product-card img {
     height: 150px;
     width: 100%;
-    object-fit: cover;
+    object-fit: contain;
     display: block;
 }
 
@@ -290,6 +428,9 @@ body {
 
 #menuProductsColumn {
     position: relative;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
 }
 
 .sidebar-link.is-loading {
@@ -375,6 +516,7 @@ body {
     .sidebar-link {
         flex: 0 0 auto;
         margin: 0;
+        width: auto;
         padding: 9px 16px;
         border: 1px solid #B8A08A;
         border-radius: 10px;
@@ -453,6 +595,7 @@ body {
                 $categories=[
                     'Classic Milktea',
                     'Premium Milktea',
+                    'Cold Brew and Premium Iced Coffee',
                     'Fruit Tea',
                     'Frappe',
                     'Sip and Snack',
@@ -548,6 +691,50 @@ body {
 </div>
 
 \n<script>
+(function () {
+    const toast = document.getElementById('addedToCartToast');
+    const closeButton = document.getElementById('closeAddedToCartToast');
+
+    if (!toast) {
+        return;
+    }
+
+    let closed = false;
+    let closeTimer = null;
+
+
+    function closeToast() {
+        if (closed) {
+            return;
+        }
+
+        closed = true;
+        if (closeTimer) {
+            clearTimeout(closeTimer);
+        }
+
+        const card = toast.querySelector('.localitea-toast');
+        if (card) {
+            card.classList.add('is-closing');
+            setTimeout(function () {
+                if (toast && toast.parentNode) {
+                    toast.parentNode.removeChild(toast);
+                }
+            }, 190);
+        } else if (toast && toast.parentNode) {
+            toast.parentNode.removeChild(toast);
+        }
+    }
+
+    if (closeButton) {
+        closeButton.addEventListener('click', closeToast);
+    }
+
+    closeTimer = setTimeout(closeToast, 3500);
+})();
+</script>
+
+<script>
 (function () {
     const categoryLinks = document.querySelectorAll('.sidebar-link');
     const productsColumn = document.getElementById('menuProductsColumn');

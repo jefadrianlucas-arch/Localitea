@@ -97,12 +97,14 @@ require_once '../includes/navbar.php';
 
 <style>
 /* =========================================================
-   LOCALITEA LOGIN PAGE
-   Responsive across phones, tablets, laptops and desktop
+   LOCALITEA LOGIN PAGE — SPLIT CARD LAYOUT (mirrored)
+   Left: login form   |   Right: brand panel (desktop only)
+   On tablet / phone the brand panel is hidden and the form
+   becomes a single centered card.
 ========================================================= */
 
 body {
-    background: #FBF8F4;
+    background: #FFFFFF;
     color: #2C221E;
     overflow-x: hidden;
 }
@@ -113,52 +115,66 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 32px 16px 40px;
+    padding: 40px 20px 48px;
     box-sizing: border-box;
+    background: #FFFFFF;
 }
 
 .login-card {
     width: 100%;
-    max-width: 420px;
+    max-width: 920px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
     background: #FFFFFF;
-    border: 2px solid #6F4E37;
+    border: 1px solid #E4D7CB;
     border-radius: 18px;
-    box-shadow: 0 8px 24px rgba(74, 53, 37, 0.10);
-    padding: 30px;
-    box-sizing: border-box;
+    box-shadow: 0 14px 40px rgba(74, 53, 37, 0.16);
+    overflow: hidden;
 }
 
-/* Logo */
-.login-logo {
-    width: 64px;
-    height: 64px;
-    display: block;
-    margin: 0 auto 12px;
+/* ---------- Left form panel ---------- */
+.login-form-panel {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 44px 48px;
+    box-sizing: border-box;
+    background: #FFFFFF;
+}
+
+/* Small logo — only visible when the brand panel is hidden */
+.login-mobile-logo {
+    display: none;
+    width: 56px;
+    height: 56px;
     object-fit: contain;
     border-radius: 50%;
-    border: 1px solid #D8C6B8;
-    box-shadow: 0 3px 10px rgba(74, 53, 37, 0.10);
+    background: #FFFFFF;
+    border: 2px solid #E4D7CB;
+    box-shadow: 0 3px 10px rgba(74, 53, 37, 0.14);
+    margin: 0 auto 14px;
 }
 
-/* Heading */
 .login-title {
     color: #2C221E;
-    font-size: 1.25rem;
+    font-size: 1.7rem;
     font-weight: 800;
     letter-spacing: 0.2px;
-    margin-bottom: 4px;
+    text-align: center;
+    margin: 0 0 6px;
 }
 
 .login-subtitle {
     color: #756960;
     font-size: 0.82rem;
-    margin-bottom: 0;
+    text-align: center;
+    margin: 0 0 24px;
 }
 
 /* Error */
 .login-alert {
     border: 1px solid #B85C5C;
-    border-radius: 10px;
+    border-radius: 8px;
     background: #FFF3F3;
     color: #8B3030;
     font-size: 0.78rem;
@@ -167,27 +183,25 @@ body {
     margin-bottom: 18px;
 }
 
-/* Labels */
 .login-form-label {
     display: block;
     color: #4A3525;
-    font-size: 0.78rem;
+    font-size: 0.74rem;
     font-weight: 700;
-    margin-bottom: 6px;
+    margin-bottom: 5px;
 }
 
-/* Inputs */
 .login-input {
     width: 100%;
-    min-height: 43px;
-    border: 1.5px solid #B8A08A;
-    border-radius: 9px;
+    min-height: 40px;
+    border: 1.5px solid #E4D7CB;
+    border-radius: 7px;
     background: #FFFFFF;
     color: #2C221E;
-    padding: 9px 12px;
-    font-size: 0.84rem;
-    box-shadow: none;
-    transition: border-color .2s ease, box-shadow .2s ease, background-color .2s ease;
+    padding: 8px 12px;
+    font-size: 0.82rem;
+    box-shadow: 0 1px 2px rgba(74, 53, 37, 0.05);
+    transition: border-color .2s ease, box-shadow .2s ease;
     box-sizing: border-box;
 }
 
@@ -196,12 +210,11 @@ body {
 }
 
 .login-input:hover {
-    border-color: #8B6F5A;
+    border-color: #B8A08A;
 }
 
 .login-input:focus {
     border-color: #6F4E37;
-    background: #FFFFFF;
     box-shadow: 0 0 0 3px rgba(111, 78, 55, 0.13);
     outline: none;
 }
@@ -212,32 +225,31 @@ body {
 }
 
 .password-field .login-input {
-    padding-right: 44px;
+    padding-right: 42px;
 }
 
 .password-toggle {
     position: absolute;
     top: 50%;
-    right: 10px;
+    right: 6px;
     transform: translateY(-50%);
     width: 32px;
     height: 32px;
     padding: 0;
     border: 0;
     background: transparent;
-    color: #756960;
+    color: #6F4E37;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    border-radius: 7px;
+    border-radius: 50%;
     cursor: pointer;
     z-index: 2;
-    transition: color .2s ease, background-color .2s ease;
 }
 
 .password-toggle:hover {
-    color: #6F4E37;
-    background: #F5F0EB;
+    color: #4A3525;
+    background: #F7F1E8;
 }
 
 .password-toggle:focus-visible {
@@ -246,26 +258,14 @@ body {
 }
 
 .password-toggle i {
-    font-size: 1rem;
+    font-size: 0.92rem;
     line-height: 1;
-}
-
-@media (max-width: 360px) {
-    .password-field .login-input {
-        padding-right: 41px;
-    }
-
-    .password-toggle {
-        right: 8px;
-        width: 30px;
-        height: 30px;
-    }
 }
 
 /* Forgot password */
 .login-forgot {
     color: #756960;
-    font-size: 0.74rem;
+    font-size: 0.72rem;
     font-weight: 600;
     text-decoration: none;
 }
@@ -277,54 +277,64 @@ body {
 
 /* Buttons */
 .btn-localitea {
+    display: flex;
+    align-items: center;
+    justify-content: center;
     width: 100%;
-    min-height: 43px;
-    border-radius: 50px;
-    padding: 9px 16px;
-    font-size: 0.84rem;
+    min-height: 40px;
+    border-radius: 7px;
+    padding: 8px 16px;
+    font-size: 0.82rem;
     font-weight: 700;
     letter-spacing: 0.2px;
-    transition: transform .2s ease, box-shadow .2s ease, background-color .2s ease;
+    text-decoration: none;
+    box-sizing: border-box;
+    transition: background-color .2s ease, border-color .2s ease, box-shadow .2s ease;
 }
 
 .btn-localitea-primary {
     background: #6F4E37;
     border: 1.5px solid #6F4E37;
     color: #FFFFFF;
-    box-shadow: 0 3px 8px rgba(111, 78, 55, 0.18);
 }
 
-.btn-localitea-primary:hover {
+.btn-localitea-primary:hover,
+.btn-localitea-primary:focus {
     background: #4A3525;
     border-color: #4A3525;
     color: #FFFFFF;
-    transform: translateY(-1px);
-    box-shadow: 0 5px 12px rgba(74, 53, 37, 0.22);
+}
+
+.btn-localitea-primary:focus {
+    box-shadow: 0 0 0 3px rgba(111, 78, 55, 0.16);
 }
 
 .btn-localitea-outline {
     background: #FFFFFF;
-    border: 1.5px solid #6F4E37;
-    color: #6F4E37;
+    border: 1.5px solid #E4D7CB;
+    color: #2C221E;
+    box-shadow: 0 2px 6px rgba(74, 53, 37, 0.10);
 }
 
 .btn-localitea-outline:hover {
-    background: #6F4E37;
+    background: #FBF8F4;
     border-color: #6F4E37;
-    color: #FFFFFF;
-    transform: translateY(-1px);
-    box-shadow: 0 5px 12px rgba(74, 53, 37, 0.16);
+    color: #4A3525;
+}
+
+.btn-localitea-outline:focus-visible {
+    outline: 2px solid #6F4E37;
+    outline-offset: 2px;
 }
 
 /* Divider */
 .login-divider {
     display: flex;
     align-items: center;
-    gap: 10px;
-    margin: 18px 0;
-    color: #9A8C83;
-    font-size: 0.68rem;
-    font-weight: 600;
+    gap: 12px;
+    margin: 14px 0;
+    color: #A89D95;
+    font-size: 0.7rem;
 }
 
 .login-divider::before,
@@ -332,13 +342,14 @@ body {
     content: "";
     flex: 1;
     height: 1px;
-    background: #D8C6B8;
+    background: #E4D7CB;
 }
 
 /* Signup text */
 .login-signup {
     color: #756960;
     font-size: 0.78rem;
+    text-align: center;
 }
 
 .login-signup a {
@@ -352,59 +363,116 @@ body {
     text-decoration: underline;
 }
 
+/* ---------- Right brand panel (medium brown, not too dark) ---------- */
+.login-visual {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 48px 40px;
+    color: #FFFFFF;
+    overflow: hidden;
+    background:
+        radial-gradient(ellipse 80% 55% at 82% 12%, rgba(232, 204, 172, 0.60), transparent 62%),
+        radial-gradient(ellipse 70% 50% at 12% 42%, rgba(160, 118, 84, 0.90), transparent 64%),
+        radial-gradient(ellipse 90% 60% at 70% 95%, rgba(196, 160, 126, 0.50), transparent 62%),
+        linear-gradient(200deg, #A57B5A, #86603F);
+}
+
+/* Fine fibre-like strokes for texture */
+.login-visual::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+        repeating-conic-gradient(
+            from 100deg at 92% 105%,
+            rgba(255, 255, 255, 0.07) 0deg 1.5deg,
+            transparent 1.5deg 5deg
+        );
+    pointer-events: none;
+}
+
+.login-visual > * {
+    position: relative;
+    z-index: 1;
+}
+
+.login-logo {
+    position: absolute !important;
+    top: 28px;
+    right: 32px;
+    width: 52px;
+    height: 52px;
+    object-fit: contain;
+    border-radius: 50%;
+    background: #FFFFFF;
+    border: 2px solid rgba(255, 255, 255, 0.85);
+    box-shadow: 0 3px 10px rgba(74, 53, 37, 0.25);
+}
+
+.login-visual-title {
+    margin: 0 0 8px;
+    font-size: 2rem;
+    font-weight: 800;
+    line-height: 1.15;
+    letter-spacing: 0.2px;
+    text-shadow: 0 1px 6px rgba(74, 53, 37, 0.25);
+}
+
+.login-visual-text {
+    margin: 0;
+    max-width: 260px;
+    font-size: 1.02rem;
+    line-height: 1.45;
+    color: rgba(255, 255, 255, 0.95);
+    text-shadow: 0 1px 4px rgba(74, 53, 37, 0.22);
+}
+
 /* =========================================================
-   TABLET
+   TABLET & PHONES — hide the brown panel, show only the form
 ========================================================= */
 @media (max-width: 991.98px) {
     .login-page {
         min-height: calc(100vh - 110px);
-        padding: 28px 16px 36px;
+        padding: 28px 16px 40px;
     }
 
     .login-card {
-        max-width: 410px;
-        padding: 28px;
+        max-width: 460px;
+        grid-template-columns: 1fr;
+        border-radius: 16px;
+    }
+
+    .login-visual {
+        display: none;
+    }
+
+    .login-mobile-logo {
+        display: block;
+    }
+
+    .login-form-panel {
+        padding: 34px 30px 32px;
     }
 }
 
 /* =========================================================
    PHONES
 ========================================================= */
-@media (max-width: 575.98px) {
+@media (max-width: 767.98px) {
     .login-page {
         min-height: calc(100vh - 92px);
         padding: 20px 12px 30px;
         align-items: flex-start;
     }
 
-    .login-card {
-        max-width: 100%;
-        padding: 23px 18px;
-        border-radius: 16px;
-    }
-
-    .login-logo {
-        width: 58px;
-        height: 58px;
-        margin-bottom: 10px;
+    .login-form-panel {
+        padding: 28px 20px 28px;
     }
 
     .login-title {
-        font-size: 1.12rem;
-    }
-
-    .login-subtitle {
-        font-size: 0.77rem;
-    }
-
-    .login-input {
-        min-height: 42px;
-        font-size: 0.82rem;
-    }
-
-    .btn-localitea {
-        min-height: 42px;
-        font-size: 0.82rem;
+        font-size: 1.4rem;
     }
 }
 
@@ -417,37 +485,14 @@ body {
         padding-right: 9px;
     }
 
-    .login-card {
-        padding: 20px 15px;
-        border-radius: 15px;
-    }
-
-    .login-logo {
-        width: 54px;
-        height: 54px;
-    }
-
-    .login-title {
-        font-size: 1.05rem;
-    }
-
-    .login-subtitle {
-        font-size: 0.74rem;
-    }
-
-    .login-form-label {
-        font-size: 0.74rem;
+    .login-form-panel {
+        padding: 24px 15px 24px;
     }
 
     .login-input {
-        min-height: 40px;
+        min-height: 38px;
         font-size: 0.8rem;
-        padding: 8px 10px;
-    }
-
-    .btn-localitea {
-        min-height: 40px;
-        font-size: 0.8rem;
+        padding: 7px 10px;
     }
 }
 </style>
@@ -455,110 +500,129 @@ body {
 <div class="login-page">
     <div class="login-card">
 
-        <!-- Logo & Heading -->
-        <div class="text-center mb-4">
+        <!-- Left: form -->
+        <section class="login-form-panel">
+
             <img
-                src="assets/images/logo.png"
+                src="../assets/images/logo.png"
                 alt="Local Milktea House Logo"
-                class="login-logo"
+                class="login-mobile-logo"
             >
 
-            <h1 class="login-title">Welcome Back!</h1>
+            <h1 class="login-title">Log In</h1>
 
             <p class="login-subtitle">
                 Please sign in to continue
             </p>
-        </div>
 
-        <?php if ($error): ?>
-            <div class="login-alert text-center" role="alert">
-                <?= htmlspecialchars($error) ?>
-            </div>
-        <?php endif; ?>
+            <?php if ($error): ?>
+                <div class="login-alert text-center" role="alert">
+                    <?= htmlspecialchars($error) ?>
+                </div>
+            <?php endif; ?>
 
-        <form method="POST" novalidate>
+            <form method="POST" novalidate>
 
-            <div class="mb-3">
-                <label
-                    for="loginEmail"
-                    class="login-form-label"
-                >
-                    Email address
-                </label>
+                <div class="mb-3">
+                    <label
+                        for="loginEmail"
+                        class="login-form-label"
+                    >
+                        Email address
+                    </label>
 
-                <input
-                    type="email"
-                    id="loginEmail"
-                    name="email"
-                    class="login-input"
-                    placeholder="juan@email.com"
-                    autocomplete="email"
-                    required
-                >
-            </div>
-
-            <div class="mb-2">
-                <label
-                    for="loginPassword"
-                    class="login-form-label"
-                >
-                    Password
-                </label>
-
-                <div class="password-field">
                     <input
-                        type="password"
-                        id="loginPassword"
-                        name="password"
+                        type="email"
+                        id="loginEmail"
+                        name="email"
                         class="login-input"
-                        placeholder="••••••••"
-                        autocomplete="current-password"
+                        placeholder="juan@email.com"
+                        autocomplete="email"
                         required
                     >
-
-                    <button
-                        type="button"
-                        class="password-toggle"
-                        id="loginPasswordToggle"
-                        aria-label="Show password"
-                        aria-controls="loginPassword"
-                        aria-pressed="false"
-                    >
-                        <i class="bi bi-eye" aria-hidden="true"></i>
-                    </button>
                 </div>
-            </div>
 
-            <div class="text-end mb-4">
-                <a href="#" class="login-forgot">
-                    Forgot password?
-                </a>
-            </div>
+                <div class="mb-2">
+                    <label
+                        for="loginPassword"
+                        class="login-form-label"
+                    >
+                        Password
+                    </label>
 
-            <button
-                type="submit"
-                class="btn btn-localitea btn-localitea-primary mb-2"
+                    <div class="password-field">
+                        <input
+                            type="password"
+                            id="loginPassword"
+                            name="password"
+                            class="login-input"
+                            placeholder="••••••••"
+                            autocomplete="current-password"
+                            required
+                        >
+
+                        <button
+                            type="button"
+                            class="password-toggle"
+                            id="loginPasswordToggle"
+                            aria-label="Show password"
+                            aria-controls="loginPassword"
+                            aria-pressed="false"
+                        >
+                            <i class="bi bi-eye" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="text-end mb-3">
+                    <a href="forgot-password.php" class="login-forgot">
+                        Forgot password?
+                    </a>
+                </div>
+
+                <button
+                    type="submit"
+                    class="btn btn-localitea btn-localitea-primary"
+                >
+                    Log in
+                </button>
+
+            </form>
+
+            <div class="login-divider">or</div>
+
+            <a
+                href="../customer/index.php?guest=1"
+                class="btn btn-localitea btn-localitea-outline mb-3"
             >
-                Log In
-            </button>
+                Order as Guest
+            </a>
 
-        </form>
+            <div class="login-signup">
+                Don't have an account?
+                <a href="register.php">Sign up</a>
+            </div>
 
-        <div class="login-divider">
-            <span>OR</span>
-        </div>
+        </section>
 
-        <a
-            href="../customer/index.php?guest=1"
-            class="btn btn-localitea btn-localitea-outline text-center text-decoration-none mb-3"
-        >
-            Order as Guest
-        </a>
+        <!-- Right: brand panel (hidden on tablet / phone) -->
+        <aside class="login-visual">
 
-        <div class="text-center login-signup">
-            Don't have an account?
-            <a href="register.php">Sign up</a>
-        </div>
+            <img
+                src="../assets/images/logo.png"
+                alt="Local Milktea House Logo"
+                class="login-logo"
+            >
+
+            <h2 class="login-visual-title">
+                Welcome<br>Back!
+            </h2>
+
+            <p class="login-visual-text">
+                Log in to order ahead and pick up your favorite milk tea at the store.
+            </p>
+
+        </aside>
 
     </div>
 </div>
@@ -597,3 +661,7 @@ body {
 })();
 </script>
 
+<!-- Bootstrap 5.3.3 JavaScript (required for the navbar toggler and dropdowns on phone/tablet) -->
+<script
+    src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
+></script>

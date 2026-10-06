@@ -69,6 +69,46 @@ if (!in_array($mode, $allowed_modes, true)) {
 
 $reportGeneratedAt = date('Y-m-d H:i:s');
 $reportGeneratedBy = $_SESSION['user_name'] ?? 'Admin';
+$reportGeneratedByRole = ucfirst((string)($_SESSION['user_role'] ?? 'admin'));
+
+
+/* =========================================================
+   BUSINESS DETAILS (shown in the report header)
+   >>> Replace the email and phone below with the real ones. <<<
+========================================================= */
+
+$businessName  = 'LOCAL MILKTEA HOUSE';
+$businessAddress = 'Blk 5 Lot 2 Block C2a St. Nicolasa Virata, General Mariano Alvarez, Cavite, Philippines 4117';
+$businessEmail = 'localmilkteahouse@example.com';
+$businessPhone = '0900 000 0000';
+
+
+/* =========================================================
+   BUSINESS LOGO
+   Put the logo at assets/images/logo.png (or .svg/.webp/.jpg),
+   or set $businessLogoPath to another path relative to this
+   admin folder. If no file is found the header simply has no logo.
+========================================================= */
+
+$businessLogoPath = $businessLogoPath ?? null;
+
+if ($businessLogoPath === null) {
+
+    foreach (['../assets/images', '../assets/img', '../assets/logo', '../assets/uploads', '../assets'] as $logoDir) {
+        foreach (['png', 'svg', 'webp', 'jpg', 'jpeg'] as $logoExt) {
+            if (is_file(__DIR__ . '/' . $logoDir . '/logo.' . $logoExt)) {
+                $businessLogoPath = $logoDir . '/logo.' . $logoExt;
+                break 2;
+            }
+        }
+    }
+}
+
+$businessLogoUrl = null;
+
+if ($businessLogoPath !== null && is_file(__DIR__ . '/' . $businessLogoPath)) {
+    $businessLogoUrl = $businessLogoPath . '?v=' . (int)@filemtime(__DIR__ . '/' . $businessLogoPath);
+}
 
 
 /* =========================================================
@@ -370,6 +410,37 @@ $modeLabel = $modeLabels[$mode];
             margin-bottom: 25px;
         }
 
+        /* Letterhead: logo (left) | business details (center) | printed by (right) */
+        .report-letterhead {
+            display: grid;
+            grid-template-columns: 140px minmax(0, 1fr) 140px;
+            align-items: center;
+            gap: 14px;
+            padding-bottom: 14px;
+            border-bottom: 2px solid #222;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+        }
+
+        .report-logo {
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            height: 90px;
+        }
+
+        .report-logo img {
+            display: block;
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+
+        .report-letterhead-center {
+            text-align: center;
+            min-width: 0;
+        }
+
         .business-name {
             margin: 0;
             font-size: 22px;
@@ -377,8 +448,39 @@ $modeLabel = $modeLabels[$mode];
             letter-spacing: .3px;
         }
 
+        .business-contact {
+            margin-top: 6px;
+            font-size: 12px;
+            line-height: 1.6;
+            color: #333;
+        }
+
+        .report-printed-by {
+            text-align: right;
+            font-size: 11px;
+            line-height: 1.5;
+            color: #333;
+            min-width: 0;
+            overflow-wrap: anywhere;
+        }
+
+        .report-printed-by .label {
+            display: block;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: .4px;
+            text-transform: uppercase;
+            color: #666;
+        }
+
+        .report-printed-by strong {
+            display: block;
+            font-size: 12px;
+            color: #222;
+        }
+
         .report-name {
-            margin: 5px 0 20px;
+            margin: 18px 0 20px;
             font-size: 18px;
             font-weight: 700;
         }
@@ -792,9 +894,42 @@ $modeLabel = $modeLabels[$mode];
 
     <div class="report-header">
 
-        <h1 class="business-name">
-            LOCAL MILKTEA HOUSE
-        </h1>
+        <div class="report-letterhead">
+
+            <!-- LOGO (left) -->
+            <div class="report-logo">
+                <?php if ($businessLogoUrl !== null): ?>
+                    <img
+                        src="<?= htmlspecialchars($businessLogoUrl, ENT_QUOTES, 'UTF-8') ?>"
+                        alt="<?= htmlspecialchars($businessName, ENT_QUOTES, 'UTF-8') ?> logo"
+                    >
+                <?php endif; ?>
+            </div>
+
+            <!-- BUSINESS DETAILS (center) -->
+            <div class="report-letterhead-center">
+
+                <h1 class="business-name">
+                    <?= htmlspecialchars($businessName, ENT_QUOTES, 'UTF-8') ?>
+                </h1>
+
+                <div class="business-contact">
+                    <div><?= htmlspecialchars($businessAddress, ENT_QUOTES, 'UTF-8') ?></div>
+                    <div>Email: <?= htmlspecialchars($businessEmail, ENT_QUOTES, 'UTF-8') ?></div>
+                    <div>Contact No.: <?= htmlspecialchars($businessPhone, ENT_QUOTES, 'UTF-8') ?></div>
+                </div>
+
+            </div>
+
+            <!-- PRINTED / GENERATED BY (right) -->
+            <div class="report-printed-by">
+                <span class="label">Printed / Generated by</span>
+                <strong><?= htmlspecialchars($reportGeneratedBy, ENT_QUOTES, 'UTF-8') ?></strong>
+                <span><?= htmlspecialchars($reportGeneratedByRole, ENT_QUOTES, 'UTF-8') ?></span>
+                <span><?= date('M d, Y h:i A', strtotime($reportGeneratedAt)) ?></span>
+            </div>
+
+        </div>
 
         <div class="report-name">
             SALES REPORT
@@ -805,8 +940,8 @@ $modeLabel = $modeLabels[$mode];
 
     <!-- =====================================================
          REPORT INFORMATION
-         Shows the selected reporting period and the exact
-         date/time when this printable report was generated.
+         Shows the selected reporting period and report type.
+         Who printed the report and when is shown in the header.
     ====================================================== -->
 
     <div class="report-info">
@@ -830,26 +965,6 @@ $modeLabel = $modeLabels[$mode];
 
             <div>
                 <?= htmlspecialchars($modeLabel) ?>
-            </div>
-        </div>
-
-        <div class="report-info-row">
-            <div class="report-info-label">
-                Generated On
-            </div>
-
-            <div>
-                <?= date('F d, Y h:i A', strtotime($reportGeneratedAt)) ?>
-            </div>
-        </div>
-
-        <div class="report-info-row">
-            <div class="report-info-label">
-                Generated By
-            </div>
-
-            <div>
-                <?= htmlspecialchars($reportGeneratedBy) ?>
             </div>
         </div>
 
@@ -1180,10 +1295,5 @@ $modeLabel = $modeLabels[$mode];
 
 
 </div>
-
-
-
-
-
 </body>
 </html>

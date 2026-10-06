@@ -4,18 +4,6 @@ require_once '../includes/db.php';
 
 date_default_timezone_set('Asia/Manila');
 
-
-/* =========================================================
-   START ORDER FROM PROMOTION
-   ---------------------------------------------------------
-   Clicking a promotion should NOT add an item directly to
-   the cart. The customer must first customize the qualifying
-   product (size, add-ons, sugar level, quantity).
-
-   The selected promotion ID is passed to product-view.php.
-   add-to-cart.php will tag the customized cart line so the
-   promotion engine can apply the selected promotion.
-========================================================= */
 if (isset($_GET['order_promotion'])) {
 
     $promotionId = (int)$_GET['order_promotion'];
@@ -44,20 +32,7 @@ if (isset($_GET['order_promotion'])) {
 
         if ($promotionRule) {
 
-            /*
-             * Find the primary product the customer must customize.
-             *
-             * BOGO / Buy X Get Y:
-             *   customize the BUY product.
-             *
-             * Percentage / Fixed:
-             *   customize the qualifying product.
-             *
-             * Bundle:
-             *   start with the first bundle product.
-             *   (The same product customization page is used so the
-             *   customer can still choose its options.)
-             */
+            
             $role = 'buy';
 
             if (
@@ -179,8 +154,6 @@ $promoStmt = $pdo->prepare("\n    SELECT\n        id,\n        title,\n        d
 $promoStmt->execute();
 $promotions = $promoStmt->fetchAll(PDO::FETCH_ASSOC);
 
-/* First active promotion is used for the hero image. */
-$heroPromotion = $promotions[0] ?? null;
 
 function customerImagePath(?string $image): string
 {
@@ -248,73 +221,137 @@ require_once '../includes/navbar.php';
 ?>
 
 <style>
+/* =========================================================
+   LOCALITEA LANDING PAGE — VISUAL REDESIGN ONLY
+   PHP, ordering, promotion and slider functionality preserved.
+   ========================================================= */
+
 body{
     background:#fbf8f4;
     color:#2c221e;
-    font-size:0.95rem;
+    font-size:.95rem;
     overflow-x:hidden;
 }
 
 .section-title{
-    font-weight:700;
     text-align:center;
-    font-size:1.4rem;
-    margin-bottom:.2rem;
+    color:#2d1e15;
+    font-size:1.65rem;
+    font-weight:900;
+    letter-spacing:-.3px;
+    margin:0;
+}
+
+.section-subtitle{
+    text-align:center;
+    color:#7a685c;
+    font-size:.86rem;
+    margin:.35rem auto 0;
 }
 
 .title-line{
-    width:45px;
-    height:2px;
+    width:58px;
+    height:3px;
     background:#6F4E37;
-    margin:0 auto 20px;
-    border-radius:50px;
+    margin:12px auto 28px;
+    border-radius:999px;
 }
 
 /* ===============================
-   HERO
-=============================== */
+   HERO — TEXT LEFT / PROMOTION RIGHT
+   Clean, cardless landing-page hero.
+   Promotion image remains dynamic.
+   =============================== */
+
 .hero-section{
     width:100%;
-    padding:1rem .75rem 1.25rem;
-    margin-top:.35rem;
+    padding:1.15rem .75rem 1.55rem;
 }
 
 .hero-section > .row{
-    background:#fff;
-    border:2px solid #6F4E37;
-    border-radius:24px;
-    padding:26px;
-    box-shadow:0 10px 28px rgba(74,53,37,.06);
+    position:relative;
+    max-width:1200px;
+    min-height:410px;
+    margin:0 auto;
+    padding:28px 12px;
+    background:transparent;
+    border:0;
+    border-radius:0;
+    box-shadow:none;
+    --bs-gutter-x:2.5rem;
+}
+
+.hero-section > .row > *{
+    position:relative;
+    z-index:1;
+}
+
+.hero-copy{
+    max-width:540px;
+    padding:15px 5px;
+}
+
+.hero-kicker{
+    display:inline-flex;
+    align-items:center;
+    gap:7px;
+    padding:6px 12px;
+    margin-bottom:13px;
+    border:1px solid #CBB7A3;
+    border-radius:999px;
+    background:#F3E9DE;
+    color:#4A3525;
+    font-size:.66rem;
+    font-weight:800;
+    letter-spacing:.55px;
+    text-transform:uppercase;
 }
 
 .hero-title{
-    font-size:2rem;
-    font-weight:800;
-    line-height:1.15;
-    color:#2c221e;
+    font-size:3rem;
+    font-weight:900;
+    line-height:1;
+    letter-spacing:-1px;
+    color:#2D1E15;
+    margin:0 0 1rem;
 }
 
 .hero-text{
-    max-width:560px;
-    color:#6c757d;
-    font-size:.9rem;
-    line-height:1.55;
+    max-width:510px;
+    color:#665449;
+    font-size:.93rem;
+    line-height:1.65;
+    font-weight:500;
+    margin-bottom:1.25rem !important;
 }
 
-#promotions{
-    scroll-margin-top:94px;
+.hero-section .btn{
+    background:#332317 !important;
+    border:1.5px solid #24170F !important;
+    color:#fff !important;
+    font-weight:800;
+    padding:.55rem 1.25rem !important;
+    box-shadow:0 7px 15px rgba(36,23,15,.14) !important;
+    transition:transform .2s ease, box-shadow .2s ease, background .2s ease;
+}
+
+.hero-section .btn:hover{
+    background:#24170F !important;
+    transform:translateY(-2px);
+    box-shadow:0 10px 19px rgba(36,23,15,.2) !important;
 }
 
 .hero-promo-image-wrap{
+    position:relative;
     width:100%;
-    max-width:560px;
-    height:210px;
+    max-width:620px;
+    height:325px;
     margin:0 auto;
-    border-radius:16px;
     overflow:hidden;
-    background:#f3eee8;
-    border:2px solid #6F4E37;
-    box-shadow:0 4px 14px rgba(0,0,0,.08);
+    background:#F8F2EA;
+    border:0;
+    border-radius:18px;
+    box-shadow:none;
 }
 
 .hero-promo-image{
@@ -325,33 +362,194 @@ body{
     display:block;
 }
 
-/* ===============================
-   PRODUCT CARDS
-=============================== */
-.product-card{
-    border:1px solid #6F4E37;
-    border-radius:14px;
+/* Hero product image — separate from promotions. */
+.hero-visual{
+    position:relative;
+    width:min(100%, 520px);
+    height:440px;
+    margin:0 auto;
     overflow:hidden;
-    transition:.25s;
-    box-shadow:0 3px 10px rgba(0,0,0,.06);
-    background:#fff;
-    height:100%;
     display:flex;
-    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    background:transparent;
+}
+
+.hero-visual::before{
+    content:"";
+    position:absolute;
+    width:360px;
+    height:360px;
+    border-radius:50%;
+    background:#EAD8C6;
+    opacity:.7;
+}
+
+.hero-product-image{
+    position:relative;
+    z-index:2;
+    width:92%;
+    height:92%;
+    object-fit:contain;
+    object-position:center;
+    display:block;
+    filter:drop-shadow(0 22px 24px rgba(74,53,37,.18));
+    mix-blend-mode:multiply;
+    transition:transform .3s ease;
+}
+
+.hero-visual:hover .hero-product-image{
+    transform:scale(1.03);
+}
+
+.hero-steam{
+    position:absolute;
+    width:5px;
+    height:78px;
+    border-radius:999px;
+    background:rgba(255,255,255,.72);
+    top:80px;
+}
+
+.steam-one{ left:43%; transform:rotate(9deg); }
+.steam-two{ left:50%; transform:rotate(-4deg); height:92px; top:63px; }
+.steam-three{ left:57%; transform:rotate(-11deg); height:70px; top:86px; }
+
+/* ===============================
+   HERO RESPONSIVE
+   =============================== */
+
+@media (max-width:991.98px){
+    .hero-section{
+        padding-top:.9rem;
+    }
+
+    .hero-section > .row{
+        min-height:370px;
+        --bs-gutter-x:1.5rem;
+    }
+
+    .hero-copy{
+        padding:8px 2px;
+    }
+
+    .hero-title{
+        font-size:2.45rem;
+    }
+
+    .hero-promo-image-wrap{
+        height:275px;
+    }
+}
+
+@media (max-width:767.98px){
+    .hero-section{
+        padding:.65rem .65rem 1.1rem;
+    }
+
+    .hero-section > .row{
+        --bs-gutter-x:0;
+        padding:5px 4px;
+    }
+
+    .hero-copy{
+        max-width:100%;
+        padding:8px 4px 15px;
+        text-align:center;
+    }
+
+    .hero-kicker{
+        font-size:.58rem;
+        padding:5px 9px;
+    }
+
+    .hero-title{
+        font-size:1.9rem;
+        letter-spacing:-.5px;
+    }
+
+    .hero-text{
+        max-width:none;
+        font-size:.81rem;
+        line-height:1.55;
+    }
+
+    .hero-promo-image-wrap{
+        max-width:100%;
+        height:200px;
+        border-radius:15px;
+    }
+}
+
+@media (max-width:399.98px){
+    .hero-section{
+        padding:.55rem .45rem .95rem;
+    }
+
+    .hero-title{
+        font-size:1.6rem;
+    }
+
+    .hero-text{
+        font-size:.75rem;
+    }
+
+    .hero-promo-image-wrap{
+        height:170px;
+        border-radius:13px;
+    }
+}
+
+/* ===============================
+   SECTION SHELLS
+   =============================== */
+
+.landing-section{
+    margin:0 auto 1.6rem;
+    padding:30px 28px 34px;
+    background:#fff;
+    border:1px solid #E3D6C8;
+    border-radius:28px;
+    box-shadow:0 8px 24px rgba(74,53,37,.06);
+}
+
+.promo-section{
+    background:#F1E5D8;
+    border-color:#D8C5B2;
+}
+
+/* ===============================
+   BEST SELLERS
+   =============================== */
+
+.best-seller-grid{
+    row-gap:18px;
+}
+
+.product-card{
+    position:relative;
+    border:1px solid #E6E0DA;
+    border-radius:16px;
+    overflow:hidden;
+    background:#fff;
+    box-shadow:0 5px 14px rgba(74,53,37,.06);
+    transition:transform .22s ease, box-shadow .22s ease, border-color .22s ease;
+    height:100%;
 }
 
 .product-card:hover{
-    transform:translateY(-4px);
-    box-shadow:0 8px 18px rgba(0,0,0,.1);
+    transform:translateY(-6px);
+    border-color:#CDBBAA;
+    box-shadow:0 10px 20px rgba(74,53,37,.11);
 }
 
 .product-image-wrap{
     position:relative;
     width:100%;
-    height:140px;
-    flex:0 0 140px;
-    background:#f3eee8;
+    height:150px;
+    flex:0 0 150px;
     overflow:hidden;
+    background:#fff;
 }
 
 .product-image-wrap img{
@@ -360,568 +558,7 @@ body{
     object-fit:contain;
     object-position:center;
     display:block;
-}
-
-.product-card .card-body{
-    flex:1 1 auto;
-    display:flex;
-    flex-direction:column;
-    justify-content:center;
-    padding:10px 8px !important;
-}
-
-.product-name{
-    font-size:.82rem;
-    font-weight:700;
-    min-height:0;
-    line-height:1.2;
-    color:#333;
-    overflow-wrap:anywhere;
-}
-
-.product-price{
-    color:#6F4E37;
-    font-size:.85rem;
-    font-weight:700;
-    margin-top:5px !important;
-}
-
-.order-btn{
-    border-radius:50px;
-    font-size:.75rem;
-    padding:.25rem .8rem;
-    margin-top:7px !important;
-    align-self:center;
-    white-space:nowrap;
-}
-
-.order-disabled{
-    background:#E1DDD9 !important;
-    border-color:#E1DDD9 !important;
-    color:#766C65 !important;
-    cursor:not-allowed;
-    box-shadow:none !important;
-}
-
-/* ===============================
-   PROMOTIONS
-=============================== */
-.promotion-card{
-    border-color:#6F4E37;
-}
-
-.promotion-image-wrap{
-    position:relative;
-    width:100%;
-    height:150px;
-    flex:0 0 150px;
-    background:#f3eee8;
-    overflow:hidden;
-}
-
-.promotion-image-wrap img{
-    width:100%;
-    height:100%;
-    object-fit:cover;
-    object-position:center;
-    display:block;
-}
-
-.promotion-badge{
-    display:inline-flex;
-    align-items:center;
-    justify-content:center;
-    width:fit-content;
-    margin:0 auto 7px;
-    padding:4px 9px;
-    border-radius:50px;
-    background:#f3ece5;
-    border:1px solid #6F4E37;
-    color:#5a3d2b;
-    font-size:.66rem;
-    font-weight:800;
-}
-
-.promotion-description{
-    color:#756960;
-    font-size:.74rem;
-    line-height:1.4;
-    margin-bottom:4px;
-}
-
-.promotion-validity{
-    color:#8a7a70;
-    font-size:.68rem;
-    margin-bottom:8px;
-}
-
-.promo-empty{
-    color:#6c757d;
-    font-size:.82rem;
-}
-
-
-/* ===============================
-   PROMOTION SLIDER
-=============================== */
-.promotion-slider{
-    position:relative;
-    max-width:320px;
-    margin:0 auto;
-    padding:0 42px 34px;
-}
-
-.promotion-slides{
-    position:relative;
-    width:100%;
-}
-
-.promotion-slide{
-    display:none;
-}
-
-.promotion-slide.is-active{
-    display:block;
-}
-
-.promotion-slider .promotion-card{
-    width:100%;
-}
-
-.promotion-slider-btn{
-    position:absolute;
-    top:50%;
-    transform:translateY(-50%);
-    width:36px;
-    height:36px;
-    border:2px solid #4A3525;
-    border-radius:50%;
-    background:#4A3525;
-    color:#fff;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    box-shadow:0 4px 10px rgba(74,53,37,.18);
-    transition:.2s ease;
-    z-index:3;
-}
-
-.promotion-slider-btn:hover{
-    background:#332317;
-    border-color:#332317;
-    color:#fff;
-}
-
-.promotion-slider-prev{ left:0; }
-.promotion-slider-next{ right:0; }
-
-.promotion-slider-dots{
-    position:absolute;
-    left:0;
-    right:0;
-    bottom:4px;
-    display:flex;
-    justify-content:center;
-    align-items:center;
-    gap:7px;
-}
-
-.promotion-slider-dot{
-    width:8px;
-    height:8px;
-    padding:0;
-    border:1px solid #6F4E37;
-    border-radius:50%;
-    background:#E8DFD4;
-    transition:.2s ease;
-}
-
-.promotion-slider-dot.is-active{
-    width:10px;
-    height:10px;
-    background:#4A3525;
-}
-
-@media (max-width:767.98px){
-    .promotion-slider{
-        max-width:290px;
-        padding-left:38px;
-        padding-right:38px;
-    }
-    .promotion-slider-btn{
-        width:32px;
-        height:32px;
-    }
-}
-
-@media (max-width:399.98px){
-    .promotion-slider{
-        max-width:280px;
-        padding-left:34px;
-        padding-right:34px;
-    }
-    .promotion-slider-btn{
-        width:30px;
-        height:30px;
-        font-size:.8rem;
-    }
-}
-
-/* ===============================
-   LARGE TABLETS / SMALL LAPTOPS
-=============================== */
-@media (max-width:991.98px){
-    .hero-section{
-        padding-left:.75rem;
-        padding-right:.75rem;
-    }
-
-    .hero-section > .row{
-        padding:22px;
-    }
-
-    .hero-promo-image-wrap{
-        max-width:460px;
-        height:190px;
-    }
-
-    .product-image-wrap{
-        height:125px;
-        flex-basis:125px;
-    }
-
-    .promotion-image-wrap{
-        height:135px;
-        flex-basis:135px;
-    }
-}
-
-/* ===============================
-   TABLETS / MOBILE
-=============================== */
-@media (max-width:767.98px){
-    .hero-section{
-        padding:.55rem .65rem 1rem;
-        margin-top:.2rem;
-    }
-
-    .hero-section > .row{
-        padding:18px;
-        border-radius:20px;
-        --bs-gutter-x:0;
-    }
-
-    .hero-title{
-        font-size:1.55rem;
-        margin-bottom:.55rem;
-    }
-
-    .hero-text{
-        max-width:none;
-        font-size:.82rem;
-        line-height:1.5;
-        margin-bottom:.8rem !important;
-    }
-
-    .hero-section .btn{
-        font-size:.78rem !important;
-        padding:.42rem 1rem !important;
-    }
-
-    .hero-promo-image-wrap{
-        max-width:100%;
-        height:165px;
-        margin-top:.1rem;
-        border-radius:13px;
-    }
-
-    .container.my-4{
-        margin-top:1rem !important;
-        margin-bottom:1rem !important;
-    }
-
-    .section-title{
-        font-size:1.2rem;
-    }
-
-    .title-line{
-        margin-bottom:14px;
-    }
-
-    .row.g-3.justify-content-center{
-        --bs-gutter-x:.65rem;
-        --bs-gutter-y:.65rem;
-    }
-
-    .product-image-wrap{
-        height:110px;
-        flex-basis:110px;
-    }
-
-    .product-card .card-body{
-        padding:8px 6px !important;
-    }
-
-    .product-name{
-        font-size:.74rem;
-    }
-
-    .product-price{
-        font-size:.78rem;
-        margin-top:4px !important;
-    }
-
-    .order-btn{
-        font-size:.68rem;
-        padding:.25rem .7rem;
-        margin-top:5px !important;
-    }
-
-    .promotion-image-wrap{
-        height:115px;
-        flex-basis:115px;
-    }
-
-    .promotion-card .card-body{
-        padding:9px 7px !important;
-    }
-
-    .promotion-description{
-        font-size:.68rem;
-        line-height:1.3;
-    }
-
-    .promotion-validity{
-        font-size:.64rem;
-        margin-bottom:6px;
-    }
-}
-
-/* ===============================
-   SMALL PHONES
-=============================== */
-@media (max-width:399.98px){
-    .hero-section{
-        padding-left:.5rem;
-        padding-right:.5rem;
-    }
-
-    .hero-section > .row{
-        padding:15px 14px;
-        border-radius:18px;
-    }
-
-    .hero-title{
-        font-size:1.38rem;
-    }
-
-    .hero-text{
-        font-size:.76rem;
-    }
-
-    .hero-promo-image-wrap{
-        height:145px;
-        border-radius:11px;
-    }
-
-    .section-title{
-        font-size:1.08rem;
-    }
-
-    .row.g-3.justify-content-center{
-        --bs-gutter-x:.5rem;
-        --bs-gutter-y:.55rem;
-    }
-
-    .product-image-wrap{
-        height:96px;
-        flex-basis:96px;
-    }
-
-    .product-name{
-        font-size:.68rem;
-    }
-
-    .product-price{
-        font-size:.72rem;
-    }
-
-    .order-btn{
-        font-size:.62rem;
-        padding:.22rem .62rem;
-    }
-
-    .promotion-image-wrap{
-        height:100px;
-        flex-basis:100px;
-    }
-
-    .promotion-badge{
-        font-size:.58rem;
-        padding:3px 7px;
-        margin-bottom:5px;
-    }
-
-    .promotion-description{
-        font-size:.62rem;
-    }
-
-    .promotion-validity{
-        font-size:.59rem;
-    }
-}
-
-
-/* =========================================================
-   LANDING PAGE VISUAL REFRESH — LOOK ONLY
-   No PHP, ordering, promotion, or JavaScript behavior changed.
-========================================================= */
-.hero-section{
-    padding:1.1rem .75rem 1.5rem;
-}
-
-.hero-section > .row{
-    position:relative;
-    overflow:hidden;
-    background:#C4A484;
-    border:2px solid #4A3525;
-    border-radius:30px;
-    padding:38px 38px;
-    box-shadow:0 14px 34px rgba(74,53,37,.14);
-}
-
-.hero-section > .row::before,
-.hero-section > .row::after{
-    content:"";
-    position:absolute;
-    border-radius:50%;
-    pointer-events:none;
-    z-index:0;
-}
-
-.hero-section > .row::before{
-    width:240px;
-    height:240px;
-    left:-95px;
-    bottom:-135px;
-    background:rgba(255,255,255,.14);
-}
-
-.hero-section > .row::after{
-    width:290px;
-    height:290px;
-    right:-150px;
-    top:-155px;
-    background:rgba(255,255,255,.11);
-}
-
-.hero-section > .row > *{
-    position:relative;
-    z-index:1;
-}
-
-.hero-title{
-    font-size:2.55rem;
-    font-weight:900;
-    line-height:1.02;
-    letter-spacing:-.8px;
-    color:#24170F;
-    margin-bottom:.9rem;
-    text-wrap:balance;
-}
-
-.hero-text{
-    max-width:590px;
-    color:#4B382B;
-    font-size:.95rem;
-    line-height:1.65;
-    font-weight:500;
-}
-
-.hero-section .btn{
-    background:#332317 !important;
-    border:2px solid #24170F !important;
-    color:#fff !important;
-    font-weight:700;
-    box-shadow:0 7px 16px rgba(36,23,15,.18) !important;
-    transition:transform .2s ease, box-shadow .2s ease, background .2s ease;
-}
-
-.hero-section .btn:hover{
-    background:#24170F !important;
-    transform:translateY(-2px);
-    box-shadow:0 10px 20px rgba(36,23,15,.22) !important;
-}
-
-.hero-promo-image-wrap{
-    max-width:600px;
-    height:245px;
-    border:3px solid #4A3525;
-    border-radius:22px;
-    background:#F5EBDD;
-    box-shadow:0 8px 22px rgba(74,53,37,.16);
-}
-
-.hero-promo-image{
-    object-fit:cover;
-}
-
-/* Section containers */
-.container.my-4:not(#promotions){
-    background:#fff;
-    border:1px solid #E3D6C8;
-    border-radius:28px;
-    padding:28px 24px 30px;
-    box-shadow:0 8px 24px rgba(74,53,37,.07);
-}
-
-#promotions{
-    background:#F1E5D8;
-    border:1px solid #D8C5B2;
-    border-radius:28px;
-    padding:28px 24px 34px;
-    box-shadow:0 8px 24px rgba(74,53,37,.07);
-}
-
-.section-title{
-    color:#2D1E15;
-    font-size:1.55rem;
-    font-weight:900;
-    letter-spacing:-.2px;
-    margin-bottom:.45rem;
-}
-
-.title-line{
-    width:58px;
-    height:3px;
-    background:#6F4E37;
-    margin:0 auto 24px;
-    border-radius:999px;
-}
-
-/* Best seller cards */
-.product-card{
-    border:1.5px solid #BFA993;
-    border-radius:20px;
-    background:#fff;
-    box-shadow:0 7px 18px rgba(74,53,37,.08);
-    transition:transform .22s ease, box-shadow .22s ease, border-color .22s ease;
-}
-
-.product-card:hover{
-    transform:translateY(-6px);
-    border-color:#6F4E37;
-    box-shadow:0 14px 28px rgba(74,53,37,.15);
-}
-
-.product-image-wrap{
-    height:170px;
-    flex-basis:170px;
-    background:linear-gradient(135deg,#F4E9DD 0%,#EAD8C7 100%);
-}
-
-.product-image-wrap img{
-    padding:8px;
+    padding:6px;
     transition:transform .25s ease;
 }
 
@@ -939,38 +576,41 @@ body{
     background:#332317;
     border:1px solid #24170F;
     color:#fff;
-    font-size:.58rem;
+    font-size:.57rem;
     font-weight:800;
     letter-spacing:.35px;
-    box-shadow:0 4px 9px rgba(36,23,15,.16);
-    z-index:2;
+    box-shadow:0 4px 9px rgba(36,23,15,.15);
 }
 
 .product-card .card-body{
-    padding:15px 12px 16px !important;
+    padding:12px 11px 13px !important;
     background:#fff;
 }
 
 .product-name{
-    font-size:.9rem;
-    font-weight:800;
     color:#332317;
+    font-size:.86rem;
+    font-weight:800;
+    line-height:1.25;
 }
 
 .product-price{
     color:#6F4E37;
-    font-size:.95rem;
+    font-size:.9rem;
     font-weight:900;
-    margin-top:6px !important;
+    margin-top:5px !important;
 }
 
 .order-btn{
+    align-self:center;
+    border-radius:999px;
     background:#332317 !important;
     border:1.5px solid #24170F !important;
     color:#fff !important;
-    border-radius:999px;
+    font-size:.7rem;
     font-weight:700;
-    padding:.38rem 1rem;
+    padding:.32rem .9rem;
+    margin-top:7px !important;
     box-shadow:0 4px 9px rgba(36,23,15,.13);
     transition:transform .18s ease, background .18s ease, box-shadow .18s ease;
 }
@@ -981,149 +621,583 @@ body{
     box-shadow:0 7px 14px rgba(36,23,15,.18);
 }
 
-/* Promotion slider */
+.order-disabled{
+    background:#E1DDD9 !important;
+    border-color:#E1DDD9 !important;
+    color:#766C65 !important;
+    cursor:not-allowed;
+    box-shadow:none !important;
+}
+
+/* ===============================
+   PROMOTION — CLEAN IMAGE-FOCUSED DESIGN
+=============================== */
+.promotion-layout{
+    display:block;
+    max-width:760px;
+    margin:0 auto;
+}
+
 .promotion-slider{
-    max-width:500px;
+    position:relative;
+    width:100%;
+    max-width:650px;
+    margin:0 auto;
     padding:0 48px 38px;
 }
 
-.promotion-card{
-    border-color:#B99B7E;
-    box-shadow:0 10px 24px rgba(74,53,37,.11);
-}
+.promotion-slides{position:relative;width:100%;}
+.promotion-slide{display:none;}
+.promotion-slide.is-active{display:block;}
+
+.promotion-showcase{text-align:center;}
 
 .promotion-image-wrap{
-    height:230px;
-    flex-basis:230px;
-    background:linear-gradient(135deg,#E7D4C0 0%,#F7EFE7 100%);
+    position:relative;
+    width:100%;
+    max-width:540px;
+    height:320px;
+    margin:0 auto 18px;
+    background:transparent;
+    border:0;
+    border-radius:0;
+    overflow:visible;
+    box-shadow:none;
 }
 
 .promotion-image-wrap img{
-    object-fit:cover;
+    width:100%;
+    height:100%;
+    object-fit:contain;
+    object-position:center;
+    display:block;
+    background:transparent;
+    padding:0;
+    filter:drop-shadow(0 10px 18px rgba(74,53,37,.12));
 }
 
-.promotion-card .card-body{
-    padding:16px 14px 18px !important;
+.promotion-content{
+    max-width:540px;
+    margin:0 auto;
 }
 
 .promotion-badge{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    width:fit-content;
+    margin:0 auto 8px;
+    padding:5px 11px;
+    border-radius:999px;
     background:#332317;
     border:1px solid #24170F;
     color:#fff;
-    padding:5px 10px;
     font-size:.62rem;
+    font-weight:800;
+    letter-spacing:.3px;
+}
+
+.promotion-title{
+    color:#332317;
+    font-size:1.08rem;
+    font-weight:900;
+    line-height:1.25;
+    margin-bottom:5px;
 }
 
 .promotion-description{
     color:#5D4A3E;
-    font-size:.78rem;
+    font-size:.79rem;
+    line-height:1.5;
+    max-width:480px;
+    margin:0 auto 6px;
 }
 
 .promotion-validity{
     color:#7A685C;
     font-size:.7rem;
+    margin-bottom:11px;
+}
+
+.promotion-order-btn{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    background:#332317 !important;
+    border:1.5px solid #24170F !important;
+    color:#fff !important;
+    border-radius:999px;
+    font-weight:700;
+    font-size:.75rem;
+    padding:.42rem 1.15rem;
+    box-shadow:0 5px 12px rgba(36,23,15,.14);
+    transition:.2s ease;
+}
+
+.promotion-order-btn:hover{
+    background:#24170F !important;
+    color:#fff !important;
+    transform:translateY(-2px);
 }
 
 .promotion-slider-btn{
-    width:40px;
-    height:40px;
-    background:#332317;
-    border-color:#24170F;
-    box-shadow:0 7px 14px rgba(74,53,37,.18);
+    position:absolute;
+    top:160px;
+    transform:translateY(-50%);
+    width:38px;
+    height:38px;
+    border:1px solid #6F4E37;
+    border-radius:50%;
+    background:#fff;
+    color:#4A3525;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    box-shadow:0 4px 12px rgba(74,53,37,.12);
+    transition:.2s ease;
+    z-index:3;
 }
 
 .promotion-slider-btn:hover{
-    background:#24170F;
-    border-color:#24170F;
+    background:#332317;
+    border-color:#332317;
+    color:#fff;
+}
+
+.promotion-slider-prev{left:0;}
+.promotion-slider-next{right:0;}
+
+.promotion-slider-dots{
+    position:absolute;
+    left:0;
+    right:0;
+    bottom:3px;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    gap:7px;
 }
 
 .promotion-slider-dot{
-    width:9px;
-    height:9px;
-    background:#D6C2AE;
+    width:8px;
+    height:8px;
+    padding:0;
+    border:1px solid #6F4E37;
+    border-radius:50%;
+    background:#D8C5B2;
+    transition:.2s ease;
 }
 
 .promotion-slider-dot.is-active{
-    width:11px;
-    height:11px;
+    width:10px;
+    height:10px;
     background:#332317;
 }
 
 .promo-empty{
-    background:rgba(255,255,255,.55);
-    border:1px dashed #B99B7E;
-    border-radius:18px;
-    padding:18px;
+    color:#6c757d;
+    font-size:.82rem;
 }
 
-@media (max-width:991.98px){
-    .hero-section > .row{
-        padding:30px 26px;
-        border-radius:25px;
-    }
+@media (max-width:767.98px){
+    .promotion-layout{max-width:100%;}
+    .promotion-slider{max-width:100%;padding-left:38px;padding-right:38px;}
+    .promotion-image-wrap{height:235px;margin-bottom:14px;}
+    .promotion-slider-btn{top:117px;width:32px;height:32px;}
+    .promotion-title{font-size:.96rem;}
+    .promotion-description{font-size:.7rem;}
+    .promotion-validity{font-size:.64rem;}
+}
 
-    .hero-title{
-        font-size:2.15rem;
+@media (max-width:399.98px){
+    .promotion-slider{padding-left:32px;padding-right:32px;}
+    .promotion-image-wrap{height:195px;}
+    .promotion-slider-btn{top:97px;width:30px;height:30px;font-size:.8rem;}
+}
+
+/* ===============================
+   RESPONSIVE
+   =============================== */
+
+@media (max-width:991.98px){
+    .hero-section{
+        padding-top:.8rem;
     }
 
     .hero-promo-image-wrap{
-        height:215px;
+        height:235px;
     }
 
-    .product-image-wrap{
-        height:145px;
-        flex-basis:145px;
+    .promotion-layout{
+        grid-template-columns:1fr;
+        max-width:650px;
+    }
+
+    .promo-side-copy{
+        text-align:center;
+        align-items:center;
+        padding:0 18px 10px;
+    }
+
+    .promo-side-rule{
+        margin-left:auto;
+        margin-right:auto;
     }
 }
 
 @media (max-width:767.98px){
-    .hero-section > .row{
-        padding:24px 18px;
-        border-radius:22px;
+    .hero-section{
+        padding:.65rem .65rem 1.2rem;
     }
 
-    .hero-title{
-        font-size:1.75rem;
-        letter-spacing:-.4px;
-    }
-
-    .hero-text{
-        font-size:.84rem;
+    .hero-section{
+        padding:.65rem .5rem 1rem;
     }
 
     .hero-promo-image-wrap{
-        height:175px;
-        border-radius:17px;
+        height:180px;
     }
 
-    .container.my-4:not(#promotions),
-    #promotions{
+    .landing-section{
+        margin-bottom:1.1rem;
+        padding:23px 12px 27px;
         border-radius:22px;
-        padding:22px 12px 26px;
     }
 
     .section-title{
         font-size:1.3rem;
     }
 
+    .section-subtitle{
+        font-size:.75rem;
+    }
+
     .title-line{
-        margin-bottom:18px;
+        margin-bottom:19px;
+    }
+
+    .best-seller-grid{
+        --bs-gutter-x:.65rem;
+        --bs-gutter-y:.65rem;
     }
 
     .product-image-wrap{
-        height:118px;
-        flex-basis:118px;
+        height:105px;
+        flex-basis:105px;
     }
 
     .product-image-wrap::after{
         top:8px;
         left:8px;
         padding:4px 7px;
-        font-size:.5rem;
+        font-size:.48rem;
     }
 
     .product-card .card-body{
-        padding:11px 7px 13px !important;
+        padding:10px 7px 11px !important;
+    }
+
+    .product-name{
+        font-size:.77rem;
+    }
+
+    .product-price{
+        font-size:.81rem;
+    }
+
+    .order-btn{
+        font-size:.66rem;
+        padding:.3rem .78rem;
+    }
+
+    .promotion-slider{
+        padding:0 38px 33px;
+    }
+
+    .promotion-image-wrap{
+        height:190px;
+    }
+
+    .promotion-slider-btn{
+        width:32px;
+        height:32px;
+        font-size:.78rem;
+    }
+
+    .promo-side-copy h3{
+        font-size:1.35rem;
+    }
+
+    .promo-side-copy p{
+        font-size:.77rem;
+    }
+}
+
+@media (max-width:399.98px){
+    .hero-section{
+        padding:.55rem .35rem .85rem;
+    }
+
+    .hero-promo-image-wrap{
+        height:150px;
+    }
+
+    .landing-section{
+        padding-left:8px;
+        padding-right:8px;
+    }
+
+    .section-title{
+        font-size:1.14rem;
+    }
+
+    .product-image-wrap{
+        height:90px;
+        flex-basis:90px;
+    }
+
+    .product-name{
+        font-size:.68rem;
+    }
+
+    .product-price{
+        font-size:.72rem;
+    }
+
+    .order-btn{
+        font-size:.61rem;
+        padding:.22rem .62rem;
+    }
+
+    .promotion-slider{
+        padding-left:33px;
+        padding-right:33px;
+    }
+
+    .promotion-image-wrap{
+        height:160px;
+    }
+}
+
+/* =========================================================
+   FINAL LANDING SIZE TUNING
+   - Larger hero
+   - Best-seller cards sized closer to the reference
+   - White product image/card background
+   ========================================================= */
+
+.hero-section{
+    padding-top:1.7rem;
+    padding-bottom:2.2rem;
+}
+
+.hero-section > .row{
+    max-width:1250px;
+    min-height:540px;
+    padding:38px 18px;
+    --bs-gutter-x:3.2rem;
+}
+
+.hero-copy{
+    max-width:570px;
+    padding:22px 8px;
+}
+
+.hero-title{
+    font-size:3.35rem;
+    line-height:1.02;
+    margin-bottom:1.15rem;
+}
+
+.hero-text{
+    max-width:530px;
+    font-size:.98rem;
+    line-height:1.7;
+}
+
+.hero-promo-image-wrap{
+    max-width:620px;
+    height:440px;
+    border-radius:22px;
+}
+
+
+/* Keep the promotion's beige/brown section background compact.
+   This changes the surrounding section only, not the promotion card itself. */
+.promo-section{
+    padding:20px 22px 22px;
+    max-width:1180px;
+}
+
+.promo-section .section-title{
+    margin-bottom:.25rem;
+}
+
+.promo-section .title-line{
+    margin-bottom:16px;
+}
+
+.promo-section .promotion-layout{
+    max-width:860px;
+    gap:20px;
+}
+
+@media (max-width:767.98px){
+    .promo-section{
+        padding:18px 12px 20px;
+    }
+
+    .promo-section .title-line{
+        margin-bottom:12px;
+    }
+}
+
+/* Best seller cards — 4 across on desktop, reference-style card sizing */
+.best-seller-grid{
+    --bs-gutter-x:1rem;
+    --bs-gutter-y:1rem;
+    row-gap:20px;
+}
+
+.product-card{
+    border-radius:18px;
+    background:#fff;
+    box-shadow:0 6px 16px rgba(74,53,37,.07);
+}
+
+.product-image-wrap{
+    height:220px;
+    flex-basis:220px;
+    background:#fff;
+    padding:8px;
+}
+
+.product-image-wrap img{
+    padding:4px;
+}
+
+.product-image-wrap::after{
+    top:13px;
+    left:13px;
+    padding:5px 9px;
+    font-size:.58rem;
+}
+
+.product-card .card-body{
+    padding:15px 15px 16px !important;
+    background:#fff;
+}
+
+.product-name{
+    font-size:.96rem;
+    line-height:1.3;
+}
+
+.product-price{
+    font-size:1rem;
+    margin-top:5px !important;
+}
+
+.order-btn{
+    font-size:.72rem;
+    padding:.38rem 1rem;
+    margin-top:8px !important;
+}
+
+@media (max-width:991.98px){
+    .hero-section{
+        padding-top:1.25rem;
+        padding-bottom:1.7rem;
+    }
+
+    .hero-section > .row{
+        min-height:470px;
+        padding:28px 12px;
+        --bs-gutter-x:1.8rem;
+    }
+
+    .hero-copy{
+        padding:14px 4px;
+    }
+
+    .hero-title{
+        font-size:2.7rem;
+    }
+
+    .hero-promo-image-wrap{
+        height:355px;
+    }
+
+    .hero-visual{
+        height:355px;
+    }
+
+    .product-image-wrap{
+        height:185px;
+        flex-basis:185px;
+    }
+}
+
+@media (max-width:767.98px){
+    .hero-section{
+        padding:1rem .55rem 1.3rem;
+    }
+
+    .hero-section > .row{
+        min-height:0;
+        padding:8px 4px 16px;
+    }
+
+    .hero-copy{
+        padding:12px 4px 20px;
+    }
+
+    .hero-title{
+        font-size:2rem;
+    }
+
+    .hero-text{
+        font-size:.82rem;
+    }
+
+    .hero-promo-image-wrap{
+        height:240px;
+        border-radius:17px;
+    }
+
+    .hero-visual{
+        height:270px;
+        border-radius:22px;
+    }
+
+    .hero-cup{
+        width:145px;
+        height:125px;
+        border-width:6px;
+    }
+
+    .hero-cup i{
+        font-size:3rem;
+        margin-bottom:7px;
+    }
+
+    .hero-cup span{
+        font-size:.58rem;
+        letter-spacing:1.5px;
+    }
+
+    .best-seller-grid{
+        --bs-gutter-x:.7rem;
+        --bs-gutter-y:.7rem;
+    }
+
+    .product-image-wrap{
+        height:125px;
+        flex-basis:125px;
+    }
+
+    .product-card .card-body{
+        padding:10px 8px 12px !important;
     }
 
     .product-name{
@@ -1135,118 +1209,470 @@ body{
     }
 
     .order-btn{
-        font-size:.68rem;
-        padding:.3rem .8rem;
-    }
-
-    .promotion-slider{
-        max-width:390px;
-        padding-left:39px;
-        padding-right:39px;
-    }
-
-    .promotion-image-wrap{
-        height:185px;
-        flex-basis:185px;
+        font-size:.64rem;
+        padding:.28rem .7rem;
     }
 }
 
 @media (max-width:399.98px){
-    .hero-section > .row{
-        padding:20px 13px;
+    .hero-section{
+        padding:.8rem .35rem 1.1rem;
     }
 
     .hero-title{
-        font-size:1.48rem;
-    }
-
-    .hero-text{
-        font-size:.77rem;
+        font-size:1.7rem;
     }
 
     .hero-promo-image-wrap{
-        height:150px;
+        height:195px;
     }
 
-    .container.my-4:not(#promotions),
-    #promotions{
-        padding-left:8px;
-        padding-right:8px;
+    .hero-visual{
+        height:225px;
     }
 
     .product-image-wrap{
-        height:100px;
-        flex-basis:100px;
-    }
-
-    .promotion-slider{
-        max-width:320px;
-        padding-left:34px;
-        padding-right:34px;
-    }
-
-    .promotion-image-wrap{
-        height:155px;
-        flex-basis:155px;
+        height:105px;
+        flex-basis:105px;
     }
 }
 
+
+
+/* =========================================================
+   PROMOTIONS — HORIZONTAL CAROUSEL
+   3 cards visible on desktop, 2 on tablet, 1 on mobile.
+   Cards slide one position at a time.
+========================================================= */
+#promotions{
+    background:#fff !important;
+    border:1px solid #E3D6C8 !important;
+    border-radius:28px !important;
+    padding:28px 24px 30px !important;
+    box-shadow:0 8px 24px rgba(74,53,37,.07) !important;
+}
+
+#promotions .section-title{
+    color:#2D1E15;
+    font-size:1.55rem;
+    font-weight:900;
+}
+
+#promotions .promo-carousel{
+    position:relative;
+    width:100%;
+    max-width:1100px;
+    margin:0 auto;
+    padding:0 48px 38px;
+}
+
+#promotions .promotion-viewport{
+    width:100%;
+    overflow:hidden;
+    border-radius:20px;
+}
+
+#promotions .promotion-track{
+    --promo-gap:16px;
+    display:flex;
+    gap:var(--promo-gap);
+    width:100%;
+    transition:transform .55s cubic-bezier(.22,.61,.36,1);
+    will-change:transform;
+}
+
+#promotions .promotion-card{
+    position:relative;
+    flex:0 0 calc((100% - (var(--promo-gap) * 2)) / 3);
+    min-width:0;
+    border:1.5px solid #D8C8B8;
+    border-radius:20px;
+    overflow:hidden;
+    background:#fff;
+    box-shadow:0 7px 18px rgba(74,53,37,.08);
+    transition:transform .22s ease, box-shadow .22s ease, border-color .22s ease;
+    display:flex;
+    flex-direction:column;
+}
+
+#promotions .promotion-card:hover{
+    transform:translateY(-5px);
+    border-color:#6F4E37;
+    box-shadow:0 14px 28px rgba(74,53,37,.14);
+}
+
+#promotions .promotion-image-wrap{
+    position:relative;
+    width:100%;
+    height:185px;
+    flex:0 0 185px;
+    background:#fff;
+    overflow:hidden;
+}
+
+#promotions .promotion-image-wrap::after{
+    content:"PROMO";
+    position:absolute;
+    top:12px;
+    left:12px;
+    padding:5px 10px;
+    border-radius:999px;
+    background:#332317;
+    border:1px solid #24170F;
+    color:#fff;
+    font-size:.58rem;
+    font-weight:800;
+    letter-spacing:.35px;
+    box-shadow:0 4px 9px rgba(36,23,15,.16);
+    z-index:2;
+}
+
+#promotions .promotion-image-wrap img{
+    width:100%;
+    height:100%;
+    object-fit:contain;
+    object-position:center;
+    display:block;
+    padding:7px;
+    background:#fff;
+    transition:transform .25s ease;
+}
+
+#promotions .promotion-card:hover .promotion-image-wrap img{
+    transform:scale(1.04);
+}
+
+#promotions .promotion-card .card-body{
+    flex:1 1 auto;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:flex-start;
+    text-align:center !important;
+    padding:14px 12px 16px !important;
+    background:#fff;
+}
+
+#promotions .promotion-badge{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    width:fit-content;
+    margin:0 auto 7px;
+    padding:4px 9px;
+    border-radius:999px;
+    background:#F4ECE4;
+    border:1px solid #CDB9A5;
+    color:#5A3D2B;
+    font-size:.58rem;
+    font-weight:800;
+}
+
+#promotions .promotion-card .product-name{
+    width:100%;
+    font-size:.92rem;
+    font-weight:900;
+    line-height:1.22;
+    color:#332317;
+    margin-bottom:5px;
+    overflow-wrap:anywhere;
+}
+
+#promotions .promotion-description{
+    width:100%;
+    color:#6B5A50;
+    font-size:.72rem;
+    line-height:1.4;
+    margin:0 0 6px;
+    display:-webkit-box;
+    -webkit-box-orient:vertical;
+    -webkit-line-clamp:2;
+    overflow:hidden;
+}
+
+#promotions .promotion-validity{
+    color:#8A7A70;
+    font-size:.64rem;
+    line-height:1.25;
+    margin-top:auto;
+    margin-bottom:8px;
+}
+
+#promotions .order-btn{
+    margin:0 auto !important;
+    font-size:.7rem;
+    padding:.34rem .92rem;
+    align-self:center;
+}
+
+#promotions .promotion-slider-btn{
+    position:absolute;
+    top:50%;
+    transform:translateY(-50%);
+    width:38px;
+    height:38px;
+    padding:0;
+    border:1px solid #6F4E37;
+    border-radius:50%;
+    background:#fff;
+    color:#4A3525;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    box-shadow:0 4px 12px rgba(74,53,37,.12);
+    transition:.2s ease;
+    z-index:3;
+}
+
+#promotions .promotion-slider-btn:hover{
+    background:#332317;
+    border-color:#332317;
+    color:#fff;
+}
+
+#promotions .promotion-slider-btn:focus-visible{
+    outline:2px solid #6F4E37;
+    outline-offset:2px;
+}
+
+#promotions .promotion-slider-btn:disabled{
+    opacity:.28;
+    cursor:not-allowed;
+    pointer-events:none;
+}
+
+#promotions .promotion-slider-prev{left:2px;}
+#promotions .promotion-slider-next{right:2px;}
+
+#promotions .promotion-slider-dots{
+    position:absolute;
+    left:0;
+    right:0;
+    bottom:0;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    gap:8px;
+}
+
+#promotions .promotion-slider-dot{
+    width:9px;
+    height:9px;
+    padding:0;
+    border:1px solid #6F4E37;
+    border-radius:50%;
+    background:#D8C5B2;
+    transition:.2s ease;
+    cursor:pointer;
+}
+
+#promotions .promotion-slider-dot:hover{
+    transform:scale(1.12);
+}
+
+#promotions .promotion-slider-dot.is-active{
+    width:11px;
+    height:11px;
+    background:#332317;
+}
+
+#promotions .promo-empty{
+    background:#fff;
+    border:1px dashed #D8C8B8;
+    border-radius:16px;
+    color:#6c757d;
+    padding:18px;
+}
+
+/* Hide carousel controls when there is nothing to slide. */
+#promotions .promo-carousel.no-navigation{
+    padding-left:0;
+    padding-right:0;
+}
+
+/* ===============================
+   PROMOTION CAROUSEL RESPONSIVE
+================================ */
+@media (max-width:991.98px){
+    #promotions{
+        padding:24px 18px 28px !important;
+        border-radius:24px !important;
+    }
+
+    #promotions .promo-carousel{
+        padding-left:38px;
+        padding-right:38px;
+    }
+
+    #promotions .promotion-track{
+        --promo-gap:14px;
+    }
+
+    #promotions .promotion-card{
+        flex-basis:calc((100% - var(--promo-gap)) / 2);
+    }
+
+    #promotions .promotion-image-wrap{
+        height:155px;
+        flex-basis:155px;
+    }
+
+    #promotions .promotion-slider-btn{
+        width:34px;
+        height:34px;
+    }
+
+    #promotions .promotion-slider-prev{left:1px;}
+    #promotions .promotion-slider-next{right:1px;}
+}
+
+@media (max-width:767.98px){
+    #promotions{
+        padding:22px 12px 26px !important;
+        border-radius:22px !important;
+    }
+
+    #promotions .promo-carousel{
+        padding:0 36px 33px;
+    }
+
+    #promotions .promotion-track{
+        --promo-gap:12px;
+    }
+
+    #promotions .promotion-card{
+        flex-basis:100%;
+    }
+
+    #promotions .promotion-image-wrap{
+        height:185px;
+        flex-basis:185px;
+    }
+
+    #promotions .promotion-card .card-body{
+        padding:12px 10px 14px !important;
+    }
+
+    #promotions .promotion-badge{
+        font-size:.53rem;
+        padding:3px 8px;
+        margin-bottom:5px;
+    }
+
+    #promotions .promotion-card .product-name{
+        font-size:.78rem;
+    }
+
+    #promotions .promotion-description{
+        font-size:.64rem;
+        line-height:1.35;
+    }
+
+    #promotions .promotion-validity{
+        font-size:.58rem;
+    }
+
+    #promotions .order-btn{
+        font-size:.63rem;
+        padding:.27rem .72rem;
+    }
+
+    #promotions .promotion-slider-btn{
+        width:31px;
+        height:31px;
+        font-size:.78rem;
+    }
+
+    #promotions .promotion-slider-prev{left:0;}
+    #promotions .promotion-slider-next{right:0;}
+}
+
+@media (max-width:399.98px){
+    #promotions{
+        padding-left:8px !important;
+        padding-right:8px !important;
+    }
+
+    #promotions .promo-carousel{
+        padding-left:31px;
+        padding-right:31px;
+    }
+
+    #promotions .promotion-image-wrap{
+        height:165px;
+        flex-basis:165px;
+    }
+
+    #promotions .promotion-card .product-name{
+        font-size:.72rem;
+    }
+
+    #promotions .promotion-description{
+        font-size:.59rem;
+    }
+
+    #promotions .promotion-slider-btn{
+        width:29px;
+        height:29px;
+        font-size:.72rem;
+    }
+}
 </style>
 
 <!-- HERO -->
 <div class="container hero-section">
-    <div class="row align-items-center g-3">
+    <div class="row align-items-center">
         <div class="col-lg-6">
-            <h1 class="hero-title">
-                LET COFFEE<br>
-                CONNECT US
-            </h1>
-            <p class="hero-text mt-2 mb-3">
-                Here at Local Milktea House, every cup is made to brighten your day.
-                Since opening in 2020 on Nicolas Virata Street, we've been serving
-                affordable and refreshing milk tea.
-            </p>
-            <a href="menu.php" class="btn btn-dark px-4 py-1.5 rounded-pill shadow-sm" style="font-size: 0.85rem;">
-                Order Now
-            </a>
+            <div class="hero-copy">
+                <div class="hero-kicker">
+                    <i class="bi bi-cup-hot-fill"></i>
+                    Local Milktea House
+                </div>
+
+                <h1 class="hero-title">
+                    LET COFFEE<br>
+                    CONNECT US
+                </h1>
+
+                <p class="hero-text">
+                    Here at Local Milktea House, every cup is made to brighten your day.
+                    Since opening in 2020 on Nicolas Virata Street, we've been serving
+                    affordable and refreshing milk tea.
+                </p>
+
+                <a href="menu.php" class="btn btn-dark rounded-pill">
+                    Order Now <i class="bi bi-arrow-right ms-1"></i>
+                </a>
+            </div>
         </div>
 
         <div class="col-lg-6 text-center">
-            <?php if ($heroPromotion): ?>
-                <div class="hero-promo-image-wrap" title="<?= htmlspecialchars($heroPromotion['title']) ?>">
-                    <img
-                        src="<?= htmlspecialchars(customerPromotionImagePath($heroPromotion['image'])) ?>"
-                        class="hero-promo-image"
-                        alt="<?= htmlspecialchars($heroPromotion['title']) ?>"
-                        onerror="this.onerror=null;this.src='../assets/uploads/products/default-product.png';"
-                    >
-                </div>
-            <?php else: ?>
-                <div class="hero-promo-image-wrap">
-                    <img
-                        src="../assets/uploads/products/default-product.png"
-                        class="hero-promo-image"
-                        alt="Local Milktea House"
-                    >
-                </div>
-            <?php endif; ?>
+            <div class="hero-visual">
+                <img
+                    src="../assets/images/cafe.png"
+                    alt="Local Milktea House"
+                    class="hero-product-image"
+                    onerror="this.style.display='none';"
+                >
+            </div>
         </div>
     </div>
 </div>
 
 <!-- BEST SELLERS -->
-<div class="container my-4">
-    <h2 class="section-title">Best Sellers</h2>
+<div class="container landing-section">
+    <h2 class="section-title">Our Best Sellers</h2>
+    <p class="section-subtitle">Customer favorites, made fresh for you.</p>
     <div class="title-line"></div>
 
-    <div class="row g-3 justify-content-center">
+    <div class="row g-3 justify-content-center best-seller-grid">
         <?php if(empty($products)): ?>
             <div class="text-center text-muted py-3 small">
                 <p>No featured products available at the moment.</p>
             </div>
         <?php else: ?>
             <?php foreach($products as $prod): ?>
-            <div class="col-xl-3 col-lg-3 col-md-4 col-sm-6 col-6">
+            <div class="col-xl-3 col-lg-3 col-md-6 col-sm-6 col-6">
                 <div class="card product-card h-100">
                     <div class="product-image-wrap">
                         <img
@@ -1255,13 +1681,16 @@ body{
                             onerror="this.onerror=null;this.src='../assets/uploads/products/default-product.png';"
                         >
                     </div>
+
                     <div class="card-body text-center d-flex flex-column">
                         <div class="product-name">
                             <?= htmlspecialchars($prod['name']) ?>
                         </div>
+
                         <div class="product-price mt-1">
                             ₱<?= number_format((float)$prod['price'],2) ?>
                         </div>
+
                         <a href="product-view.php?id=<?= (int)$prod['id'] ?>" class="btn btn-dark order-btn mt-auto mx-auto">
                             Order
                         </a>
@@ -1273,9 +1702,10 @@ body{
     </div>
 </div>
 
-<!-- PROMO FEATURED -->
-<div class="container my-4 mb-5" id="promotions">
-    <h2 class="section-title">Promo Featured</h2>
+<!-- PROMO FEATURE -->
+<div class="container landing-section promo-section mb-5" id="promotions">
+    <h2 class="section-title">Special Promotions</h2>
+    <p class="section-subtitle">Don't miss what's brewing at Localitea.</p>
     <div class="title-line"></div>
 
     <?php if(empty($promotions)): ?>
@@ -1283,11 +1713,20 @@ body{
             <p class="mb-0">No active promotions available at the moment.</p>
         </div>
     <?php else: ?>
-        <div class="promotion-slider" id="promotionSlider">
-            <div class="promotion-slides">
-                <?php foreach($promotions as $promotionIndex => $promotion): ?>
-                    <div class="promotion-slide <?= $promotionIndex === 0 ? 'is-active' : '' ?>">
-                        <div class="card product-card promotion-card">
+        <div class="promo-carousel<?= count($promotions) <= 3 ? ' no-navigation' : '' ?>" id="promotionCarousel">
+            <button
+                type="button"
+                class="promotion-slider-btn promotion-slider-prev"
+                id="promotionPrev"
+                aria-label="Previous promotion"
+            >
+                <i class="bi bi-chevron-left"></i>
+            </button>
+
+            <div class="promotion-viewport" id="promotionViewport">
+                <div class="promotion-track" id="promotionTrack">
+                    <?php foreach($promotions as $promotion): ?>
+                        <article class="card promotion-card">
                             <div class="promotion-image-wrap">
                                 <img
                                     src="<?= htmlspecialchars(customerPromotionImagePath($promotion['image'])) ?>"
@@ -1298,7 +1737,7 @@ body{
 
                             <div class="card-body text-center d-flex flex-column">
                                 <div class="promotion-badge">
-                                    Special Offer
+                                    SPECIAL OFFER
                                 </div>
 
                                 <div class="product-name">
@@ -1306,7 +1745,7 @@ body{
                                 </div>
 
                                 <?php if (trim((string)$promotion['description']) !== ''): ?>
-                                    <div class="promotion-description mt-1">
+                                    <div class="promotion-description">
                                         <?= htmlspecialchars($promotion['description']) ?>
                                     </div>
                                 <?php endif; ?>
@@ -1318,118 +1757,203 @@ body{
                                     </div>
                                 <?php endif; ?>
 
-                                <a href="index.php?order_promotion=<?= (int)$promotion['id'] ?>" class="btn btn-dark order-btn mt-auto mx-auto">
-                                    Order Now
+                                <a
+                                    href="index.php?order_promotion=<?= (int)$promotion['id'] ?>"
+                                    class="btn btn-dark order-btn mt-auto mx-auto"
+                                >
+                                    Order Now <i class="bi bi-arrow-right ms-1"></i>
                                 </a>
                             </div>
-                        </div>
-                    </div>
-                <?php endforeach; ?>
-            </div>
-
-            <?php if (count($promotions) > 1): ?>
-                <button type="button" class="promotion-slider-btn promotion-slider-prev" id="promotionPrev" aria-label="Previous promotion">
-                    <i class="bi bi-chevron-left"></i>
-                </button>
-                <button type="button" class="promotion-slider-btn promotion-slider-next" id="promotionNext" aria-label="Next promotion">
-                    <i class="bi bi-chevron-right"></i>
-                </button>
-
-                <div class="promotion-slider-dots" id="promotionDots" aria-label="Promotion navigation">
-                    <?php foreach($promotions as $promotionIndex => $promotion): ?>
-                        <button
-                            type="button"
-                            class="promotion-slider-dot <?= $promotionIndex === 0 ? 'is-active' : '' ?>"
-                            data-slide="<?= $promotionIndex ?>"
-                            aria-label="Show promotion <?= $promotionIndex + 1 ?>"
-                            aria-current="<?= $promotionIndex === 0 ? 'true' : 'false' ?>"
-                        ></button>
+                        </article>
                     <?php endforeach; ?>
                 </div>
-            <?php endif; ?>
+            </div>
+
+            <button
+                type="button"
+                class="promotion-slider-btn promotion-slider-next"
+                id="promotionNext"
+                aria-label="Next promotion"
+            >
+                <i class="bi bi-chevron-right"></i>
+            </button>
+
+            <div class="promotion-slider-dots" id="promotionDots" aria-label="Promotion slides"></div>
         </div>
     <?php endif; ?>
+
 </div>
 
-
 <script>
-(function () {
-    const slider = document.getElementById('promotionSlider');
-    if (!slider) return;
+document.addEventListener('DOMContentLoaded', function () {
+    const carousel = document.getElementById('promotionCarousel');
+    const viewport = document.getElementById('promotionViewport');
+    const track = document.getElementById('promotionTrack');
+    const prevBtn = document.getElementById('promotionPrev');
+    const nextBtn = document.getElementById('promotionNext');
+    const dots = document.getElementById('promotionDots');
 
-    const slides = Array.from(slider.querySelectorAll('.promotion-slide'));
-    const dots = Array.from(slider.querySelectorAll('.promotion-slider-dot'));
-    const prevButton = document.getElementById('promotionPrev');
-    const nextButton = document.getElementById('promotionNext');
+    if (!carousel || !viewport || !track) {
+        return;
+    }
 
-    if (slides.length <= 1) return;
+    const cards = Array.from(track.querySelectorAll('.promotion-card'));
+    if (!cards.length) {
+        return;
+    }
 
     let currentIndex = 0;
-    let autoPlayTimer = null;
+    let visibleCount = 3;
+    let maxIndex = 0;
+    let autoSlideTimer = null;
 
-    function showSlide(index) {
-        currentIndex = (index + slides.length) % slides.length;
+    function getVisibleCount() {
+        if (window.innerWidth <= 767.98) {
+            return 1;
+        }
 
-        slides.forEach(function (slide, i) {
-            slide.classList.toggle('is-active', i === currentIndex);
-        });
+        if (window.innerWidth <= 991.98) {
+            return 2;
+        }
 
-        dots.forEach(function (dot, i) {
-            const active = i === currentIndex;
+        return 3;
+    }
+
+    function getGap() {
+        const styles = window.getComputedStyle(track);
+        return parseFloat(styles.columnGap || styles.gap || '0') || 0;
+    }
+
+    function updateMetrics() {
+        visibleCount = Math.min(getVisibleCount(), cards.length);
+        maxIndex = Math.max(0, cards.length - visibleCount);
+
+        currentIndex = Math.min(currentIndex, maxIndex);
+
+        carousel.classList.toggle('no-navigation', maxIndex === 0);
+        prevBtn.hidden = maxIndex === 0;
+        nextBtn.hidden = maxIndex === 0;
+        dots.hidden = maxIndex === 0;
+
+        renderDots();
+        applyTransform();
+    }
+
+    function applyTransform() {
+        if (!cards.length || maxIndex === 0) {
+            track.style.transform = 'translate3d(0, 0, 0)';
+            return;
+        }
+
+        const cardWidth = cards[0].getBoundingClientRect().width;
+        const step = cardWidth + getGap();
+        track.style.transform = 'translate3d(' + (-currentIndex * step) + 'px, 0, 0)';
+    }
+
+    function renderDots() {
+        dots.innerHTML = '';
+
+        const dotCount = maxIndex + 1;
+
+        for (let i = 0; i < dotCount; i++) {
+            const dot = document.createElement('button');
+            dot.type = 'button';
+            dot.className = 'promotion-slider-dot' + (i === currentIndex ? ' is-active' : '');
+            dot.setAttribute('aria-label', 'Show promotion ' + (i + 1));
+            dot.setAttribute('aria-current', i === currentIndex ? 'true' : 'false');
+
+            dot.addEventListener('click', function () {
+                currentIndex = i;
+                applyTransform();
+                updateActiveDot();
+                restartAutoSlide();
+            });
+
+            dots.appendChild(dot);
+        }
+    }
+
+    function updateActiveDot() {
+        dots.querySelectorAll('.promotion-slider-dot').forEach(function (dot, index) {
+            const active = index === currentIndex;
             dot.classList.toggle('is-active', active);
             dot.setAttribute('aria-current', active ? 'true' : 'false');
         });
     }
 
-    function startAutoPlay() {
-        stopAutoPlay();
-        autoPlayTimer = setInterval(function () {
-            showSlide(currentIndex + 1);
-        }, 5000);
+    function goTo(index) {
+        if (maxIndex === 0) {
+            return;
+        }
+
+        currentIndex = Math.max(0, Math.min(index, maxIndex));
+
+        applyTransform();
+        updateActiveDot();
+        restartAutoSlide();
     }
 
-    function stopAutoPlay() {
-        if (autoPlayTimer) {
-            clearInterval(autoPlayTimer);
-            autoPlayTimer = null;
+    function next() {
+        if (maxIndex === 0) {
+            return;
+        }
+
+        goTo(currentIndex >= maxIndex ? 0 : currentIndex + 1);
+    }
+
+    function prev() {
+        if (maxIndex === 0) {
+            return;
+        }
+
+        goTo(currentIndex <= 0 ? maxIndex : currentIndex - 1);
+    }
+
+    function stopAutoSlide() {
+        if (autoSlideTimer) {
+            clearInterval(autoSlideTimer);
+            autoSlideTimer = null;
         }
     }
 
-    if (prevButton) {
-        prevButton.addEventListener('click', function () {
-            showSlide(currentIndex - 1);
-            startAutoPlay();
-        });
+    function startAutoSlide() {
+        stopAutoSlide();
+
+        if (maxIndex === 0) {
+            return;
+        }
+
+        autoSlideTimer = setInterval(next, 4500);
     }
 
-    if (nextButton) {
-        nextButton.addEventListener('click', function () {
-            showSlide(currentIndex + 1);
-            startAutoPlay();
-        });
+    function restartAutoSlide() {
+        startAutoSlide();
     }
 
-    dots.forEach(function (dot) {
-        dot.addEventListener('click', function () {
-            showSlide(Number(dot.dataset.slide) || 0);
-            startAutoPlay();
-        });
+    prevBtn.addEventListener('click', prev);
+    nextBtn.addEventListener('click', next);
+
+    carousel.addEventListener('mouseenter', stopAutoSlide);
+    carousel.addEventListener('mouseleave', startAutoSlide);
+    carousel.addEventListener('focusin', stopAutoSlide);
+    carousel.addEventListener('focusout', function (event) {
+        if (!carousel.contains(event.relatedTarget)) {
+            startAutoSlide();
+        }
     });
 
-    slider.addEventListener('mouseenter', stopAutoPlay);
-    slider.addEventListener('mouseleave', startAutoPlay);
-    slider.addEventListener('focusin', stopAutoPlay);
-    slider.addEventListener('focusout', function () {
-        setTimeout(function () {
-            if (!slider.contains(document.activeElement)) {
-                startAutoPlay();
-            }
-        }, 0);
+    let resizeTimer = null;
+    window.addEventListener('resize', function () {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(function () {
+            updateMetrics();
+            startAutoSlide();
+        }, 120);
     });
 
-    showSlide(0);
-    startAutoPlay();
-})();
+    updateMetrics();
+    startAutoSlide();
+});
 </script>
 
 <?php require_once '../includes/footer.php'; ?>

@@ -4,23 +4,81 @@ require_once '../includes/db.php';
 
 
 /* =========================================================
-   UNREAD NEW ORDER COUNT
+   STAFF NOTIFICATION BADGE
+   When index.php is opened from a notification, it has already
+   marked the related notification(s) as read before this sidebar
+   is included. The badge therefore always reflects the database.
 ========================================================= */
 
-$stmtNotificationCount = $pdo->query("
-    SELECT COUNT(*)
-    FROM notifications
-    WHERE recipient_role = 'staff'
-      AND is_read = 0
-");
+$unreadNewOrders = 0;
 
-$unreadNewOrders = (int)$stmtNotificationCount->fetchColumn();
+try {
+
+    $stmtNotificationCount = $pdo->prepare("
+        SELECT COUNT(*)
+        FROM notifications
+        WHERE recipient_role = 'staff'
+          AND is_read = 0
+    ");
+
+    $stmtNotificationCount->execute();
+
+    $unreadNewOrders =
+        (int)$stmtNotificationCount->fetchColumn();
+
+} catch (Throwable $e) {
+
+    $unreadNewOrders = 0;
+}
 
 /* =========================================================
    CURRENT PAGE
 ========================================================= */
 
 $currentPage = basename($_SERVER['PHP_SELF']);
+
+/* =========================================================
+   CLIENT LOGO
+   Put the client's logo file at one of the paths below
+   (recommended: assets/images/logo.png) and it will show up
+   automatically. To use another location, set $staffLogoPath
+   (relative to this staff folder, e.g. '../assets/brand/local.png')
+   before including this sidebar, or edit the line below.
+   If no file is found, the old cup icon is shown instead.
+========================================================= */
+
+$staffLogoPath = $staffLogoPath ?? null;
+$staffLogoUrl  = null;
+
+if ($staffLogoPath === null) {
+
+    $logoDirs = [
+        '../assets/images',
+        '../assets/img',
+        '../assets/logo',
+        '../assets/uploads',
+        '../assets'
+    ];
+
+    $logoExts = ['png', 'svg', 'webp', 'jpg', 'jpeg'];
+
+    foreach ($logoDirs as $logoDir) {
+        foreach ($logoExts as $logoExt) {
+            $candidate = $logoDir . '/logo.' . $logoExt;
+            if (is_file(__DIR__ . '/' . $candidate)) {
+                $staffLogoPath = $candidate;
+                break 2;
+            }
+        }
+    }
+}
+
+if ($staffLogoPath !== null && is_file(__DIR__ . '/' . $staffLogoPath)) {
+    $staffLogoUrl = $staffLogoPath . '?v=' . (int)@filemtime(__DIR__ . '/' . $staffLogoPath);
+}
+
+/* Show the "LOCAL" text under the logo? Turn on if the logo has no wordmark. */
+$staffShowBrandText = $staffShowBrandText ?? ($staffLogoUrl === null);
 
 ?>
 
@@ -90,6 +148,21 @@ $currentPage = basename($_SERVER['PHP_SELF']);
     color: #E6DEC9;
 
     font-size: 1.5rem;
+}
+
+.sidebar-brand .sidebar-logo-img {
+
+    display: block;
+
+    width: auto;
+    height: auto;
+
+    max-width: 170px;
+    max-height: 90px;
+
+    object-fit: contain;
+
+    margin: 0 auto 4px;
 }
 
 .sidebar-brand span {
@@ -258,6 +331,12 @@ $currentPage = basename($_SERVER['PHP_SELF']);
     line-height: 1;
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
+}
+
+.staff-menu-toggle.staff-menu-toggle-docked {
+    position: static;
+    margin: 0 12px 0 0;
+    box-shadow: none;
 }
 
 .staff-menu-toggle:hover {
@@ -434,13 +513,27 @@ $currentPage = basename($_SERVER['PHP_SELF']);
             <i class="bi bi-x-lg"></i>
         </button>
 
-        <div class="logo-circle">
+        <?php if ($staffLogoUrl !== null): ?>
 
-            <i class="bi bi-cup-hot-fill"></i>
+            <img
+                src="<?= htmlspecialchars($staffLogoUrl, ENT_QUOTES, 'UTF-8') ?>"
+                alt="Logo"
+                class="sidebar-logo-img"
+            >
 
-        </div>
+        <?php else: ?>
 
-        <span>LOCAL</span>
+            <div class="logo-circle">
+
+                <i class="bi bi-cup-hot-fill"></i>
+
+            </div>
+
+        <?php endif; ?>
+
+        <?php if ($staffShowBrandText): ?>
+            <span>LOCAL</span>
+        <?php endif; ?>
 
     </div>
 
@@ -466,7 +559,28 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                 <i class="bi bi-grid-1x2-fill"></i>
 
                 <span>
-                    Order Queue
+                    Order
+                </span>
+
+            </a>
+
+        </li>
+
+        <!-- =================================================
+             WALK-IN ORDERS
+        ================================================== -->
+
+        <li class="nav-item">
+
+            <a
+                href="walk-in-order.php"
+                class="nav-link <?= $currentPage === 'walk-in-order.php' ? 'active' : '' ?>"
+            >
+
+                <i class="bi bi-shop"></i>
+
+                <span>
+                    Walk-in Order
                 </span>
 
             </a>
@@ -551,15 +665,39 @@ $currentPage = basename($_SERVER['PHP_SELF']);
         var toggles = document.querySelectorAll('.staff-menu-toggle');
 
         if (!toggles.length) {
-            var floating = document.createElement('button');
-            floating.type = 'button';
-            floating.className = 'staff-menu-toggle staff-menu-toggle-floating';
-            floating.setAttribute('aria-label', 'Open menu');
-            floating.setAttribute('aria-controls', 'staffSidebar');
-            floating.setAttribute('aria-expanded', 'false');
-            floating.innerHTML = '<i class="bi bi-list"></i>';
-            document.body.appendChild(floating);
-            toggles = [floating];
+            var toggle = document.createElement('button');
+            toggle.type = 'button';
+            toggle.className = 'staff-menu-toggle';
+            toggle.setAttribute('aria-label', 'Open menu');
+            toggle.setAttribute('aria-controls', 'staffSidebar');
+            toggle.setAttribute('aria-expanded', 'false');
+            toggle.innerHTML = '<i class="bi bi-list"></i>';
+
+            /* Put the burger INSIDE the top navbar so it never sits on top of it.
+               Only if no navbar is found does it float in the corner. */
+            var selectors = [
+                '.staff-navbar', '.admin-navbar', '#staffNavbar', '#adminNavbar',
+                'nav.navbar', '.navbar', 'header.navbar', 'body > nav', 'body > header'
+            ];
+            var navbar = null;
+
+            for (var i = 0; i < selectors.length && !navbar; i++) {
+                var found = document.querySelector(selectors[i]);
+                if (found && !sidebar.contains(found)) {
+                    navbar = found;
+                }
+            }
+
+            if (navbar) {
+                var host = navbar.querySelector(':scope > .container-fluid, :scope > .container') || navbar;
+                toggle.classList.add('staff-menu-toggle-docked');
+                host.insertBefore(toggle, host.firstChild);
+            } else {
+                toggle.classList.add('staff-menu-toggle-floating');
+                document.body.appendChild(toggle);
+            }
+
+            toggles = [toggle];
         }
 
         Array.prototype.forEach.call(toggles, function (btn) {

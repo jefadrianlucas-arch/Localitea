@@ -205,11 +205,21 @@ require_once '../includes/navbar.php';
 ?>
 
 <style>
+    /* Sticky footer: laging nasa ilalim ng screen ang footer kahit maikli ang content */
+    html {
+        min-height: 100%;
+    }
+
     body {
         background: #FDFBF7;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
     }
 
     .order-status-wrap {
+        flex: 1 0 auto;
+        width: 100%;
         max-width: 820px;
         margin: 0 auto;
         padding: 48px 16px;

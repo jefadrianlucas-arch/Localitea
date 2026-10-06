@@ -598,7 +598,7 @@ body {
 
 .profile-card {
     background: #ffffff;
-    border: 1px solid #E6DEC9;
+    border: 1px solid #8B6A55;
     border-radius: 18px;
     box-shadow: 0 5px 18px rgba(44,34,30,.05);
     overflow: hidden;
@@ -606,7 +606,7 @@ body {
 
 .profile-card-header {
     padding: 18px 20px;
-    border-bottom: 1px solid #EEE6DC;
+    border-bottom: 1px solid #8B6A55;
 }
 
 .profile-card-header h5 {
@@ -635,7 +635,7 @@ body {
     align-items: center;
     text-align: center;
     padding: 28px 20px 22px;
-    border-bottom: 1px solid #EEE6DC;
+    border-bottom: 1px solid #8B6A55;
 }
 
 .profile-avatar-large {
@@ -690,7 +690,7 @@ body {
     justify-content: space-between;
     gap: 15px;
     padding: 10px 0;
-    border-bottom: 1px solid #F1ECE6;
+    border-bottom: 1px solid #A98C77;
 }
 
 .profile-detail:last-child {
@@ -721,7 +721,7 @@ body {
 }
 
 .form-control {
-    border-color: #D8CCBE;
+    border-color: #8B6A55;
     border-radius: 10px;
     min-height: 43px;
 }
@@ -767,7 +767,7 @@ body {
 
 .password-note {
     background: #FDF8F2;
-    border: 1px solid #E6DEC9;
+    border: 1px solid #8B6A55;
     border-radius: 10px;
     padding: 10px 12px;
     color: #766C65;
@@ -1362,4 +1362,3 @@ document.addEventListener('DOMContentLoaded', function () {
 });
 </script>
 
-<?php require_once '../includes/footer.php'; ?>

@@ -994,24 +994,34 @@ require_once '../includes/header.php';
                         $orderStatus =
                             $notification['order_status'] ?? '';
 
+                        $orderId =
+                            (int)($notification['reference_id'] ?? 0);
+
+                        $notificationId =
+                            (int)($notification['id'] ?? 0);
+
+                        $orderCanBeViewed = $orderId > 0;
+
                         $orderStatusUrl =
                             'orders.php';
 
-                        if (
-                            in_array(
-                                $orderStatus,
-                                [
-                                    'pending_verification',
-                                    'confirmed',
-                                    'preparing',
-                                    'ready'
-                                ],
-                                true
-                            )
-                        ) {
+                        $orderViewMessage =
+                            'Order not found or finished.';
+
+                        if ($orderCanBeViewed) {
+
+                            $orderQuery = [
+                                'order_id' => $orderId
+                            ];
+
+                            if ($notificationId > 0) {
+                                $orderQuery['notification_id'] =
+                                    $notificationId;
+                            }
+
                             $orderStatusUrl =
-                                'orders.php?status=' .
-                                urlencode($orderStatus);
+                                'orders.php?' .
+                                http_build_query($orderQuery);
                         }
 
                         $notificationDate =
@@ -1135,27 +1145,41 @@ require_once '../includes/header.php';
 
                             <div class="notification-card-actions">
 
-                                <?php if (
-                                    !empty(
-                                        $notification['reference_id']
-                                    ) &&
-                                    !empty(
-                                        $notification['order_number']
-                                    )
-                                ): ?>
+                                <?php if ($orderId > 0): ?>
 
-                                    <a
-                                        href="<?= htmlspecialchars(
-                                            $orderStatusUrl
-                                        ) ?>"
-                                        class="btn-view-order"
-                                    >
+                                    <?php if ($orderCanBeViewed): ?>
 
-                                        <i class="bi bi-eye"></i>
+                                        <a
+                                            href="<?= htmlspecialchars(
+                                                $orderStatusUrl
+                                            ) ?>"
+                                            class="btn-view-order"
+                                        >
 
-                                        View Order
+                                            <i class="bi bi-eye"></i>
 
-                                    </a>
+                                            View Order
+
+                                        </a>
+
+                                    <?php else: ?>
+
+                                        <button
+                                            type="button"
+                                            class="btn-view-order order-not-found-button"
+                                            data-order-message="<?= htmlspecialchars(
+                                                $orderViewMessage,
+                                                ENT_QUOTES
+                                            ) ?>"
+                                        >
+
+                                            <i class="bi bi-eye"></i>
+
+                                            View Order
+
+                                        </button>
+
+                                    <?php endif; ?>
 
                                 <?php endif; ?>
 
@@ -1393,7 +1417,7 @@ require_once '../includes/header.php';
 </div>
 
 <script>
-(function () {
+function initAdminNotificationPage() {
 
     const NOTIFICATIONS_PER_PAGE = 10;
 
@@ -1539,30 +1563,33 @@ require_once '../includes/header.php';
 
     function orderStatusUrl(notification) {
 
-        const allowedStatuses = [
-            'pending_verification',
-            'confirmed',
-            'preparing',
-            'ready'
-        ];
-
         if (
-            notification.reference_id &&
-            notification.order_number &&
-            allowedStatuses.includes(
-                notification.order_status
-            )
+            !notification
+            || Number(notification.reference_id || 0) <= 0
         ) {
+            return '';
+        }
 
-            return (
-                'orders.php?status=' +
-                encodeURIComponent(
-                    notification.order_status
-                )
+        const params = new URLSearchParams();
+
+        /*
+         * Pass the exact order ID to orders.php and let that page resolve
+         * the order's current status. This keeps View Order working even
+         * when the notification contains an older/stale status value.
+         */
+        params.set(
+            'order_id',
+            String(notification.reference_id)
+        );
+
+        if (Number(notification.id || 0) > 0) {
+            params.set(
+                'notification_id',
+                String(notification.id)
             );
         }
 
-        return 'orders.php';
+        return 'orders.php?' + params.toString();
     }
 
     function formatDate(value) {
@@ -2019,22 +2046,52 @@ require_once '../includes/header.php';
                         `;
                     }
 
+                    const canViewOrder =
+                        Number(notification.reference_id || 0) > 0
+                        && notification.order_status
+                        && [
+                            'pending_verification',
+                            'order_queue',
+                            'confirmed',
+                            'preparing',
+                            'ready'
+                        ].includes(
+                            notification.order_status
+                        );
+
+                    const hasReferencedOrder =
+                        Number(notification.reference_id || 0) > 0;
+
                     const actionHtml =
-                        (
-                            notification.reference_id &&
-                            notification.order_number
+                        hasReferencedOrder
+                        ? (
+                            canViewOrder
+                            ? `
+                                <a
+                                    href="${escapeHtml(orderUrl)}"
+                                    class="btn-view-order"
+                                >
+
+                                    <i class="bi bi-eye"></i>
+
+                                    View Order
+
+                                </a>
+                            `
+                            : `
+                                <button
+                                    type="button"
+                                    class="btn-view-order order-not-found-button"
+                                    data-order-message="Order not found or is finished."
+                                >
+
+                                    <i class="bi bi-eye"></i>
+
+                                    View Order
+
+                                </button>
+                            `
                         )
-                        ? `
-                            <a
-                                href="${escapeHtml(
-                                    orderUrl
-                                )}"
-                                class="btn-view-order"
-                            >
-                                <i class="bi bi-eye"></i>
-                                View Order
-                            </a>
-                        `
                         : '';
 
                     const readHtml =
@@ -2272,6 +2329,31 @@ require_once '../includes/header.php';
             );
         }
     }
+
+    document.addEventListener(
+        'click',
+        function (event) {
+
+            const orderNotFoundButton =
+                event.target.closest(
+                    '.order-not-found-button'
+                );
+
+            if (!orderNotFoundButton) {
+                return;
+            }
+
+            event.preventDefault();
+
+            showNotificationToast(
+                orderNotFoundButton.getAttribute(
+                    'data-order-message'
+                ) ||
+                'Order not found or finished.'
+            );
+        }
+    );
+
 
     document.addEventListener(
         'click',
@@ -2637,7 +2719,7 @@ require_once '../includes/header.php';
         fetchAllNotifications();
     }
 
-})();
-</script>
+}
 
-<?php require_once '../includes/footer.php'; ?>
+initAdminNotificationPage();
+</script>

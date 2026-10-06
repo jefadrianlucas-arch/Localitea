@@ -703,6 +703,40 @@ if ($maxSales <= 0) {
     $maxSales = 1;
 }
 
+/*
+ * SALES OVERVIEW CHART SCALE ONLY
+ * Creates clean, rounded Y-axis values like ₱800, ₱1.6K, ₱2.4K, etc.
+ */
+$chartStep = max(100, (int)(ceil(($maxSales / 4) / 100) * 100));
+$chartMax = $chartStep * 4;
+
+/* =========================================================
+   SALES OVERVIEW DETAILS
+========================================================= */
+$overviewTotalOrders = 0;
+$activePeriods = 0;
+$bestPeriod = null;
+
+foreach ($salesOverview as $p) {
+    $overviewTotalOrders += (int)$p['orders'];
+
+    if ($p['sales'] > 0) {
+        $activePeriods++;
+    }
+
+    if ($bestPeriod === null || $p['sales'] > $bestPeriod['sales']) {
+        $bestPeriod = $p;
+    }
+}
+
+$averagePerPeriod = count($salesOverview) > 0
+    ? $totalSales / count($salesOverview)
+    : 0;
+
+$periodUnitLabel = $report_mode === 'daily'
+    ? 'Day'
+    : ($report_mode === 'weekly' ? 'Week' : 'Month');
+
 /* =========================================================
    REPORT TITLE
 ========================================================= */
@@ -804,7 +838,7 @@ body {
 
 .sales-header h2 {
     color: #4A3525;
-    font-weight: 800;
+    font-weight: 600;
     margin-bottom: 5px;
 }
 
@@ -831,14 +865,14 @@ body {
 .filter-title {
     color: #4A3525;
     font-size: 1.05rem;
-    font-weight: 700;
+    font-weight: 500;
     margin-bottom: 15px;
 }
 
 .filter-label {
     color: #77706A;
     font-size: 0.84rem;
-    font-weight: 700;
+    font-weight: 500;
     margin-bottom: 6px;
     display: block;
 }
@@ -872,7 +906,7 @@ body {
     border-radius: 9px;
     padding: 9px 16px;
     font-size: 0.82rem;
-    font-weight: 700;
+    font-weight: 500;
 }
 
 .btn-generate:hover {
@@ -887,7 +921,7 @@ body {
     border-radius: 9px;
     padding: 9px 16px;
     font-size: 0.82rem;
-    font-weight: 700;
+    font-weight: 500;
 }
 
 .btn-print:hover {
@@ -913,13 +947,13 @@ body {
 .summary-label {
     color: #8a7f75;
     font-size: 0.76rem;
-    font-weight: 700;
+    font-weight: 500;
 }
 
 .summary-value {
     color: #4A3525;
     font-size: 1.55rem;
-    font-weight: 800;
+    font-weight: 600;
     margin-top: 5px;
 }
 
@@ -949,7 +983,7 @@ body {
 .report-title {
     color: #2c221e;
     font-size: 1.05rem;
-    font-weight: 800;
+    font-weight: 600;
     margin: 0;
 }
 
@@ -983,7 +1017,7 @@ body {
     border-radius: 8px;
     padding: 7px 13px;
     font-size: 0.78rem;
-    font-weight: 700;
+    font-weight: 500;
     cursor: pointer;  
 }
 
@@ -1000,32 +1034,103 @@ body {
 
 /* =========================================================
    SALES OVERVIEW
+   GRAPH ONLY — clean/plain presentation
 ========================================================= */
 
 .overview-card {
-    border: 2px solid #6F4E37;
-    border-radius: 12px;
-    background: #fffdf9;
-    padding: 18px;
+    border: 0;
+    border-radius: 0;
+    background: #ffffff;
+    padding: 4px 0 0;
 }
 
 .overview-head {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 18px;
+    gap: 15px;
+    margin-bottom: 16px;
 }
 
 .overview-title {
     color: #4A3525;
-    font-size: 0.9rem;
-    font-weight: 800;
+    font-size: 0.95rem;
+    font-weight: 600;
 }
 
 .overview-total {
     color: #4A3525;
     font-size: 1rem;
-    font-weight: 800;
+    font-weight: 600;
+}
+
+/* Tabs remain part of Sales Overview but stay simple. */
+.mode-tabs {
+    margin-bottom: 12px !important;
+}
+
+/* Main chart area */
+.sales-chart-area {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    height: 315px;
+    gap: 10px;
+}
+
+.sales-chart-yaxis {
+    flex: 0 0 52px;
+    height: 250px;
+    margin-top: 24px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    align-items: flex-end;
+    padding: 0 2px 0 0;
+    box-sizing: border-box;
+}
+
+.sales-chart-yaxis span {
+    color: #77706A;
+    font-size: 0.68rem;
+    font-weight: 500;
+    line-height: 1;
+    white-space: nowrap;
+}
+
+.sales-chart-viewport {
+    position: relative;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: auto;
+}
+
+.sales-chart-plot {
+    position: relative;
+    min-width: 100%;
+    height: 315px;
+    box-sizing: border-box;
+}
+
+.sales-chart-grid {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 24px;
+    height: 250px;
+    pointer-events: none;
+    z-index: 0;
+    background:
+        repeating-linear-gradient(
+            to bottom,
+            transparent 0,
+            transparent calc(25% - 1px),
+            #E7E0D9 calc(25% - 1px),
+            #E7E0D9 25%
+        );
+    border-bottom: 1px solid #E7E0D9;
 }
 
 .chart {
@@ -1033,63 +1138,108 @@ body {
     z-index: 1;
     display: flex;
     align-items: flex-end;
-    gap: 3px;
-    min-height: 250px;
-    padding: 20px 4px 4px;
+    gap: 12px;
+    min-height: 0;
+    height: 315px;
+    padding: 0 8px 4px;
     width: 100%;
+    box-sizing: border-box;
     overflow: hidden;
 }
 
 .chart-column {
-    min-width: 0;
+    min-width: 58px;
     flex: 1 1 0;
+    height: 315px;
     display: flex;
     flex-direction: column;
     justify-content: flex-end;
     align-items: center;
-    gap: 5px;
+    gap: 6px;
+    position: relative;
 }
 
 .chart-value {
-    color: #000000;
-    font-size: 0.84rem;
-    font-weight: 800;
+    color: #4A3525;
+    font-size: 0.68rem;
+    font-weight: 600;
     white-space: nowrap;
+    line-height: 1;
+    min-height: 12px;
 }
 
 .chart-bar-wrap {
     width: 100%;
-    height: 165px;
+    height: 250px;
     display: flex;
     align-items: flex-end;
     justify-content: center;
 }
 
 .chart-bar {
-    width: 70%;
-    max-width: 32px;
+    position: relative;
+    width: min(48px, 72%);
+    max-width: 48px;
     min-height: 3px;
-    background: #6f4e37;
-    border-radius: 6px 6px 2px 2px;
-    transition: height .2s ease;
+    background: #6F4E37;
+    border-radius: 9px 9px 3px 3px;
+    transition: height .2s ease, transform .15s ease;
+    cursor: default;
+}
+
+.chart-bar:hover {
+    transform: translateY(-2px);
+}
+
+.chart-bar.is-best {
+    background: #4A3525;
+}
+
+.chart-bar::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 9px);
+    transform: translateX(-50%) translateY(4px);
+    min-width: max-content;
+    padding: 8px 11px;
+    border-radius: 8px;
+    background: #2C221E;
+    color: #ffffff;
+    font-size: 0.72rem;
+    font-weight: 500;
+    line-height: 1.25;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .15s ease, transform .15s ease;
+    z-index: 50;
+    box-shadow: 0 5px 16px rgba(44,34,30,.16);
+}
+
+.chart-bar:hover::after {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
 }
 
 .chart-label {
-    color: #000000;
-    font-size: 0.78rem;
-    font-weight: 700;
+    color: #6F665F;
+    font-size: 0.68rem;
+    font-weight: 500;
     text-align: center;
     white-space: nowrap;
     line-height: 1.15;
+    min-height: 13px;
 }
 
-/* Weekly view: give each period enough room so date ranges stay readable. */
+.chart-orders {
+    display: none;
+}
+
+/* Weekly view */
 .chart.chart-weekly {
-    overflow-x: auto;
-    overflow-y: hidden;
+    overflow: visible;
     justify-content: flex-start;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: thin;
 }
 
 .chart.chart-weekly .chart-column {
@@ -1099,7 +1249,7 @@ body {
 
 .chart.chart-weekly .chart-label {
     white-space: normal;
-    min-height: 30px;
+    min-height: 28px;
     display: flex;
     align-items: flex-start;
     justify-content: center;
@@ -1107,14 +1257,10 @@ body {
     line-height: 1.15;
 }
 
-/* Monthly view: keep one month per column so Jan 2026, Feb 2026, etc.
-   never overlap when the selected range spans many months. */
+/* Monthly view */
 .chart.chart-monthly {
-    overflow-x: auto;
-    overflow-y: hidden;
+    overflow: visible;
     justify-content: flex-start;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: thin;
 }
 
 .chart.chart-monthly .chart-column {
@@ -1127,6 +1273,149 @@ body {
     max-width: 78px;
     text-align: center;
     line-height: 1.15;
+}
+
+/* Keep the existing overview highlights, but make them quieter. */
+.overview-highlights {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 14px;
+}
+
+.overview-highlight {
+    background: #FCF9F6;
+    border: 1px solid #E5DAD0;
+    border-radius: 8px;
+    padding: 10px 12px;
+    min-width: 0;
+}
+
+.overview-highlight small {
+    display: block;
+    color: #8A7F75;
+    font-size: 0.64rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: .25px;
+    margin-bottom: 3px;
+}
+
+.overview-highlight strong {
+    color: #2C221E;
+    font-size: 0.84rem;
+    font-weight: 500;
+    overflow-wrap: anywhere;
+}
+
+.overview-detail-table {
+    margin-bottom: 0;
+    width: 100%;
+}
+
+.overview-detail-table th {
+    color: #8a7f75;
+    font-size: 0.7rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    white-space: nowrap;
+    border-bottom: 2px solid #6F4E37;
+    padding: 9px 10px;
+}
+
+.overview-detail-table td {
+    color: #4A3525;
+    font-size: 0.8rem;
+    font-weight: 400;
+    border-bottom: 1px solid #E5DAD0;
+    padding: 9px 10px;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+.overview-detail-table tr.is-empty td {
+    color: #B0A79E;
+}
+
+.overview-detail-table tfoot td {
+    font-weight: 600;
+    border-top: 2px solid #6F4E37;
+    border-bottom: 0;
+    background: #F7F1E8;
+}
+
+@media (max-width: 767.98px) {
+
+    .overview-card {
+        padding-left: 0;
+        padding-right: 0;
+    }
+
+    .sales-chart-area {
+        height: 285px;
+        gap: 7px;
+    }
+
+    .sales-chart-yaxis {
+        flex-basis: 45px;
+        height: 225px;
+        margin-top: 22px;
+    }
+
+    .sales-chart-yaxis span {
+        font-size: 0.62rem;
+    }
+
+    .sales-chart-plot {
+        height: 285px;
+    }
+
+    .sales-chart-grid {
+        top: 22px;
+        height: 225px;
+    }
+
+    .chart {
+        height: 285px;
+        padding-left: 4px;
+        padding-right: 4px;
+        gap: 8px;
+    }
+
+    .chart-column {
+        height: 285px;
+        min-width: 52px;
+    }
+
+    .chart-bar-wrap {
+        height: 225px;
+    }
+
+    .chart-bar {
+        width: min(42px, 70%);
+    }
+
+    .chart-value {
+        font-size: 0.62rem;
+    }
+
+    .chart-label {
+        font-size: 0.62rem;
+    }
+
+    .chart.chart-weekly .chart-column {
+        flex-basis: 74px;
+        min-width: 74px;
+    }
+
+    .chart.chart-monthly .chart-column {
+        flex-basis: 70px;
+        min-width: 70px;
+    }
+
+    .overview-highlights {
+        grid-template-columns: 1fr;
+    }
 }
 
 /* =========================================================
@@ -1144,7 +1433,7 @@ body {
 .transaction-title {
     color: #2c221e;
     font-size: 0.95rem;
-    font-weight: 800;
+    font-weight: 600;
     margin-bottom: 12px;
 }
 
@@ -1173,7 +1462,7 @@ body {
 .completed-transaction-filter-group label {
     color: #7B6D62;
     font-size: .68rem;
-    font-weight: 800;
+    font-weight: 600;
     text-transform: uppercase;
     letter-spacing: .3px;
 }
@@ -1223,7 +1512,7 @@ body {
     height: 38px;
     border-radius: 8px;
     font-size: .82rem;
-    font-weight: 700;
+    font-weight: 500;
     padding: 7px 13px;
 }
 
@@ -1311,7 +1600,7 @@ body {
     background: #F7F1E8;
     color: #6F4E37;
     font-size: 0.68rem;
-    font-weight: 800;
+    font-weight: 600;
     line-height: 1;
 }
 
@@ -1322,7 +1611,7 @@ body {
 .transaction-order-number {
     color: #2C221E;
     font-size: 0.82rem;
-    font-weight: 800;
+    font-weight: 600;
     line-height: 1.15;
     overflow-wrap: anywhere;
 }
@@ -1331,7 +1620,7 @@ body {
     margin-top: 2px;
     color: #8A7F75;
     font-size: 0.67rem;
-    font-weight: 500;
+    font-weight: 400;
     line-height: 1.1;
 }
 
@@ -1343,7 +1632,7 @@ body {
     padding: 6px 10px;
     border-radius: 7px;
     font-size: 0.78rem;
-    font-weight: 800;
+    font-weight: 600;
     line-height: 1;
     white-space: nowrap;
 }
@@ -1363,7 +1652,7 @@ body {
 .transaction-amount-cell {
     color: #4A3525;
     font-size: 0.86rem;
-    font-weight: 800;
+    font-weight: 600;
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
 }
@@ -1381,7 +1670,7 @@ body {
 
 .transaction-date {
     font-size: 0.75rem;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .transaction-time {
@@ -1396,6 +1685,7 @@ body {
 .transaction-table th {
     color: #8a7f75;
     font-size: 0.7rem;
+    font-weight: 500;
     text-transform: uppercase;
     white-space: nowrap;
     border-bottom: 2px solid #6F4E37;
@@ -1411,7 +1701,7 @@ body {
 }
 
 .transaction-table .amount {
-    font-weight: 800;
+    font-weight: 600;
 }
 
 .payment-badge {
@@ -1421,7 +1711,7 @@ body {
     background: #F7F1E8;
     color: #6f4e37;
     font-size: 0.68rem;
-    font-weight: 700;
+    font-weight: 500;
 }
 
 .btn-view-transaction {
@@ -1431,7 +1721,7 @@ body {
     background: #ffffff;
     color: #4A3525;
     font-size: 0.72rem;
-    font-weight: 700;
+    font-weight: 500;
     white-space: nowrap;
 }
 
@@ -1462,7 +1752,7 @@ body {
     color: #4A3525;
     text-decoration: none;
     font-size: 0.72rem;
-    font-weight: 700;
+    font-weight: 500;
 }
 
 .transaction-page-link:hover {
@@ -1488,9 +1778,109 @@ body {
     text-align: center;
 }
 
+.transaction-detail-section {
+    margin-bottom: 20px;
+}
+
+.transaction-detail-section:last-child {
+    margin-bottom: 0;
+}
+
+.transaction-detail-section-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 10px;
+    color: #4A3525;
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .35px;
+}
+
+.transaction-detail-section-title::after {
+    content: '';
+    flex: 1 1 auto;
+    height: 1px;
+    background: #E5DAD0;
+}
+
+.transaction-detail-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-bottom: 0;
+}
+
+.transaction-detail-box {
+    min-width: 0;
+    background: #FCF9F6;
+    border: 1px solid #DCCFC4;
+    border-radius: 10px;
+    padding: 12px 13px;
+    box-shadow: 0 1px 2px rgba(67, 48, 36, .03);
+}
+
+.transaction-detail-box small {
+    display: block;
+    margin: 0 0 5px;
+    color: #8A7F75;
+    font-size: 0.64rem;
+    font-weight: 600;
+    line-height: 1.2;
+    text-transform: uppercase;
+    letter-spacing: .25px;
+}
+
+.transaction-detail-box strong {
+    display: block;
+    max-width: 100%;
+    color: #2C221E;
+    font-size: 0.86rem;
+    font-weight: 500;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+.transaction-detail-box.highlight {
+    background: #F7F1E8;
+    border-color: #CDB9A8;
+}
+
+.transaction-status-completed {
+    display: inline-flex !important;
+    align-items: center;
+    width: fit-content;
+    padding: 5px 9px;
+    border-radius: 999px;
+    background: #EAF6EE;
+    border: 1px solid #B9DCC4;
+    color: #2F6E3E !important;
+    font-size: 0.72rem !important;
+    font-weight: 600 !important;
+    line-height: 1 !important;
+    white-space: nowrap;
+}
+
+.transaction-payment-value {
+    display: inline-flex !important;
+    align-items: center;
+    width: fit-content;
+    padding: 5px 9px;
+    border-radius: 7px;
+    background: #F7F1E8;
+    border: 1px solid #D9C5B4;
+    color: #6F4E37 !important;
+    font-size: 0.74rem !important;
+    font-weight: 600 !important;
+    line-height: 1 !important;
+    white-space: nowrap;
+}
+
 .transaction-detail-item {
-    padding: 10px 0;
-    border-bottom: 2px dashed #6F4E37;
+    padding: 12px 0;
+    border-bottom: 1px solid #E5DAD0;
 }
 
 .transaction-detail-item:last-child {
@@ -1498,48 +1888,37 @@ body {
 }
 
 .transaction-detail-item-name {
-    color: #4A3525;
-    font-size: 0.82rem;
-    font-weight: 700;
+    color: #2C221E;
+    font-size: 0.84rem;
+    font-weight: 500;
+    line-height: 1.35;
 }
 
 .transaction-detail-item-info {
-    color: #8a7f75;
-    font-size: 0.72rem;
-    margin-top: 3px;
-    line-height: 1.5;
+    color: #7B7068;
+    font-size: 0.73rem;
+    margin-top: 4px;
+    line-height: 1.55;
 }
 
 .transaction-detail-item-price {
+    flex: 0 0 auto;
     color: #4A3525;
-    font-size: 0.8rem;
-    font-weight: 800;
+    font-size: 0.82rem;
+    font-weight: 600;
     white-space: nowrap;
 }
 
-.transaction-detail-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px;
-    margin-bottom: 18px;
+.transaction-items-card {
+    padding: 2px 14px;
+    background: #FFFDFC;
+    border: 1px solid #E1D6CC;
+    border-radius: 11px;
 }
 
-.transaction-detail-box {
-    background: #FDF8F2;
-    border: 2px solid #6F4E37;
-    border-radius: 9px;
-    padding: 11px;
-}
-
-.transaction-detail-box small {
-    display: block;
-    color: #8a7f75;
-    font-size: 0.65rem;
-    margin-bottom: 4px;
-}
-
-.transaction-detail-box strong {
-    color: #4A3525;
+.transaction-items-empty {
+    padding: 14px 0;
+    color: #8A7F75;
     font-size: 0.78rem;
 }
 
@@ -1547,31 +1926,42 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-top: 10px;
-    padding-top: 12px;
-    border-top: 2px solid #6F4E37;
+    gap: 15px;
+    margin-top: 16px;
+    padding: 13px 14px;
+    border: 1px solid #D7C3B1;
+    border-radius: 10px;
+    background: #F7F1E8;
 }
 
 .transaction-detail-total span {
-    color: #8a7f75;
-    font-size: 0.78rem;
+    color: #6F6259;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .25px;
 }
 
 .transaction-detail-total strong {
     color: #4A3525;
-    font-size: 1rem;
+    font-size: 1.15rem;
+    font-weight: 600;
+    line-height: 1.1;
+    white-space: nowrap;
 }
 
 .transaction-payment-proof {
     margin-top: 18px;
-    padding-top: 14px;
-    border-top: 2px solid #6F4E37;
+    padding: 15px;
+    border: 1px solid #E1D6CC;
+    border-radius: 11px;
+    background: #FCF9F6;
 }
 
 .transaction-payment-proof h6 {
     color: #4A3525;
     font-size: 0.8rem;
-    font-weight: 800;
+    font-weight: 600;
     margin-bottom: 9px;
 }
 
@@ -1585,7 +1975,7 @@ body {
     background: #ffffff;
     color: #4A3525;
     font-size: 0.74rem;
-    font-weight: 700;
+    font-weight: 500;
     cursor: pointer;
     transition: background .15s ease, border-color .15s ease;
 }
@@ -1646,6 +2036,7 @@ body {
 .report-footer-summary strong {
     color: #4A3525;
     font-size: 0.88rem;
+    font-weight: 600;
 }
 
 
@@ -1698,7 +2089,7 @@ body {
     padding-top: 3px;
     font-size: .9rem;
     line-height: 1.45;
-    font-weight: 700;
+    font-weight: 500;
 }
 
 .sales-report-toast-close {
@@ -1979,7 +2370,7 @@ body {
         background: #F7F1E8;
         color: #6F4E37;
         font-size: 0.62rem;
-        font-weight: 800;
+        font-weight: 600;
         line-height: 1;
     }
 
@@ -1992,7 +2383,7 @@ body {
     .transaction-order-number {
         color: #2C221E;
         font-size: 0.80rem;
-        font-weight: 800;
+        font-weight: 600;
         line-height: 1.15;
         overflow-wrap: anywhere;
     }
@@ -2001,7 +2392,7 @@ body {
         margin-top: 2px;
         color: #8A7F75;
         font-size: 0.62rem;
-        font-weight: 500;
+        font-weight: 400;
         line-height: 1.1;
         white-space: nowrap;
     }
@@ -2012,7 +2403,7 @@ body {
         text-align: left !important;
         color: #4A3525;
         font-size: 0.86rem;
-        font-weight: 800;
+        font-weight: 600;
         white-space: nowrap;
         padding-top: 5px !important;
     }
@@ -2033,7 +2424,7 @@ body {
         padding: 4px 7px !important;
         border-radius: 6px !important;
         font-size: 0.64rem !important;
-        font-weight: 800 !important;
+        font-weight: 600 !important;
         line-height: 1 !important;
         white-space: nowrap !important;
     }
@@ -2066,7 +2457,7 @@ body {
 
     .transaction-date {
         font-size: 0.64rem;
-        font-weight: 600;
+        font-weight: 500;
         line-height: 1.2;
     }
 
@@ -2297,7 +2688,7 @@ body {
             0.80rem
         ) !important;
 
-        font-weight: 800 !important;
+        font-weight: 600 !important;
 
         line-height: 1.15 !important;
 
@@ -2340,7 +2731,7 @@ body {
             0.86rem
         ) !important;
 
-        font-weight: 800 !important;
+        font-weight: 600 !important;
 
         line-height: 1.1 !important;
 
@@ -2588,6 +2979,189 @@ body {
     }
 }
 
+
+/* =========================================================
+   COMPLETED TRANSACTION DETAILS MODAL
+   Cleaner hierarchy and lighter field treatment.
+========================================================= */
+
+.transaction-details-dialog {
+    max-width: 760px;
+}
+
+.transaction-detail-modal {
+    border: 0;
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: 0 18px 55px rgba(44, 34, 30, .24);
+    background: #FFFFFF;
+}
+
+.transaction-detail-modal .modal-header {
+    padding: 15px 18px;
+    border-bottom: 1px solid #E5DAD0;
+    background: #FFFCF9;
+}
+
+.transaction-detail-modal .modal-title {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    color: #4A3525;
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.transaction-detail-modal .modal-title i {
+    font-size: 0.95rem;
+}
+
+.transaction-detail-modal .modal-body {
+    padding: 18px;
+    background: #FFFFFF;
+}
+
+.transaction-detail-modal .modal-footer {
+    padding: 12px 18px;
+    border-top: 1px solid #E5DAD0;
+    background: #FFFCF9;
+}
+
+.transaction-detail-modal .modal-footer .btn-secondary {
+    min-width: 76px;
+    border: 1px solid #BFAE9F;
+    border-radius: 8px;
+    background: #FFFFFF;
+    color: #4A3525;
+    font-size: 0.78rem;
+    font-weight: 500;
+}
+
+.transaction-detail-modal .modal-footer .btn-secondary:hover {
+    background: #F7F1E8;
+    border-color: #8B6A55;
+    color: #4A3525;
+}
+
+.transaction-detail-modal .btn-close {
+    opacity: .55;
+}
+
+.transaction-detail-modal .btn-close:hover {
+    opacity: .9;
+}
+
+.transaction-detail-modal .transaction-payment-proof h6 {
+    margin: 0 0 9px;
+    color: #4A3525;
+    font-size: 0.76rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .25px;
+}
+
+.transaction-detail-modal .btn-view-payment-proof {
+    border: 1px solid #CBB7A7;
+    border-radius: 8px;
+    padding: 8px 11px;
+    background: #FFFFFF;
+    color: #4A3525;
+    font-size: 0.73rem;
+    font-weight: 500;
+}
+
+.transaction-detail-modal .btn-view-payment-proof:hover,
+.transaction-detail-modal .btn-view-payment-proof[aria-expanded="true"] {
+    background: #F7F1E8;
+    border-color: #8B6A55;
+    color: #4A3525;
+}
+
+.transaction-detail-modal .gcash-proof-dropdown {
+    margin-top: 10px;
+    padding: 10px;
+    border: 1px solid #DCCFC4;
+    border-radius: 10px;
+    background: #FFFFFF;
+}
+
+.transaction-detail-modal .gcash-proof-dropdown img {
+    border: 1px solid #DCCFC4;
+    border-radius: 8px;
+}
+
+@media (max-width: 576px) {
+    .transaction-detail-modal .modal-body {
+        padding: 14px;
+    }
+
+    .transaction-detail-grid {
+        gap: 8px;
+    }
+
+    .transaction-detail-box {
+        padding: 10px 11px;
+    }
+
+    .transaction-detail-box strong {
+        font-size: 0.82rem;
+    }
+
+    .transaction-detail-total {
+        padding: 12px;
+    }
+
+    .transaction-detail-total strong {
+        font-size: 1.02rem;
+    }
+
+    .transaction-items-card {
+        padding: 2px 11px;
+    }
+}
+
+
+/* =========================================================
+   GCASH PAYMENT PROOF INDICATOR IN COMPLETED TRANSACTIONS
+   Shows at a glance when a completed GCash transaction has
+   an uploaded payment screenshot. The full proof remains
+   accessible inside View Details.
+========================================================= */
+.transaction-payment-stack {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    max-width: 100%;
+}
+
+.transaction-proof-indicator {
+    display: inline-flex;
+    align-items: center;
+    color: #6F4E37;
+    font-size: 0.62rem;
+    font-weight: 500;
+    line-height: 1;
+    white-space: nowrap;
+}
+
+@media (max-width: 991.98px) {
+    .transaction-proof-indicator {
+        font-size: 0.60rem;
+    }
+}
+
+@media (max-width: 767.98px) {
+    .transaction-payment-stack {
+        gap: 3px;
+        max-width: 100%;
+    }
+
+    .transaction-proof-indicator {
+        font-size: 0.58rem;
+    }
+}
+
 </style>
 
 
@@ -2830,46 +3404,163 @@ body {
 
                     <?php else: ?>
 
-                        <div class="chart <?= $report_mode === 'weekly' ? 'chart-weekly' : ($report_mode === 'monthly' ? 'chart-monthly' : '') ?>">
+                        <div class="sales-chart-area">
 
-                            <?php foreach ($salesOverview as $period): ?>
+                            <!-- Y AXIS -->
+                            <div class="sales-chart-yaxis" aria-hidden="true">
+                                <span>₱<?= number_format($chartMax, 0) ?></span>
+                                <span>₱<?= number_format($chartStep * 3, 0) ?></span>
+                                <span>₱<?= number_format($chartStep * 2, 0) ?></span>
+                                <span>₱<?= number_format($chartStep, 0) ?></span>
+                                <span>₱0</span>
+                            </div>
 
-                                <?php
+                            <!-- GRAPH -->
+                            <div class="sales-chart-viewport">
+                                <div class="sales-chart-plot">
 
-                                $heightPercentage =
-                                    ($period['sales'] / $maxSales) * 100;
+                                    <div class="sales-chart-grid" aria-hidden="true"></div>
 
-                                if (
-                                    $period['sales'] > 0 &&
-                                    $heightPercentage < 5
-                                ) {
-                                    $heightPercentage = 5;
-                                }
+                                    <div class="chart <?= $report_mode === 'weekly' ? 'chart-weekly' : ($report_mode === 'monthly' ? 'chart-monthly' : '') ?>">
 
-                                ?>
+                                        <?php foreach ($salesOverview as $period): ?>
 
-                                <div class="chart-column">
+                                            <?php
+                                            $heightPercentage =
+                                                ($period['sales'] / $chartMax) * 100;
 
-                                    <div class="chart-value">
-                                        ₱<?= number_format($period['sales'], 0) ?>
-                                    </div>
+                                            if (
+                                                $period['sales'] > 0 &&
+                                                $heightPercentage < 3
+                                            ) {
+                                                $heightPercentage = 3;
+                                            }
 
-                                    <div class="chart-bar-wrap">
+                                            $isBest = $bestPeriod
+                                                && $period['sales'] > 0
+                                                && $period['sales'] === $bestPeriod['sales'];
 
-                                        <div
-                                            class="chart-bar"
-                                            style="height: <?= $heightPercentage ?>%;"
-                                        ></div>
+                                            $tooltipText =
+                                                $period['label']
+                                                . ' • Sales: ₱'
+                                                . number_format($period['sales'], 2)
+                                                . ' • '
+                                                . (int)$period['orders']
+                                                . ' order'
+                                                . ((int)$period['orders'] === 1 ? '' : 's');
+                                            ?>
 
-                                    </div>
+                                            <div class="chart-column">
 
-                                    <div class="chart-label">
-                                        <?= htmlspecialchars($period['label']) ?>
+                                                <div class="chart-value">
+                                                    ₱<?= number_format($period['sales'], 0) ?>
+                                                </div>
+
+                                                <div class="chart-bar-wrap">
+
+                                                    <div
+                                                        class="chart-bar <?= $isBest ? 'is-best' : '' ?>"
+                                                        style="height: <?= $heightPercentage ?>%;"
+                                                        data-tooltip="<?= htmlspecialchars($tooltipText, ENT_QUOTES, 'UTF-8') ?>"
+                                                        aria-label="<?= htmlspecialchars($tooltipText, ENT_QUOTES, 'UTF-8') ?>"
+                                                    ></div>
+
+                                                </div>
+
+                                                <div class="chart-label">
+                                                    <?= htmlspecialchars($period['label']) ?>
+                                                </div>
+
+                                                <div class="chart-orders">
+                                                    <?= (int)$period['orders'] ?> order<?= (int)$period['orders'] === 1 ? '' : 's' ?>
+                                                </div>
+
+                                            </div>
+
+                                        <?php endforeach; ?>
+
                                     </div>
 
                                 </div>
+                            </div>
 
-                            <?php endforeach; ?>
+                        </div>
+
+                        <!-- OVERVIEW HIGHLIGHTS -->
+                        <div class="overview-highlights">
+
+                            <div class="overview-highlight">
+                                <small>Best <?= $periodUnitLabel ?></small>
+                                <strong>
+                                    <?= ($bestPeriod && $bestPeriod['sales'] > 0)
+                                        ? htmlspecialchars($bestPeriod['label']) . ' – ₱' . number_format($bestPeriod['sales'], 2)
+                                        : 'N/A' ?>
+                                </strong>
+                            </div>
+
+                            <div class="overview-highlight">
+                                <small>Average per <?= $periodUnitLabel ?></small>
+                                <strong>₱<?= number_format($averagePerPeriod, 2) ?></strong>
+                            </div>
+
+                            <div class="overview-highlight">
+                                <small>Active Periods</small>
+                                <strong><?= $activePeriods ?> of <?= count($salesOverview) ?></strong>
+                            </div>
+
+                        </div>
+
+                        <!-- OVERVIEW DETAILS TABLE -->
+                        <div class="table-responsive mt-3">
+
+                            <table class="table overview-detail-table">
+
+                                <thead>
+                                    <tr>
+                                        <th><?= $report_mode === 'daily' ? 'Date' : $periodUnitLabel ?></th>
+                                        <th class="text-end">Orders</th>
+                                        <th class="text-end">Sales</th>
+                                        <th class="text-end">Avg. Order</th>
+                                        <th class="text-end">% of Total</th>
+                                    </tr>
+                                </thead>
+
+                                <tbody>
+
+                                    <?php foreach ($salesOverview as $period): ?>
+
+                                        <?php
+                                        $pAvg   = $period['orders'] > 0
+                                            ? $period['sales'] / $period['orders']
+                                            : 0;
+                                        $pShare = $totalSales > 0
+                                            ? ($period['sales'] / $totalSales) * 100
+                                            : 0;
+                                        ?>
+
+                                        <tr class="<?= $period['sales'] <= 0 ? 'is-empty' : '' ?>">
+                                            <td><?= htmlspecialchars($period['label']) ?></td>
+                                            <td class="text-end"><?= (int)$period['orders'] ?></td>
+                                            <td class="text-end">₱<?= number_format($period['sales'], 2) ?></td>
+                                            <td class="text-end">₱<?= number_format($pAvg, 2) ?></td>
+                                            <td class="text-end"><?= number_format($pShare, 1) ?>%</td>
+                                        </tr>
+
+                                    <?php endforeach; ?>
+
+                                </tbody>
+
+                                <tfoot>
+                                    <tr>
+                                        <td>Total</td>
+                                        <td class="text-end"><?= (int)$overviewTotalOrders ?></td>
+                                        <td class="text-end">₱<?= number_format($totalSales, 2) ?></td>
+                                        <td class="text-end">₱<?= number_format($averageOrder, 2) ?></td>
+                                        <td class="text-end">100%</td>
+                                    </tr>
+                                </tfoot>
+
+                            </table>
 
                         </div>
 
@@ -3121,9 +3812,21 @@ body {
                                                 class="transaction-payment-cell"
                                                 data-label="Payment"
                                             >
-                                                <span class="payment-badge <?= $paymentClass ?>">
-                                                    <?= htmlspecialchars($payment) ?>
-                                                </span>
+                                                <div class="transaction-payment-stack">
+                                                    <span class="payment-badge <?= $paymentClass ?>">
+                                                        <?= htmlspecialchars($payment) ?>
+                                                    </span>
+
+                                                    <?php if (
+                                                        strtolower((string)($sale['payment_method'] ?? '')) === 'gcash'
+                                                        && !empty($sale['payment_screenshot'])
+                                                    ): ?>
+                                                        <span class="transaction-proof-indicator">
+                                                            <i class="bi bi-image me-1"></i>
+                                                            Proof Available
+                                                        </span>
+                                                    <?php endif; ?>
+                                                </div>
                                             </td>
 
                                             <td
@@ -3181,9 +3884,9 @@ body {
                                             aria-hidden="true"
                                         >
 
-                                            <div class="modal-dialog modal-dialog-centered modal-lg">
+                                            <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable modal-lg transaction-details-dialog">
 
-                                                <div class="modal-content">
+                                                <div class="modal-content transaction-detail-modal">
 
                                                     <div class="modal-header">
 
@@ -3207,90 +3910,125 @@ body {
 
                                                     <div class="modal-body">
 
-                                                        <div class="transaction-detail-grid">
+                                                        <div class="transaction-detail-section">
 
-                                                            <div class="transaction-detail-box">
-                                                                <small>Order Number</small>
-                                                                <strong>
-                                                                    <?= htmlspecialchars(
-                                                                        $sale['order_number'] ?? 'N/A'
-                                                                    ) ?>
-                                                                </strong>
+                                                            <div class="transaction-detail-section-title">
+                                                                <i class="bi bi-bag-check"></i>
+                                                                Order Information
                                                             </div>
 
-                                                            <div class="transaction-detail-box">
-                                                                <small>Claim Number</small>
-                                                                <strong>
-                                                                    <?= htmlspecialchars(
-                                                                        $sale['claim_number'] ?? 'N/A'
-                                                                    ) ?>
-                                                                </strong>
-                                                            </div>
+                                                            <div class="transaction-detail-grid">
 
-                                                            <div class="transaction-detail-box">
-                                                                <small>Customer</small>
-                                                                <strong>
-                                                                    <?= htmlspecialchars(
-                                                                        $sale['customer_name'] ?? 'N/A'
-                                                                    ) ?>
-                                                                </strong>
-                                                            </div>
+                                                                <div class="transaction-detail-box highlight">
+                                                                    <small>Order Number</small>
+                                                                    <strong>
+                                                                        <?= htmlspecialchars(
+                                                                            $sale['order_number'] ?? 'N/A'
+                                                                        ) ?>
+                                                                    </strong>
+                                                                </div>
 
-                                                            <div class="transaction-detail-box">
-                                                                <small>Contact Number</small>
-                                                                <strong>
-                                                                    <?= htmlspecialchars(
-                                                                        $sale['contact_number'] ?? 'N/A'
-                                                                    ) ?>
-                                                                </strong>
-                                                            </div>
+                                                                <div class="transaction-detail-box highlight">
+                                                                    <small>Claim Number</small>
+                                                                    <strong>
+                                                                        <?= htmlspecialchars(
+                                                                            $sale['claim_number'] ?? 'N/A'
+                                                                        ) ?>
+                                                                    </strong>
+                                                                </div>
 
-                                                            <div class="transaction-detail-box">
-                                                                <small>Pick-up Date</small>
-                                                                <strong>
-                                                                    <?= htmlspecialchars($salePickupDate) ?>
-                                                                </strong>
-                                                            </div>
+                                                                <div class="transaction-detail-box">
+                                                                    <small>Customer</small>
+                                                                    <strong>
+                                                                        <?= htmlspecialchars(
+                                                                            $sale['customer_name'] ?? 'N/A'
+                                                                        ) ?>
+                                                                    </strong>
+                                                                </div>
 
-                                                            <div class="transaction-detail-box">
-                                                                <small>Pick-up Time</small>
-                                                                <strong>
-                                                                    <?= htmlspecialchars($salePickupTime) ?>
-                                                                </strong>
-                                                            </div>
+                                                                <div class="transaction-detail-box">
+                                                                    <small>Contact Number</small>
+                                                                    <strong>
+                                                                        <?= htmlspecialchars(
+                                                                            $sale['contact_number'] ?? 'N/A'
+                                                                        ) ?>
+                                                                    </strong>
+                                                                </div>
 
-                                                            <div class="transaction-detail-box">
-                                                                <small>Payment Method</small>
-                                                                <strong>
-                                                                    <?= htmlspecialchars($payment) ?>
-                                                                </strong>
-                                                            </div>
+                                                                <div class="transaction-detail-box">
+                                                                    <small>Pick-up Date</small>
+                                                                    <strong>
+                                                                        <?= htmlspecialchars($salePickupDate) ?>
+                                                                    </strong>
+                                                                </div>
 
-                                                            <div class="transaction-detail-box">
-                                                                <small>Status</small>
-                                                                <strong>Completed</strong>
-                                                            </div>
+                                                                <div class="transaction-detail-box">
+                                                                    <small>Pick-up Time</small>
+                                                                    <strong>
+                                                                        <?= htmlspecialchars($salePickupTime) ?>
+                                                                    </strong>
+                                                                </div>
 
-                                                            <div class="transaction-detail-box">
-                                                                <small>Order Date</small>
-                                                                <strong>
-                                                                    <?= htmlspecialchars($saleCreatedDate) ?>
-                                                                </strong>
-                                                            </div>
-
-                                                            <div class="transaction-detail-box">
-                                                                <small>Completed At</small>
-                                                                <strong>
-                                                                    <?= htmlspecialchars($saleClosedDate) ?>
-                                                                </strong>
                                                             </div>
 
                                                         </div>
 
 
-                                                        <div class="fw-bold mb-2" style="color:#4A3525; font-size:0.85rem;">
-                                                            Order Items
+                                                        <div class="transaction-detail-section">
+
+                                                            <div class="transaction-detail-section-title">
+                                                                <i class="bi bi-receipt"></i>
+                                                                Transaction Information
+                                                            </div>
+
+                                                            <div class="transaction-detail-grid">
+
+                                                                <div class="transaction-detail-box">
+                                                                    <small>Payment Method</small>
+                                                                    <strong>
+                                                                        <span class="transaction-payment-value">
+                                                                            <?= htmlspecialchars($payment) ?>
+                                                                        </span>
+                                                                    </strong>
+                                                                </div>
+
+                                                                <div class="transaction-detail-box">
+                                                                    <small>Status</small>
+                                                                    <strong>
+                                                                        <span class="transaction-status-completed">
+                                                                            <i class="bi bi-check-circle me-1"></i>
+                                                                            Completed
+                                                                        </span>
+                                                                    </strong>
+                                                                </div>
+
+                                                                <div class="transaction-detail-box">
+                                                                    <small>Order Date</small>
+                                                                    <strong>
+                                                                        <?= htmlspecialchars($saleCreatedDate) ?>
+                                                                    </strong>
+                                                                </div>
+
+                                                                <div class="transaction-detail-box">
+                                                                    <small>Completed At</small>
+                                                                    <strong>
+                                                                        <?= htmlspecialchars($saleClosedDate) ?>
+                                                                    </strong>
+                                                                </div>
+
+                                                            </div>
+
                                                         </div>
+
+
+                                                        <div class="transaction-detail-section">
+
+                                                            <div class="transaction-detail-section-title">
+                                                                <i class="bi bi-cup-hot"></i>
+                                                                Order Items
+                                                            </div>
+
+                                                            <div class="transaction-items-card">
 
                                                         <?php if (empty($saleItems)): ?>
 
@@ -3388,6 +4126,10 @@ body {
                                                             <?php endforeach; ?>
 
                                                         <?php endif; ?>
+
+                                                            </div>
+
+                                                        </div>
 
 
                                                         <div class="transaction-detail-total">
@@ -3876,6 +4618,171 @@ body {
     const filterForm = document.getElementById('salesReportFilterForm');
     const printButton = document.getElementById('printSalesReportBtn');
 
+    /*
+     * =============================================================
+     * TRANSACTION DETAILS MODAL FIX
+     * =============================================================
+     * The transaction rows are refreshed through AJAX. Their
+     * Bootstrap modal buttons therefore need delegated handling.
+     *
+     * The PHP markup also places each modal beside its <tr> inside
+     * the transaction table body. Browsers may relocate those
+     * <div> elements differently when parsing/replacing the
+     * fragment. Move them to <body> so Bootstrap always receives
+     * a valid modal container.
+     *
+     * This changes no visual layout.
+     * =============================================================
+     */
+    function normalizeTransactionModals(root = document) {
+        const modals = root.querySelectorAll(
+            '[id^="transactionDetailsModal"]'
+        );
+
+        modals.forEach(function (modal) {
+            if (modal.parentElement !== document.body) {
+                document.body.appendChild(modal);
+            }
+        });
+    }
+
+    function cleanupSalesModalState() {
+        document.querySelectorAll('.modal-backdrop').forEach(function (backdrop) {
+            backdrop.remove();
+        });
+
+        document.body.classList.remove('modal-open');
+        document.body.style.removeProperty('padding-right');
+        document.body.style.removeProperty('overflow');
+    }
+
+    function showTransactionDetailsModal(modal) {
+        if (!modal) {
+            return;
+        }
+
+        if (window.bootstrap && bootstrap.Modal) {
+            const instance =
+                bootstrap.Modal.getInstance(modal) ||
+                bootstrap.Modal.getOrCreateInstance(modal, {
+                    backdrop: true,
+                    keyboard: true,
+                    focus: true
+                });
+
+            instance.show();
+            return;
+        }
+
+        /* Fallback in case Bootstrap JS is unavailable. */
+        document.querySelectorAll('.modal.show').forEach(function (openModal) {
+            if (openModal !== modal) {
+                openModal.classList.remove('show');
+                openModal.style.display = 'none';
+                openModal.setAttribute('aria-hidden', 'true');
+            }
+        });
+
+        cleanupSalesModalState();
+
+        modal.classList.add('show');
+        modal.style.display = 'block';
+        modal.removeAttribute('aria-hidden');
+        modal.setAttribute('aria-modal', 'true');
+        document.body.classList.add('modal-open');
+
+        const backdrop = document.createElement('div');
+        backdrop.className = 'modal-backdrop fade show';
+        backdrop.setAttribute('data-sales-report-modal-backdrop', 'true');
+        document.body.appendChild(backdrop);
+    }
+
+    function hideTransactionDetailsModal(modal) {
+        if (!modal) {
+            return;
+        }
+
+        if (window.bootstrap && bootstrap.Modal) {
+            const instance =
+                bootstrap.Modal.getInstance(modal) ||
+                bootstrap.Modal.getOrCreateInstance(modal);
+
+            instance.hide();
+            return;
+        }
+
+        modal.classList.remove('show');
+        modal.style.display = 'none';
+        modal.setAttribute('aria-hidden', 'true');
+        modal.removeAttribute('aria-modal');
+        cleanupSalesModalState();
+    }
+
+    /* Normalize existing modals immediately. */
+    normalizeTransactionModals();
+
+    /*
+     * Delegated handlers keep working even after the Completed
+     * Transactions section is replaced by AJAX.
+     */
+    document.addEventListener('click', function (event) {
+        const viewButton = event.target.closest('.btn-view-transaction');
+
+        if (viewButton) {
+            event.preventDefault();
+            event.stopPropagation();
+
+            const targetSelector =
+                viewButton.getAttribute('data-bs-target');
+
+            if (!targetSelector) {
+                return;
+            }
+
+            const modal = document.querySelector(targetSelector);
+
+            if (!modal) {
+                console.error(
+                    'Transaction details modal not found:',
+                    targetSelector
+                );
+                return;
+            }
+
+            normalizeTransactionModals();
+            showTransactionDetailsModal(modal);
+            return;
+        }
+
+        const dismissButton = event.target.closest(
+            '[data-bs-dismiss="modal"]'
+        );
+
+        if (dismissButton) {
+            const modal = dismissButton.closest('.modal');
+
+            if (modal && modal.id.indexOf('transactionDetailsModal') === 0) {
+                event.preventDefault();
+                event.stopPropagation();
+                hideTransactionDetailsModal(modal);
+            }
+        }
+    });
+
+    document.addEventListener('keydown', function (event) {
+        if (event.key !== 'Escape') {
+            return;
+        }
+
+        const openTransactionModal = document.querySelector(
+            '.modal.show[id^="transactionDetailsModal"]'
+        );
+
+        if (openTransactionModal) {
+            hideTransactionDetailsModal(openTransactionModal);
+        }
+    });
+
     if ('scrollRestoration' in history) {
         history.scrollRestoration = 'manual';
     }
@@ -4088,6 +4995,13 @@ body {
             }
 
             currentSection.replaceWith(newSection);
+
+            /*
+             * The transaction section was rebuilt by AJAX, so move
+             * its newly-created modals back to <body> and let the
+             * delegated click handler manage the new buttons.
+             */
+            normalizeTransactionModals();
 
             updateCompletedMonthVisibility(
                 newSection
@@ -4557,10 +5471,6 @@ body {
         updatePrintLink();
     }
 
-    /* -----------------------------------------------------
-       Scroll restoration for normal full-page navigations.
-       AJAX actions do not move the page to the top.
-    ----------------------------------------------------- */
     function restoreSalesReportScroll() {
         const savedScroll =
             sessionStorage.getItem(scrollStorageKey);
@@ -4600,5 +5510,3 @@ body {
 
 </script>
 
-
-<?php require_once '../includes/footer.php'; ?> 

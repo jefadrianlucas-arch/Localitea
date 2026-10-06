@@ -1,5 +1,173 @@
 <style>
 /* =========================================================
+   SITE FOOTER — Local Milktea House
+   Palette: espresso #2C221E · roast #4A3525 · mocha #6F4E37
+            oat #F3EADF · foam #FBF7F1 · line #E6DACB
+========================================================= */
+
+.site-footer {
+    margin-top: 2rem;
+    background: #F1E6D8;
+    border-top: 1px solid #E0D2BF;
+    color: #6D5B4C;
+    font-size: 0.82rem;
+    line-height: 1.55;
+}
+
+.site-footer-main {
+    display: grid;
+    grid-template-columns: minmax(0, 1.5fr) repeat(3, minmax(0, 1fr));
+    gap: 28px;
+    align-items: start;
+    padding: 26px 0 20px;
+}
+
+/* Brand */
+.site-footer-brand {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+}
+
+/* Logo picture (replace the file in the <img> src to change it) */
+.site-footer-logo {
+    flex: 0 0 auto;
+    display: block;
+    width: 56px;
+    height: 56px;
+    object-fit: contain;
+}
+
+.site-footer-name {
+    margin: 0 0 3px;
+    color: #2C221E;
+    font-size: 0.95rem;
+    font-weight: 600;
+    line-height: 1.25;
+}
+
+.site-footer-tagline {
+    margin: 0;
+    max-width: 300px;
+    color: #6D5B4C;
+}
+
+/* Columns */
+.site-footer-title {
+    margin: 0 0 8px;
+    color: #2C221E;
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+}
+
+.site-footer-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.site-footer-list li {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-weight: 400;
+}
+
+.site-footer-list i {
+    flex: 0 0 auto;
+    margin-top: 3px;
+    color: #8A6A4F;
+    font-size: 0.85rem;
+}
+
+.site-footer-social {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border: 1px solid #DCCDBD;
+    border-radius: 50%;
+    background: #ffffff;
+    color: #4A3525;
+    font-size: 1rem;
+    text-decoration: none;
+}
+
+.site-footer-social:hover,
+.site-footer-social:focus-visible {
+    background: #332317;
+    border-color: #332317;
+    color: #ffffff;
+}
+
+.site-footer-social:focus-visible {
+    outline: 3px solid rgba(111, 78, 55, 0.35);
+    outline-offset: 2px;
+}
+
+/* Copyright */
+.site-footer-bottom {
+    padding: 12px 0 16px;
+    border-top: 1px solid #DDCEBB;
+    color: #75665A;
+    font-size: 0.74rem;
+    text-align: center;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    .site-footer-social {
+        transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+    }
+}
+
+@media (max-width: 991.98px) {
+    .site-footer-main {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 22px 20px;
+    }
+
+    .site-footer-brand {
+        grid-column: 1 / -1;
+    }
+
+    .site-footer-tagline {
+        max-width: none;
+    }
+}
+
+@media (max-width: 575.98px) {
+    .site-footer-main {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 18px;
+        padding: 22px 0 16px;
+    }
+
+    .site-footer-brand {
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+    }
+
+    .site-footer-col {
+        text-align: center;
+    }
+
+    .site-footer-list {
+        align-items: center;
+    }
+
+    .site-footer-list li {
+        justify-content: center;
+        text-align: left;
+    }
+}
+
+/* =========================================================
    BACK TO TOP BUTTON on every page
 ========================================================= */
 
@@ -8,22 +176,22 @@
     right: 25px;
     bottom: 25px;
 
-    width: 46px;
-    height: 46px;
+    width: 44px;
+    height: 44px;
 
     display: flex;
     align-items: center;
     justify-content: center;
 
-    background: #6f4e37;
+    background: #332317;
     color: #ffffff;
 
     border: none;
     border-radius: 50%;
 
-    font-size: 1.1rem;
+    font-size: 1.05rem;
 
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+    box-shadow: 0 6px 16px rgba(51, 35, 23, 0.25);
 
     cursor: pointer;
 
@@ -47,7 +215,12 @@
 }
 
 .back-to-top:hover {
-    background: #5b3d2e;
+    background: #24170F;
+}
+
+.back-to-top:focus-visible {
+    outline: 3px solid rgba(111, 78, 55, 0.4);
+    outline-offset: 2px;
 }
 
 .back-to-top:active {
@@ -65,64 +238,60 @@
 }
 </style>
 
-<footer class="py-3 mt-4 border-top bg-light">
+<footer class="site-footer">
 
     <div class="container">
 
-        <div class="row align-items-center text-center text-md-start">
+        <div class="site-footer-main">
 
-            <div class="col-md-2 mb-2 mb-md-0 text-center">
+            <div class="site-footer-brand">
 
-                <div
-                    class="border rounded-circle d-inline-flex p-2 align-items-center justify-content-center bg-white shadow-sm"
-                    style="width: 45px; height: 45px;"
+                <!-- LOGO: palitan lang ang filename sa src para sa picture mo -->
+                <img
+                    src="../assets/images/logo.png"
+                    alt="Local Milktea House logo"
+                    class="site-footer-logo"
                 >
-                    <i class="bi bi-cup-hot-fill fs-5 text-dark"></i>
+
+                <div>
+                    <p class="site-footer-name">Local Milktea House</p>
+                    <p class="site-footer-tagline">
+                        From coffee cravings to milktea moments, we've got your cup covered.
+                    </p>
                 </div>
 
             </div>
 
 
-            <div
-                class="col-md-3 mb-2 mb-md-0 small text-dark"
-                style="font-size: 0.75rem;"
-            >
-                From coffee cravings to milktea moments, we've got your cup covered.
-            </div>
+            <div class="site-footer-col">
 
+                <h6 class="site-footer-title">Contact</h6>
 
-            <div
-                class="col-md-2 mb-2 mb-md-0 small"
-                style="font-size: 0.75rem;"
-            >
-
-                <strong class="d-block text-dark mb-0">
-                    Contact
-                </strong>
-
-                <span class="d-block text-muted">
-                    example@gmail.com
-                </span>
-
-                <span class="d-block text-muted">
-                    0918 888 6866
-                </span>
+                <ul class="site-footer-list">
+                    <li>
+                        <i class="bi bi-envelope"></i>
+                        <span>localmilkteahouse@gmail.com</span>
+                    </li>
+                    <li>
+                        <i class="bi bi-telephone"></i>
+                        <span>0908 555 6644</span>
+                    </li>
+                </ul>
 
             </div>
 
 
-            <div
-                class="col-md-2 mb-2 mb-md-0 small text-center"
-                style="font-size: 0.75rem;"
-            >
+            <div class="site-footer-col">
 
-                <strong class="d-block text-dark mb-0">
-                    Social Media
-                </strong>
+                <h6 class="site-footer-title">Social Media</h6>
 
                 <a
-                    href="#"
-                    class="text-dark fs-6"
+                    href="https://www.facebook.com/share/1PDfmQysuD/"
+                    class="site-footer-social"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label="Local Milktea House on Facebook"
+                    title="Visit our Facebook page"
                 >
                     <i class="bi bi-facebook"></i>
                 </a>
@@ -130,31 +299,23 @@
             </div>
 
 
-            <div
-                class="col-md-3 small text-center text-md-end"
-                style="font-size: 0.75rem;"
-            >
+            <div class="site-footer-col">
 
-                <strong class="d-block text-dark mb-0">
-                    Location
-                </strong>
+                <h6 class="site-footer-title">Location</h6>
 
-                <span class="text-muted">
-                    Blk C3A, Nicolas Virata, GMA, Cavite
-                </span>
+                <ul class="site-footer-list">
+                    <li>
+                        <i class="bi bi-geo-alt"></i>
+                        <span>Blk 5 Lot 2 Block C2a st. Nicolasa Virata General Mariano Alvarez Caviite, General Mariano Alvarez, Philippines, 4117</span>
+                    </li>
+                </ul>
 
             </div>
 
         </div>
 
 
-        <hr class="my-2 text-muted">
-
-
-        <div
-            class="text-center text-muted"
-            style="font-size: 0.7rem;"
-        >
+        <div class="site-footer-bottom">
             &copy; 2026 Local Milktea House. All rights reserved.
         </div>
 

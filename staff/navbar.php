@@ -7,9 +7,9 @@
  * Shared top navigation for all Staff pages.
  *
  * Includes:
- * - Logged-in Staff profile
- * - Profile dropdown
- * - Logout
+ * - Hamburger button (opens the Staff sidebar on tablet / phone)
+ * - Logged-in Staff profile dropdown
+ * - Log out confirmation
  */
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -60,7 +60,7 @@ if ($navbarStaffId > 0) {
 }
 
 /* =========================================================
-   STAFF NAME
+   STAFF NAME + EMAIL
 ========================================================= */
 
 $navbarStaffName = trim(
@@ -75,9 +75,11 @@ if ($navbarStaffName === '') {
     $navbarStaffName = 'Staff User';
 }
 
+$navbarStaffEmail = trim((string)($navbarStaff['email'] ?? ''));
+
 /* First letter for avatar */
 $navbarStaffInitial = strtoupper(
-    substr(
+    mb_substr(
         $navbarStaffName,
         0,
         1
@@ -89,34 +91,86 @@ $navbarStaffInitial = strtoupper(
 
 /* =========================================================
    STAFF TOPBAR
+   The sidebar is fixed at 260px on desktop, so the topbar
+   starts exactly at 260px (it used to overlap the sidebar
+   on some laptop widths).
 ========================================================= */
+
+:root {
+    --staff-sidebar-width: 260px;
+}
 
 .staff-navbar {
     position: sticky;
     top: 0;
     z-index: 1000;
 
-    margin-left: clamp(220px, 18vw, 260px);
-
-    width: calc(100% - clamp(220px, 18vw, 260px));
+    margin-left: var(--staff-sidebar-width);
+    width: calc(100% - var(--staff-sidebar-width));
 
     min-width: 0;
+    min-height: 70px;
 
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 12px;
 
-    padding: 16px 24px;
+    padding: 12px 24px;
 
-    background: #ffffff;
+    background: #FFFFFF;
 
     border-bottom: 2px solid #6F4E37;
 
-    box-shadow:
-        0 3px 10px rgba(44, 34, 30, .08);
+    box-shadow: 0 3px 10px rgba(44, 34, 30, .08);
 
     box-sizing: border-box;
 }
+
+/* =========================================================
+   LEFT SIDE: hamburger + panel title
+========================================================= */
+
+.staff-navbar-left {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.staff-navbar-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+
+    min-width: 0;
+
+    color: #4A3525;
+    font-size: .95rem;
+    font-weight: 800;
+    line-height: 1;
+    white-space: nowrap;
+}
+
+.staff-navbar-brand i {
+    width: 34px;
+    height: 34px;
+    flex: 0 0 34px;
+
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    border-radius: 10px;
+
+    background: #F0E6D6;
+    color: #6F4E37;
+
+    font-size: .95rem;
+}
+
+/* The hamburger itself is styled by sidebar.php (.staff-menu-toggle);
+   it is hidden on desktop and shown below 992px. */
 
 /* =========================================================
    STAFF PROFILE
@@ -124,38 +178,47 @@ $navbarStaffInitial = strtoupper(
 
 .staff-navbar-profile {
     position: relative;
+    flex: 0 0 auto;
+    min-width: 0;
 }
 
 .staff-navbar-profile-btn {
-    display: flex;
+    display: inline-flex;
     align-items: center;
+    gap: 9px;
 
-    gap: 10px;
+    min-height: 46px;
+    max-width: 260px;
 
-    border: 1px solid #8B6A55;
-
-    background: #ffffff;
-
-    padding: 6px 10px 6px 6px;
-
+    border: 1px solid #B8A08A;
     border-radius: 12px;
+
+    padding: 5px 10px 5px 6px;
+
+    background: #FFFFFF;
+    color: #2C221E;
 
     cursor: pointer;
 
-    color: #2c221e;
+    box-sizing: border-box;
+    text-align: left;
 
-    font-size: .92rem;
-
-    font-weight: 600;
-
-    min-height: 46px;
+    transition: background .2s ease, border-color .2s ease;
 }
 
 .staff-navbar-profile-btn:hover,
 .staff-navbar-profile-btn[aria-expanded="true"] {
     background: #FDF8F2;
+    border-color: #8F725A;
+}
 
-    border-color: #6F4E37;
+.staff-navbar-profile-btn:focus-visible,
+.staff-navbar-dropdown a:focus-visible,
+.staff-navbar-dropdown button:focus-visible,
+.logout-cancel:focus-visible,
+.logout-confirm:focus-visible {
+    outline: 3px solid #C69C6D;
+    outline-offset: 2px;
 }
 
 /* =========================================================
@@ -165,18 +228,16 @@ $navbarStaffInitial = strtoupper(
 .staff-navbar-avatar {
     width: 36px;
     height: 36px;
-
     flex: 0 0 36px;
 
     border-radius: 50%;
 
     background: #4A3525;
+    color: #FFFFFF;
 
     display: flex;
     align-items: center;
     justify-content: center;
-
-    color: #ffffff;
 
     font-size: .9rem;
     font-weight: 800;
@@ -184,8 +245,36 @@ $navbarStaffInitial = strtoupper(
     overflow: hidden;
 }
 
+.staff-navbar-profile-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    line-height: 1.2;
+}
+
+.staff-navbar-profile-name {
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    font-size: .87rem;
+    font-weight: 650;
+}
+
+.staff-navbar-profile-role {
+    color: #7B6D62;
+    font-size: .68rem;
+    font-weight: 600;
+}
+
 .staff-navbar-arrow {
-    font-size: 11px;
+    font-size: .68rem;
+    transition: transform .2s ease;
+}
+
+.staff-navbar-profile-btn[aria-expanded="true"] .staff-navbar-arrow {
+    transform: rotate(180deg);
 }
 
 /* =========================================================
@@ -194,38 +283,62 @@ $navbarStaffInitial = strtoupper(
 
 .staff-navbar-dropdown {
     position: absolute;
-
     top: calc(100% + 8px);
     right: 0;
 
-    width: 200px;
-
-    background: #ffffff;
-
-    border: 2px solid #6F4E37;
-
-    border-radius: 12px;
-
-    box-shadow:
-        0 10px 24px rgba(44, 34, 30, .16);
+    width: 230px;
 
     padding: 6px;
 
+    background: #FFFFFF;
+
+    border: 1px solid #E6DEC9;
+    border-radius: 12px;
+
+    box-shadow: 0 8px 24px rgba(44, 34, 30, .12);
+
     display: none;
 
-    z-index: 1200;
+    z-index: 1500;
 
-    overflow: hidden;
+    box-sizing: border-box;
 }
 
 .staff-navbar-dropdown.show {
     display: block;
 }
 
+.staff-navbar-dropdown-head {
+    padding: 8px 12px 10px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid #EFE6DA;
+    min-width: 0;
+}
+
+.staff-navbar-dropdown-head strong {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    color: #2C221E;
+    font-size: .86rem;
+    font-weight: 700;
+}
+
+.staff-navbar-dropdown-head small {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    color: #7B6D62;
+    font-size: .74rem;
+}
+
 .staff-navbar-dropdown a {
     display: flex;
     align-items: center;
-
     gap: 10px;
 
     padding: 10px 12px;
@@ -236,74 +349,48 @@ $navbarStaffInitial = strtoupper(
 
     text-decoration: none;
 
-    font-size: .85rem;
+    font-size: .84rem;
+    font-weight: 600;
 }
 
 .staff-navbar-dropdown a:hover {
-    background: #F0E6D6;
+    background: #F3E8DB;
+}
+
+.staff-navbar-dropdown a i {
+    width: 18px;
+    text-align: center;
+}
+
+.staff-navbar-dropdown .navbar-logout-link {
+    margin-top: 4px;
+    border-top: 1px solid #EFE6DA;
+    border-radius: 0 0 8px 8px;
+    padding-top: 12px;
+    color: #9E3030;
+}
+
+.staff-navbar-dropdown .navbar-logout-link:hover {
+    background: #FCE3E3;
+    color: #9E3030;
 }
 
 /* =========================================================
-   RESPONSIVE
-========================================================= */
-
-@media (max-width: 991.98px) {
-
-    .staff-navbar {
-        margin-left: 0;
-
-        width: 100%;
-
-        padding: 12px 15px;
-    }
-
-}
-
-@media (max-width: 768px) {
-
-    .staff-navbar {
-        padding: 10px 12px;
-    }
-
-    .staff-navbar-profile-btn span {
-        display: none;
-    }
-
-}
-
-@media (max-width: 480px) {
-
-    .staff-navbar {
-        padding: 8px 10px;
-    }
-
-    .staff-navbar-profile-btn {
-        padding-right: 7px;
-    }
-
-    .staff-navbar-avatar {
-        width: 34px;
-        height: 34px;
-
-        flex-basis: 34px;
-    }
-
-}
-
-/* =========================================================
-   STAFF LOGOUT CONFIRMATION MODAL
+   LOGOUT CONFIRMATION MODAL
 ========================================================= */
 
 .logout-modal {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.45);
+    z-index: 99999;
 
     display: none;
     align-items: center;
     justify-content: center;
 
-    z-index: 9999;
+    padding: 20px;
+
+    background: rgba(44, 34, 30, .45);
 }
 
 .logout-modal.show {
@@ -311,51 +398,53 @@ $navbarStaffInitial = strtoupper(
 }
 
 .logout-modal-box {
-    width: 360px;
-    max-width: calc(100% - 30px);
-
-    background: #ffffff;
-
-    border: 1px solid #b8a08a;
-    border-radius: 15px;
+    width: min(380px, 100%);
 
     padding: 25px;
 
+    background: #FFFFFF;
+
+    border: 1px solid #D8C6B5;
+    border-radius: 16px;
+
     text-align: center;
 
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
+    box-shadow: 0 16px 40px rgba(44, 34, 30, .18);
+
+    box-sizing: border-box;
 }
 
 .logout-modal-icon {
-    width: 48px;
-    height: 48px;
+    width: 50px;
+    height: 50px;
 
     margin: 0 auto 12px;
-
-    border-radius: 50%;
-
-    background: #f8e1e1;
-    color: #dc3545;
 
     display: flex;
     align-items: center;
     justify-content: center;
 
-    font-size: 1.2rem;
+    border-radius: 50%;
+
+    background: #F8E1E1;
+    color: #C23A3A;
+
+    font-size: 1.15rem;
 }
 
 .logout-modal-box h5 {
-    margin-bottom: 6px;
+    margin: 0 0 7px;
 
-    color: #2c221e;
-    font-weight: 700;
+    color: #2C221E;
+    font-size: 1.05rem;
+    font-weight: 800;
 }
 
 .logout-modal-box p {
-    margin-bottom: 20px;
+    margin: 0 0 20px;
 
-    color: #8a7f75;
-    font-size: 0.85rem;
+    color: #7B6D62;
+    font-size: .84rem;
 }
 
 .logout-modal-actions {
@@ -366,52 +455,106 @@ $navbarStaffInitial = strtoupper(
 
 .logout-cancel,
 .logout-confirm {
-    min-width: 100px;
+    flex: 1 1 0;
+    min-height: 42px;
 
-    padding: 9px 16px;
+    border-radius: 9px;
 
-    border-radius: 8px;
+    padding: 9px 14px;
 
-    font-size: 0.85rem;
-    font-weight: 600;
+    font-size: .84rem;
+    font-weight: 700;
 
     cursor: pointer;
     text-decoration: none;
+
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    box-sizing: border-box;
 }
 
 .logout-cancel {
-    background: #ffffff;
-    color: #4a3525;
-
-    border: 1px solid #b8a08a;
+    border: 1px solid #B8A08A;
+    background: #FFFFFF;
+    color: #4A3525;
 }
 
 .logout-cancel:hover {
-    background: #f7f1e8;
+    background: #F7F1EA;
 }
 
 .logout-confirm {
-    background: #dc3545;
-    color: #ffffff;
-
-    border: 1px solid #dc3545;
+    border: 1px solid #C23A3A;
+    background: #C23A3A;
+    color: #FFFFFF;
 }
 
 .logout-confirm:hover {
-    background: #bb2d3b;
-    color: #ffffff;
+    border-color: #A72F2F;
+    background: #A72F2F;
+    color: #FFFFFF;
 }
+
+/* =========================================================
+   RESPONSIVE
+========================================================= */
 
 @media (max-width: 991.98px) {
 
-    .logout-modal-box {
-        padding: 20px;
+    .staff-navbar {
+        margin-left: 0;
+        width: 100%;
+        min-height: 64px;
+        padding: 10px 14px;
     }
 
-    .logout-cancel,
-    .logout-confirm {
-        flex: 1 1 0;
+}
+
+@media (max-width: 767.98px) {
+
+    .staff-navbar {
+        padding: 8px 12px;
+    }
+
+    /* Phone: avatar only, the name is inside the dropdown */
+    .staff-navbar-profile-text {
+        display: none;
+    }
+
+    .staff-navbar-profile-btn {
         min-height: 44px;
+        padding-right: 9px;
+    }
+
+    .staff-navbar-dropdown {
+        width: min(230px, calc(100vw - 24px));
+    }
+
+}
+
+@media (max-width: 380px) {
+
+    .staff-navbar-brand span {
+        max-width: 90px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .staff-navbar-avatar {
+        width: 32px;
+        height: 32px;
+        flex-basis: 32px;
+    }
+
+}
+
+@media (prefers-reduced-motion: reduce) {
+
+    .staff-navbar *,
+    .logout-modal * {
+        transition: none !important;
     }
 
 }
@@ -422,12 +565,26 @@ $navbarStaffInitial = strtoupper(
      STAFF NAVBAR
 ========================================================= -->
 
-<div class="staff-navbar">
+<nav class="staff-navbar no-print" aria-label="Staff top bar">
 
-    <!-- STAFF PANEL -->
-    <div class="staff-navbar-brand">
-        <i class="bi bi-person-badge"></i>
-        <span>Staff Panel</span>
+    <!-- LEFT: HAMBURGER + TITLE -->
+    <div class="staff-navbar-left">
+
+        <button
+            type="button"
+            class="staff-menu-toggle"
+            aria-label="Open menu"
+            aria-controls="staffSidebar"
+            aria-expanded="false"
+        >
+            <i class="bi bi-list" aria-hidden="true"></i>
+        </button>
+
+        <div class="staff-navbar-brand">
+            <i class="bi bi-person-badge" aria-hidden="true"></i>
+            <span>Staff Panel</span>
+        </div>
+
     </div>
 
 
@@ -440,17 +597,22 @@ $navbarStaffInitial = strtoupper(
             id="staffNavbarProfileBtn"
             aria-expanded="false"
             aria-haspopup="true"
+            aria-controls="staffNavbarProfileDropdown"
+            aria-label="Account menu for <?= htmlspecialchars($navbarStaffName, ENT_QUOTES, 'UTF-8') ?>"
         >
 
-            <div class="staff-navbar-avatar">
-                <?= htmlspecialchars($navbarStaffInitial) ?>
-            </div>
-
-            <span>
-                <?= htmlspecialchars($navbarStaffName) ?>
+            <span class="staff-navbar-avatar" aria-hidden="true">
+                <?= htmlspecialchars($navbarStaffInitial, ENT_QUOTES, 'UTF-8') ?>
             </span>
 
-            <i class="bi bi-chevron-down staff-navbar-arrow"></i>
+            <span class="staff-navbar-profile-text">
+                <span class="staff-navbar-profile-name">
+                    <?= htmlspecialchars($navbarStaffName, ENT_QUOTES, 'UTF-8') ?>
+                </span>
+                <span class="staff-navbar-profile-role">Staff</span>
+            </span>
+
+            <i class="bi bi-chevron-down staff-navbar-arrow" aria-hidden="true"></i>
 
         </button>
 
@@ -459,37 +621,53 @@ $navbarStaffInitial = strtoupper(
             id="staffNavbarProfileDropdown"
         >
 
+            <div class="staff-navbar-dropdown-head">
+                <strong><?= htmlspecialchars($navbarStaffName, ENT_QUOTES, 'UTF-8') ?></strong>
+                <small>
+                    <?= htmlspecialchars($navbarStaffEmail !== '' ? $navbarStaffEmail : 'Staff account', ENT_QUOTES, 'UTF-8') ?>
+                </small>
+            </div>
+
             <a href="profile.php">
-                <i class="bi bi-person"></i>
-                Profile
+                <i class="bi bi-person" aria-hidden="true"></i>
+                <span>Profile</span>
             </a>
 
-            <a href="#" id="logoutBtn">
-            <i class="bi bi-box-arrow-right"></i>
-            Log Out
-           </a>
+            <a href="../auth/logout.php" class="navbar-logout-link" id="logoutBtn">
+                <i class="bi bi-box-arrow-right" aria-hidden="true"></i>
+                <span>Log Out</span>
+            </a>
 
         </div>
 
     </div>
 
-</div>
+</nav>
 
 <!-- =========================================================
      STAFF LOGOUT CONFIRMATION MODAL
 ========================================================= -->
 
-<div class="logout-modal" id="logoutModal">
+<div
+    class="logout-modal no-print"
+    id="logoutModal"
+    aria-hidden="true"
+>
 
-    <div class="logout-modal-box">
+    <div
+        class="logout-modal-box"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="logoutModalTitle"
+    >
 
         <div class="logout-modal-icon">
-            <i class="bi bi-box-arrow-right"></i>
+            <i class="bi bi-box-arrow-right" aria-hidden="true"></i>
         </div>
 
-        <h5>Confirm Logout</h5>
+        <h5 id="logoutModalTitle">Confirm Logout</h5>
 
-        <p>Are you sure you want to logout?</p>
+        <p>Are you sure you want to log out? You will need to sign in again to use the Staff panel.</p>
 
         <div class="logout-modal-actions">
 
@@ -514,8 +692,6 @@ $navbarStaffInitial = strtoupper(
 
 </div>
 
-
-
 <script>
 /* =========================================================
    STAFF NAVBAR
@@ -524,227 +700,100 @@ $navbarStaffInitial = strtoupper(
 
 (function () {
 
-    /* =====================================================
-       PROFILE DROPDOWN
-    ===================================================== */
+    const profileButton = document.getElementById('staffNavbarProfileBtn');
+    const profileDropdown = document.getElementById('staffNavbarProfileDropdown');
+    const logoutBtn = document.getElementById('logoutBtn');
+    const logoutModal = document.getElementById('logoutModal');
+    const cancelLogout = document.getElementById('cancelLogout');
 
-    const profileButton =
-        document.getElementById(
-            'staffNavbarProfileBtn'
-        );
-
-    const profileDropdown =
-        document.getElementById(
-            'staffNavbarProfileDropdown'
-        );
-
-
-    if (
-        profileButton &&
-        profileDropdown &&
-        profileButton.dataset.navbarInitialized !== '1'
-    ) {
-
-        profileButton.dataset.navbarInitialized = '1';
-
-
-        profileButton.addEventListener(
-            'click',
-            function (event) {
-
-                event.stopPropagation();
-
-                const isOpen =
-                    profileButton.getAttribute(
-                        'aria-expanded'
-                    ) === 'true';
-
-
-                profileButton.setAttribute(
-                    'aria-expanded',
-                    isOpen ? 'false' : 'true'
-                );
-
-
-                profileDropdown.classList.toggle(
-                    'show',
-                    !isOpen
-                );
-
-            }
-        );
-
-
-        profileDropdown.addEventListener(
-            'click',
-            function (event) {
-
-                event.stopPropagation();
-
-            }
-        );
-
-
-        document.addEventListener(
-            'click',
-            function (event) {
-
-                if (
-                    !event.target.closest(
-                        '.staff-navbar-profile'
-                    )
-                ) {
-
-                    profileButton.setAttribute(
-                        'aria-expanded',
-                        'false'
-                    );
-
-                    profileDropdown.classList.remove(
-                        'show'
-                    );
-
-                }
-
-            }
-        );
-
-    }
-
-
-    /* =====================================================
-       LOGOUT CONFIRMATION
-    ===================================================== */
-
-    const logoutBtn =
-        document.getElementById(
-            'logoutBtn'
-        );
-
-    const logoutModal =
-        document.getElementById(
-            'logoutModal'
-        );
-
-    const cancelLogout =
-        document.getElementById(
-            'cancelLogout'
-        );
-
-
-    if (
-        !logoutBtn ||
-        !logoutModal ||
-        !cancelLogout
-    ) {
+    if (!profileButton || !profileDropdown) {
         return;
     }
 
+    if (profileButton.dataset.navbarInitialized === '1') {
+        return;
+    }
 
-    /* -----------------------------------------------------
-       OPEN LOGOUT MODAL
-    ----------------------------------------------------- */
+    profileButton.dataset.navbarInitialized = '1';
 
-    logoutBtn.addEventListener(
-        'click',
-        function (event) {
+    /* ---------- PROFILE DROPDOWN ---------- */
 
-            event.preventDefault();
-            event.stopPropagation();
+    function setDropdown(open) {
+        profileButton.setAttribute('aria-expanded', open ? 'true' : 'false');
+        profileDropdown.classList.toggle('show', open);
+    }
 
+    profileButton.addEventListener('click', function (event) {
+        event.stopPropagation();
+        setDropdown(profileButton.getAttribute('aria-expanded') !== 'true');
+    });
 
-            /* Close Staff profile dropdown */
+    profileDropdown.addEventListener('click', function (event) {
+        event.stopPropagation();
+    });
 
-            if (profileButton) {
-
-                profileButton.setAttribute(
-                    'aria-expanded',
-                    'false'
-                );
-
-            }
-
-
-            if (profileDropdown) {
-
-                profileDropdown.classList.remove(
-                    'show'
-                );
-
-            }
-
-
-            /* Open logout confirmation */
-
-            logoutModal.classList.add(
-                'show'
-            );
-
+    document.addEventListener('click', function (event) {
+        if (!event.target.closest('.staff-navbar-profile')) {
+            setDropdown(false);
         }
-    );
+    });
 
+    /* ---------- LOGOUT CONFIRMATION ---------- */
 
-    /* -----------------------------------------------------
-       CANCEL LOGOUT
-    ----------------------------------------------------- */
+    if (!logoutBtn || !logoutModal || !cancelLogout) {
+        return;
+    }
 
-    cancelLogout.addEventListener(
-        'click',
-        function () {
+    let returnFocusTo = null;
 
-            logoutModal.classList.remove(
-                'show'
-            );
+    function openLogoutModal() {
+        returnFocusTo = document.activeElement;
+        setDropdown(false);
 
+        logoutModal.classList.add('show');
+        logoutModal.setAttribute('aria-hidden', 'false');
+        document.body.style.overflow = 'hidden';
+
+        cancelLogout.focus({ preventScroll: true });
+    }
+
+    function closeLogoutModal() {
+        logoutModal.classList.remove('show');
+        logoutModal.setAttribute('aria-hidden', 'true');
+        document.body.style.overflow = '';
+
+        if (returnFocusTo && typeof returnFocusTo.focus === 'function') {
+            returnFocusTo.focus({ preventScroll: true });
         }
-    );
+    }
 
+    /* The link keeps a real href, so it still logs out if JS fails. */
+    logoutBtn.addEventListener('click', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        openLogoutModal();
+    });
 
-    /* -----------------------------------------------------
-       CLICK OUTSIDE MODAL
-    ----------------------------------------------------- */
+    cancelLogout.addEventListener('click', closeLogoutModal);
 
-    logoutModal.addEventListener(
-        'click',
-        function (event) {
-
-            if (
-                event.target === logoutModal
-            ) {
-
-                logoutModal.classList.remove(
-                    'show'
-                );
-
-            }
-
+    logoutModal.addEventListener('click', function (event) {
+        if (event.target === logoutModal) {
+            closeLogoutModal();
         }
-    );
+    });
 
-
-    /* -----------------------------------------------------
-       ESCAPE KEY
-    ----------------------------------------------------- */
-
-    document.addEventListener(
-        'keydown',
-        function (event) {
-
-            if (
-                event.key === 'Escape' &&
-                logoutModal.classList.contains(
-                    'show'
-                )
-            ) {
-
-                logoutModal.classList.remove(
-                    'show'
-                );
-
-            }
-
+    document.addEventListener('keydown', function (event) {
+        if (event.key !== 'Escape') {
+            return;
         }
-    );
+
+        if (logoutModal.classList.contains('show')) {
+            closeLogoutModal();
+            return;
+        }
+
+        setDropdown(false);
+    });
 
 })();
 </script>

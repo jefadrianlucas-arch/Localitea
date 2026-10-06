@@ -1,9 +1,7 @@
 <?php
 require_once '../includes/db.php';
 
-/* =========================================================
-   DASHBOARD STATUS AJAX
-========================================================= */
+
 if (
     ($_GET['ajax'] ?? '') === 'status' &&
     isset($_SESSION['user_id']) &&
@@ -964,6 +962,12 @@ require_once '../includes/navbar.php';
    RESPONSIVE ORDER DETAILS MODAL
 ===================================================== */
 
+.historyOrderModal .modal-content > hr,
+.historyOrderModal .modal-content > h6,
+.historyOrderModal .modal-content > .table-responsive {
+    margin-left: 20px;
+    margin-right: 20px;
+}
 @media (max-width: 768px) {
 
     .modal-dialog.modal-lg {
@@ -2044,9 +2048,8 @@ require_once '../includes/navbar.php';
             ?>
 
 
-            <div
-                class="modal fade"
-                id="historyOrderModal<?= (int)$ord['id'] ?>"
+            <div class="modal fade historyOrderModal"
+            id="historyOrderModal<?= (int)$ord['id'] ?>"
                 tabindex="-1"
                 aria-hidden="true"
             >
@@ -2616,6 +2619,10 @@ require_once '../includes/navbar.php';
 
 </div>
 <!-- AJAX_HISTORY_END -->
+
+    </div><!-- /.container -->
+</div><!-- /.dashboard-page -->
+
 
 
 <!-- =====================================================

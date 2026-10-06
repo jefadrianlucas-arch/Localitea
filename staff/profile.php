@@ -1,16 +1,4 @@
 <?php
-/*
- * =========================================================
- * LOCALITEA STAFF PROFILE
- * =========================================================
- *
- * This page is for the currently logged-in staff member only.
- *
- * Features:
- * - View staff profile
- * - Edit personal information
- * - Change password
- */
 
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
@@ -321,6 +309,7 @@ body {
     min-width: 0;
     box-sizing: border-box;
     background: #F7F3EE;
+    width: 100%;
 }
 
 
@@ -330,10 +319,10 @@ body {
 
 .staff-profile-content {
     padding: 28px;
-
-    max-width: 1200px;
-
-    margin: 0 auto;
+    margin-left: clamp(220px, 18vw, 260px);
+    width: calc(100% - clamp(220px, 18vw, 260px));
+    max-width: none;
+    box-sizing: border-box;
 }
 
 .staff-profile-heading {
@@ -397,7 +386,7 @@ body {
 .staff-profile-card {
     background: #FFFFFF;
 
-    border: 1px solid #E6DEC9;
+    border: 1px solid #8B6A55;
 
     border-radius: 18px;
 
@@ -410,7 +399,7 @@ body {
 .staff-profile-card-header {
     padding: 18px 20px;
 
-    border-bottom: 1px solid #EEE6DC;
+    border-bottom: 1px solid #8B6A55;
 }
 
 .staff-profile-card-header h5 {
@@ -448,7 +437,7 @@ body {
 
     padding: 28px 20px 22px;
 
-    border-bottom: 1px solid #EEE6DC;
+    border-bottom: 1px solid #8B6A55;
 }
 
 .staff-profile-avatar-large {
@@ -520,7 +509,7 @@ body {
 
     padding: 10px 0;
 
-    border-bottom: 1px solid #F1ECE6;
+    border-bottom: 1px solid #A98C77;
 }
 
 .staff-profile-detail:last-child {
@@ -558,7 +547,7 @@ body {
 }
 
 .staff-profile-card .form-control {
-    border-color: #D8CCBE;
+    border-color: #8B6A55;
 
     border-radius: 10px;
 
@@ -627,7 +616,7 @@ body {
 .staff-password-note {
     background: #FDF8F2;
 
-    border: 1px solid #E6DEC9;
+    border: 1px solid #8B6A55;
 
     border-radius: 10px;
 
@@ -662,6 +651,24 @@ body {
 
     .staff-profile-grid {
         grid-template-columns: 1fr;
+    }
+
+}
+
+@media (max-width: 991.98px) {
+
+    .staff-profile-page {
+        margin-left: 0;
+        width: 100%;
+    }
+
+}
+
+@media (max-width: 991.98px) {
+
+    .staff-profile-content {
+        margin-left: 0;
+        width: 100%;
     }
 
 }
@@ -1129,7 +1136,3 @@ body {
     </main>
 
 </div>
-
-<?php
-require_once '../includes/footer.php';
-?>
