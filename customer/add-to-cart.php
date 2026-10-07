@@ -114,6 +114,15 @@ if (!in_array($discountType, ['none', 'pwd', 'senior'], true)) {
         (string)($_POST['promotion_role'] ?? '')
     );
 
+    /*
+     * Bundle slot (promotion_rule_items.id). A bundle slot may be filled
+     * by any available product from the same category as the product the
+     * admin configured for that slot.
+     */
+    $promotionSlotId = isset($_POST['promotion_slot_id'])
+        ? (int)$_POST['promotion_slot_id']
+        : 0;
+
 
     /*
      * =========================================================
@@ -164,6 +173,7 @@ if (!in_array($discountType, ['none', 'pwd', 'senior'], true)) {
 
     $validPromotionId = 0;
     $validPromotionRole = '';
+    $validPromotionSlotId = 0;
     $promotionData = null;
     $promotionSequence = null;
 
@@ -178,14 +188,27 @@ if (!in_array($discountType, ['none', 'pwd', 'senior'], true)) {
                 pri.role,
                 pri.product_id AS promotion_product_id,
                 pri.quantity AS promotion_item_quantity,
-                pri.size AS promotion_size
+                pri.size AS promotion_size,
+                pri.id AS slot_id
             FROM promotions p
             INNER JOIN promotion_rules r
                 ON r.promotion_id = p.id
             INNER JOIN promotion_rule_items pri
                 ON pri.rule_id = r.id
+            INNER JOIN products slotp
+                ON slotp.id = pri.product_id
+            INNER JOIN products chosen
+                ON chosen.id = ?
             WHERE p.id = ?
-              AND pri.product_id = ?
+              AND (
+                    (? = 0 AND pri.product_id = chosen.id)
+                    OR (
+                        ? > 0
+                        AND pri.id = ?
+                        AND pri.role = 'bundle'
+                        AND slotp.category_id = chosen.category_id
+                    )
+                  )
               AND pri.role = ?
               AND p.is_active = 1
               AND p.is_archived = 0
@@ -195,8 +218,11 @@ if (!in_array($discountType, ['none', 'pwd', 'senior'], true)) {
         ");
 
         $promotionStmt->execute([
-            $promotionId,
             $productId,
+            $promotionId,
+            $promotionSlotId,
+            $promotionSlotId,
+            $promotionSlotId,
             $promotionRole
         ]);
 
@@ -211,6 +237,10 @@ if (!in_array($discountType, ['none', 'pwd', 'senior'], true)) {
         $validPromotionId = (int)$promotionData['id'];
         $validPromotionRole = (string)$promotionData['role'];
         $ruleType = (string)$promotionData['rule_type'];
+
+        if ($validPromotionRole === 'bundle') {
+            $validPromotionSlotId = (int)($promotionData['slot_id'] ?? 0);
+        }
 
         /*
          * BOGO / Buy X Get Y accept both BUY and GET customization steps.
@@ -245,6 +275,7 @@ if (!in_array($discountType, ['none', 'pwd', 'senior'], true)) {
                 urlencode($validPromotionRole) .
                 "&promotion_quantity=" .
                 max(1, $quantity) .
+                ($promotionSlotId > 0 ? "&promotion_slot=" . $promotionSlotId : '') .
                 "&error=promotion_size");
         }
 
@@ -517,6 +548,134 @@ if (!in_array($discountType, ['none', 'pwd', 'senior'], true)) {
 
     /*
      * =========================================================
+     * MENU BUNDLE FLAVORS
+     * =========================================================
+     *
+     * Menu bundles (e.g. "Classic Milktea & Fruit Tea 7+1") are listed in
+     * menu_bundle_options. The customer must pick a flavor for every cup,
+     * and every pick is verified against the database here.
+     */
+    $bundlePicks = [];
+    $bundlePickKey = '';
+
+    if ($validPromotionId === 0) {
+        $menuBundleConfig = null;
+
+        try {
+            $bundleCfgStmt = $pdo->prepare("
+                SELECT size, cups, category_ids
+                FROM menu_bundle_options
+                WHERE product_id = ?
+            ");
+
+            if ($bundleCfgStmt && $bundleCfgStmt->execute([$productId])) {
+                $cfgRows = [];
+
+                foreach ($bundleCfgStmt->fetchAll(PDO::FETCH_ASSOC) as $cfgRow) {
+                    $cfgRows[(string)$cfgRow['size']] = $cfgRow;
+                }
+
+                $menuBundleConfig = $cfgRows[$size] ?? ($cfgRows[''] ?? null);
+            }
+        } catch (Throwable $e) {
+            $menuBundleConfig = null;
+        }
+
+        if ($menuBundleConfig) {
+            $requiredCups = (int)$menuBundleConfig['cups'];
+            $allowedCategoryIds = array_values(array_filter(array_map(
+                'intval',
+                explode(',', (string)$menuBundleConfig['category_ids'])
+            )));
+
+            $postedPicks = $_POST['bundle_picks'] ?? [];
+
+            if (!is_array($postedPicks)) {
+                $postedPicks = [];
+            }
+
+            $postedPicks = array_values(array_map('intval', $postedPicks));
+
+            if ($requiredCups > 0 && $allowedCategoryIds) {
+                if (
+                    count($postedPicks) !== $requiredCups ||
+                    in_array(0, $postedPicks, true)
+                ) {
+                    customerRedirect(
+                        "product-view.php?id=" . $productId . "&error=bundle_picks",
+                        'Please choose a flavor for every cup of the bundle.'
+                    );
+                }
+
+                $uniquePickIds = array_values(array_unique($postedPicks));
+                $pickPlaceholders = implode(',', array_fill(0, count($uniquePickIds), '?'));
+
+                $pickStmt = $pdo->prepare("
+                    SELECT
+                        id,
+                        name,
+                        category_id,
+                        price,
+                        regular_price,
+                        grande_price,
+                        is_available,
+                        is_archived
+                    FROM products
+                    WHERE id IN ($pickPlaceholders)
+                ");
+                $pickStmt->execute($uniquePickIds);
+
+                $pickProducts = [];
+
+                foreach ($pickStmt->fetchAll(PDO::FETCH_ASSOC) as $pickRow) {
+                    $pickProducts[(int)$pickRow['id']] = $pickRow;
+                }
+
+                foreach ($postedPicks as $pickId) {
+                    $pick = $pickProducts[$pickId] ?? null;
+
+                    /* Cups are part of the bundle price: any priced flavor is allowed. */
+                    $pickSizePrice = max(
+                        (float)($pick['price'] ?? 0),
+                        (float)($pick['regular_price'] ?? 0),
+                        (float)($pick['grande_price'] ?? 0)
+                    );
+
+                    if (
+                        !$pick ||
+                        (int)$pick['is_available'] !== 1 ||
+                        (int)$pick['is_archived'] !== 0 ||
+                        !in_array((int)$pick['category_id'], $allowedCategoryIds, true) ||
+                        $pickSizePrice <= 0
+                    ) {
+                        customerRedirect(
+                            "product-view.php?id=" . $productId . "&error=bundle_picks",
+                            'One of the selected flavors is no longer available. Please choose again.'
+                        );
+                    }
+
+                    $bundlePicks[] = [
+                        'id' => $pickId,
+                        'name' => (string)$pick['name'],
+                    ];
+                }
+
+                /* The picks describe one bundle; add more bundles one at a time. */
+                $quantity = 1;
+
+                $bundlePickIds = array_map(
+                    static fn(array $pickItem): int => (int)$pickItem['id'],
+                    $bundlePicks
+                );
+                sort($bundlePickIds);
+                $bundlePickKey = '@' . md5(implode(',', $bundlePickIds));
+            }
+        }
+    }
+
+
+    /*
+     * =========================================================
      * CART KEY
      * =========================================================
      *
@@ -536,7 +695,9 @@ if (!in_array($discountType, ['none', 'pwd', 'senior'], true)) {
     $discountType .
     implode(',', $validAddons) .
     $validPromotionId .
-    $validPromotionRole
+    $validPromotionRole .
+    ($validPromotionSlotId > 0 ? '#' . $validPromotionSlotId : '') .
+    $bundlePickKey
     );
 
 
@@ -584,6 +745,11 @@ if (!in_array($discountType, ['none', 'pwd', 'senior'], true)) {
 
             $_SESSION['cart'][$cartKey]['is_free'] =
                 $validPromotionRole === 'get';
+
+            if ($validPromotionSlotId > 0) {
+                $_SESSION['cart'][$cartKey]['promotion_slot_id'] =
+                    $validPromotionSlotId;
+            }
         }
 
     } else {
@@ -619,7 +785,17 @@ if (!in_array($discountType, ['none', 'pwd', 'senior'], true)) {
 
             $_SESSION['cart'][$cartKey]['is_free'] =
                 $validPromotionRole === 'get';
+
+            if ($validPromotionSlotId > 0) {
+                $_SESSION['cart'][$cartKey]['promotion_slot_id'] =
+                    $validPromotionSlotId;
+            }
         }
+    }
+
+
+    if ($bundlePicks) {
+        $_SESSION['cart'][$cartKey]['bundle_picks'] = $bundlePicks;
     }
 
 
@@ -700,49 +876,117 @@ if (!in_array($discountType, ['none', 'pwd', 'senior'], true)) {
          * bundle product until each one has been customized.
          */
         if ($ruleType === 'bundle' && $validPromotionRole === 'bundle') {
+            /*
+             * Every slot of the bundle must be filled. A slot is filled by
+             * any cart line carrying its promotion_slot_id, so the customer
+             * may pick a different flavor (same category) for each slot.
+             *
+             * The configured product is only the default shown first. Its
+             * own availability does not matter: if it is sold out, the first
+             * available product of the same category is shown instead.
+             */
             $bundleStmt = $pdo->prepare("
                 SELECT
+                    pri.id AS slot_id,
                     pri.product_id,
                     pri.quantity,
-                    pri.size
+                    pri.size,
+                    slotp.category_id,
+                    slotp.is_available AS default_available,
+                    slotp.is_archived AS default_archived
                 FROM promotion_rule_items pri
                 INNER JOIN promotion_rules r
                     ON r.id = pri.rule_id
-                INNER JOIN products p
-                    ON p.id = pri.product_id
+                INNER JOIN products slotp
+                    ON slotp.id = pri.product_id
                 WHERE r.promotion_id = ?
                   AND pri.role = 'bundle'
-                  AND p.is_available = 1
-                  AND p.is_archived = 0
                 ORDER BY pri.id ASC
             ");
             $bundleStmt->execute([$validPromotionId]);
             $bundleItems = $bundleStmt->fetchAll(PDO::FETCH_ASSOC);
 
+            /* How many sets each slot has been filled for. */
+            $slotSets = [];
+
             foreach ($bundleItems as $bundleItem) {
-                $nextProductId = (int)$bundleItem['product_id'];
-                $nextAlreadyCustomized = false;
+                $slotKey = (int)$bundleItem['slot_id'];
+                $slotQty = 0;
 
                 foreach ($_SESSION['cart'] as $cartItem) {
                     if (
-                        (int)($cartItem['promotion_source_id'] ?? 0) === $validPromotionId &&
-                        ($cartItem['promotion_source_role'] ?? '') === 'bundle' &&
-                        (int)($cartItem['product_id'] ?? 0) === $nextProductId
+                        (int)($cartItem['promotion_source_id'] ?? 0) !== $validPromotionId ||
+                        ($cartItem['promotion_source_role'] ?? '') !== 'bundle'
                     ) {
-                        $nextAlreadyCustomized = true;
-                        break;
+                        continue;
+                    }
+
+                    $lineSlot = (int)($cartItem['promotion_slot_id'] ?? 0);
+
+                    /* Older cart lines had no slot id: match by product. */
+                    if (
+                        $lineSlot === 0 &&
+                        (int)($cartItem['product_id'] ?? 0) === (int)$bundleItem['product_id']
+                    ) {
+                        $lineSlot = $slotKey;
+                    }
+
+                    if ($lineSlot === $slotKey) {
+                        $slotQty += max(0, (int)($cartItem['quantity'] ?? 0));
                     }
                 }
 
-                if (!$nextAlreadyCustomized) {
-                    customerRedirect("product-view.php?id=" .
-                        $nextProductId .
-                        "&promotion_id=" .
-                        $validPromotionId .
-                        "&promotion_role=bundle" .
-                        "&promotion_quantity=" .
-                        max(1, (int)($bundleItem['quantity'] ?? 1)));
+                $slotSets[$slotKey] = (int)ceil(
+                    $slotQty / max(1, (int)$bundleItem['quantity'])
+                );
+            }
+
+            $targetSets = $slotSets ? max($slotSets) : 0;
+
+            foreach ($bundleItems as $bundleItem) {
+                $slotKey = (int)$bundleItem['slot_id'];
+
+                if ($slotSets[$slotKey] >= $targetSets) {
+                    continue;
                 }
+
+                $nextProductId = (int)$bundleItem['product_id'];
+
+                if (
+                    (int)$bundleItem['default_available'] !== 1 ||
+                    (int)$bundleItem['default_archived'] !== 0
+                ) {
+                    $fallbackStmt = $pdo->prepare("
+                        SELECT id
+                        FROM products
+                        WHERE category_id = ?
+                          AND is_available = 1
+                          AND is_archived = 0
+                        ORDER BY name ASC
+                        LIMIT 1
+                    ");
+                    $fallbackStmt->execute([(int)$bundleItem['category_id']]);
+                    $fallbackId = (int)$fallbackStmt->fetchColumn();
+
+                    if ($fallbackId <= 0) {
+                        customerRedirect(
+                            "cart.php",
+                            'A bundle item is currently unavailable.'
+                        );
+                    }
+
+                    $nextProductId = $fallbackId;
+                }
+
+                customerRedirect("product-view.php?id=" .
+                    $nextProductId .
+                    "&promotion_id=" .
+                    $validPromotionId .
+                    "&promotion_role=bundle" .
+                    "&promotion_slot=" .
+                    $slotKey .
+                    "&promotion_quantity=" .
+                    max(1, (int)($bundleItem['quantity'] ?? 1)));
             }
         }
     }

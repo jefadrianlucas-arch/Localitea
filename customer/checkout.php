@@ -1069,6 +1069,31 @@ try {
 
         $item_addons = $item['addons'] ?? null;
 
+        /*
+         * Menu bundle flavors are saved together with the add-ons so the
+         * staff (and the receipt) can see what to prepare for each cup.
+         */
+        if (!empty($item['bundle_picks']) && is_array($item['bundle_picks'])) {
+            $bundleCupLines = [];
+            $bundleCupNo = 1;
+
+            foreach ($item['bundle_picks'] as $bundlePick) {
+                $bundleCupLines[] = 'Cup ' . $bundleCupNo . ': ' .
+                    trim((string)($bundlePick['name'] ?? ''));
+                $bundleCupNo++;
+            }
+
+            $existingItemAddons = [];
+
+            if (is_array($item_addons)) {
+                $existingItemAddons = $item_addons;
+            } elseif ($item_addons !== null && trim((string)$item_addons) !== '') {
+                $existingItemAddons = [trim((string)$item_addons)];
+            }
+
+            $item_addons = array_merge($bundleCupLines, $existingItemAddons);
+        }
+
         if (is_array($item_addons)) {
 
             $item_addons = json_encode(

@@ -599,7 +599,7 @@ body {
                     'Fruit Tea',
                     'Frappe',
                     'Sip and Snack',
-                    'Promo and Bundles'
+                    'Bundle'
                 ];
 
                 foreach($categories as $cat):
@@ -690,7 +690,7 @@ body {
     </div>
 </div>
 
-\n<script>
+<script>
 (function () {
     const toast = document.getElementById('addedToCartToast');
     const closeButton = document.getElementById('closeAddedToCartToast');

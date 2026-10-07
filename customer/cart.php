@@ -82,6 +82,99 @@ if (
         exit;
     }
 
+    /*
+     * Bundle lines belong to a slot. The customer may swap the flavor, but
+     * only for another available product from the same category as the
+     * product configured for that slot, and the slot's size stays fixed.
+     */
+    $editPromotionSlotId = (int)($cartItem['promotion_slot_id'] ?? 0);
+    $bundleSlotRow = null;
+
+    if (
+        (int)($cartItem['promotion_source_id'] ?? 0) > 0 &&
+        ($cartItem['promotion_source_role'] ?? '') === 'bundle' &&
+        $editPromotionSlotId > 0
+    ) {
+        $bundleSlotStmt = $pdo->prepare("
+            SELECT
+                pri.size AS promotion_size,
+                slotp.category_id
+            FROM promotions p
+            INNER JOIN promotion_rules r
+                ON r.promotion_id = p.id
+            INNER JOIN promotion_rule_items pri
+                ON pri.rule_id = r.id
+            INNER JOIN products slotp
+                ON slotp.id = pri.product_id
+            WHERE p.id = ?
+              AND pri.id = ?
+              AND pri.role = 'bundle'
+              AND p.is_active = 1
+              AND p.is_archived = 0
+              AND p.start_date <= CURDATE()
+              AND p.end_date >= CURDATE()
+            LIMIT 1
+        ");
+        $bundleSlotStmt->execute([
+            (int)$cartItem['promotion_source_id'],
+            $editPromotionSlotId,
+        ]);
+        $bundleSlotRow = $bundleSlotStmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$bundleSlotRow) {
+            header('Location: cart.php?edit_error=' . urlencode('This bundle is no longer available.'));
+            exit;
+        }
+
+        $requestedProductId = (int)($_POST['product_id'] ?? $productId);
+
+        if ($requestedProductId > 0 && $requestedProductId !== $productId) {
+            $flavorCheckStmt = $pdo->prepare("
+                SELECT id
+                FROM products
+                WHERE id = ?
+                  AND category_id = ?
+                  AND is_available = 1
+                  AND is_archived = 0
+                LIMIT 1
+            ");
+            $flavorCheckStmt->execute([
+                $requestedProductId,
+                (int)$bundleSlotRow['category_id'],
+            ]);
+
+            if (!$flavorCheckStmt->fetchColumn()) {
+                header('Location: cart.php?edit_error=' . urlencode('That flavor is not available for this bundle.'));
+                exit;
+            }
+
+            $productId = $requestedProductId;
+        }
+    }
+
+    /*
+     * Menu bundles keep their flavor picks. The size decides how many cups
+     * the bundle has, so it cannot be changed here.
+     */
+    $editBundlePicks = is_array($cartItem['bundle_picks'] ?? null)
+        ? $cartItem['bundle_picks']
+        : [];
+    $editBundlePickKey = '';
+
+    if ($editBundlePicks) {
+        if ($size !== trim((string)($cartItem['size'] ?? ''))) {
+            header('Location: cart.php?edit_error=' . urlencode('To change the size of a bundle, remove it and add it again.'));
+            exit;
+        }
+
+        $editBundlePickIds = array_map(
+            static fn($pickItem): int => (int)($pickItem['id'] ?? 0),
+            $editBundlePicks
+        );
+        sort($editBundlePickIds);
+        $editBundlePickKey = '@' . md5(implode(',', $editBundlePickIds));
+    }
+
     $editProductStmt = $pdo->prepare("
         SELECT id, name, image, price, regular_price, grande_price, is_available, is_archived
         FROM products
@@ -154,6 +247,19 @@ if (
         }
     }
 
+    if ($bundleSlotRow) {
+        $bundleConfiguredSize = strtolower(trim((string)($bundleSlotRow['promotion_size'] ?? '')));
+
+        if (in_array($bundleConfiguredSize, ['regular', 'grande'], true)) {
+            $bundleRequiredSize = ucfirst($bundleConfiguredSize);
+
+            if ($size !== $bundleRequiredSize) {
+                header('Location: cart.php?edit_error=' . urlencode('This bundle requires the ' . $bundleRequiredSize . ' size.'));
+                exit;
+            }
+        }
+    }
+
     $validAddons = [];
     $addonsTotal = 0.00;
 
@@ -192,7 +298,9 @@ if (
         $discountType .
         implode(',', $validAddons) .
         $promotionSourceId .
-        $promotionSourceRole
+        $promotionSourceRole .
+        ($editPromotionSlotId > 0 ? '#' . $editPromotionSlotId : '') .
+        $editBundlePickKey
     );
 
     $updatedItem = $cartItem;
@@ -508,6 +616,8 @@ $cartPromotionSizes = [];
 
 $cartProductIds = [];
 $cartPromotionContexts = [];
+$cartBundleSlotIds = [];
+$cartBundleSlots = [];
 
 if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
     foreach ($_SESSION['cart'] as $cartItem) {
@@ -518,6 +628,12 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
 
         $promotionId = (int)($cartItem['promotion_source_id'] ?? 0);
         $promotionRole = trim((string)($cartItem['promotion_source_role'] ?? ''));
+
+        $cartLineSlotId = (int)($cartItem['promotion_slot_id'] ?? 0);
+
+        if ($promotionId > 0 && $promotionRole === 'bundle' && $cartLineSlotId > 0) {
+            $cartBundleSlotIds[$cartLineSlotId] = $cartLineSlotId;
+        }
 
         if ($promotionId > 0 && in_array($promotionRole, ['buy', 'get'], true) && $productId > 0) {
             $cartPromotionContexts[] = [
@@ -563,6 +679,61 @@ if (!empty($cartProductIds)) {
         $pid = (int)$cartAddon['product_id'];
         $cartProductAddons[$pid][] = $cartAddon;
     }
+}
+
+/*
+ * For every bundle slot in the cart: its fixed size and the flavors the
+ * customer may choose from (same category as the slot's configured product).
+ */
+foreach ($cartBundleSlotIds as $bundleSlotId) {
+    $slotInfoStmt = $pdo->prepare("
+        SELECT
+            pri.size AS promotion_size,
+            slotp.category_id
+        FROM promotion_rule_items pri
+        INNER JOIN products slotp
+            ON slotp.id = pri.product_id
+        WHERE pri.id = ?
+          AND pri.role = 'bundle'
+        LIMIT 1
+    ");
+    $slotInfoStmt->execute([$bundleSlotId]);
+    $slotInfo = $slotInfoStmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$slotInfo) {
+        continue;
+    }
+
+    $slotSize = strtolower(trim((string)($slotInfo['promotion_size'] ?? '')));
+
+    $slotFlavorStmt = $pdo->prepare("
+        SELECT id, name, regular_price, grande_price
+        FROM products
+        WHERE category_id = ?
+          AND is_available = 1
+          AND is_archived = 0
+        ORDER BY name ASC
+    ");
+    $slotFlavorStmt->execute([(int)$slotInfo['category_id']]);
+
+    $slotFlavors = [];
+
+    foreach ($slotFlavorStmt->fetchAll(PDO::FETCH_ASSOC) as $slotFlavor) {
+        if ($slotSize === 'regular' && (float)$slotFlavor['regular_price'] <= 0) {
+            continue;
+        }
+
+        if ($slotSize === 'grande' && (float)$slotFlavor['grande_price'] <= 0) {
+            continue;
+        }
+
+        $slotFlavors[] = $slotFlavor;
+    }
+
+    $cartBundleSlots[$bundleSlotId] = [
+        'size' => $slotSize,
+        'flavors' => $slotFlavors,
+    ];
 }
 
 if (!empty($cartPromotionContexts)) {
@@ -1733,6 +1904,16 @@ require_once '../includes/navbar.php';
                                                 <span class="ck-chip">Sugar: <?= htmlspecialchars($item['sugar_level']) ?></span>
                                             <?php endif; ?>
 
+                                            <?php if (!empty($item['bundle_picks']) && is_array($item['bundle_picks'])): ?>
+                                                <span class="ck-chip" style="white-space: normal;">
+                                                    Flavors:
+                                                    <?= htmlspecialchars(implode(', ', array_map(
+                                                        static fn($pickItem): string => (string)($pickItem['name'] ?? ''),
+                                                        $item['bundle_picks']
+                                                    ))) ?>
+                                                </span>
+                                            <?php endif; ?>
+
                                             <?php if (!empty($item['addons'])): ?>
                                                 <span class="ck-chip">
                                                     Add-ons:
@@ -2021,9 +2202,23 @@ require_once '../includes/navbar.php';
                                             (string)($item['promotion_source_role'] ?? '');
 
                                         $configuredPromotionSize = $cartPromotionSizes[$promotionContextKey] ?? '';
+
+                                        $itemSlotId = (int)($item['promotion_slot_id'] ?? 0);
+                                        $itemBundleSlot = (
+                                            $itemSlotId > 0 &&
+                                            ($item['promotion_source_role'] ?? '') === 'bundle'
+                                        ) ? ($cartBundleSlots[$itemSlotId] ?? null) : null;
+
+                                        if ($itemBundleSlot) {
+                                            $configuredPromotionSize = $itemBundleSlot['size'];
+                                        }
                                         $fixedPromotionSize = in_array($configuredPromotionSize, ['regular', 'grande'], true)
                                             ? ucfirst($configuredPromotionSize)
                                             : '';
+
+                                        if (!empty($item['bundle_picks'])) {
+                                            $fixedPromotionSize = trim((string)($item['size'] ?? ''));
+                                        }
 
                                         $editSugar = trim((string)($item['sugar_level'] ?? ''));
                                         if (!in_array($editSugar, ['0%', '25%', '50%', '75%', '100%'], true)) {
@@ -2057,6 +2252,41 @@ require_once '../includes/navbar.php';
                                                     <input type="hidden" name="cart_key" value="<?= htmlspecialchars($key, ENT_QUOTES) ?>">
 
                                                     <div class="modal-body">
+                                                        <?php if ($itemBundleSlot && count($itemBundleSlot['flavors']) > 1): ?>
+                                                            <div class="mb-3">
+                                                                <label class="form-label" for="<?= htmlspecialchars($editModalId) ?>_flavor">Flavor</label>
+                                                                <select
+                                                                    class="form-select"
+                                                                    name="product_id"
+                                                                    id="<?= htmlspecialchars($editModalId) ?>_flavor"
+                                                                >
+                                                                    <?php
+                                                                        $flavorIds = array_map(
+                                                                            static fn(array $f): int => (int)$f['id'],
+                                                                            $itemBundleSlot['flavors']
+                                                                        );
+                                                                    ?>
+                                                                    <?php if (!in_array($itemProductId, $flavorIds, true)): ?>
+                                                                        <option value="<?= $itemProductId ?>" selected>
+                                                                            <?= htmlspecialchars((string)$itemProduct['name']) ?>
+                                                                        </option>
+                                                                    <?php endif; ?>
+                                                                    <?php foreach ($itemBundleSlot['flavors'] as $flavor): ?>
+                                                                        <option
+                                                                            value="<?= (int)$flavor['id'] ?>"
+                                                                            <?= (int)$flavor['id'] === $itemProductId ? 'selected' : '' ?>
+                                                                        >
+                                                                            <?= htmlspecialchars((string)$flavor['name']) ?>
+                                                                        </option>
+                                                                    <?php endforeach; ?>
+                                                                </select>
+                                                                <div class="small text-muted mt-2">
+                                                                    <i class="bi bi-info-circle me-1"></i>
+                                                                    Add-ons that are not offered for the new flavor will be removed.
+                                                                </div>
+                                                            </div>
+                                                        <?php endif; ?>
+
                                                         <?php if (
                                                             (float)($itemProduct['regular_price'] ?? 0) > 0 ||
                                                             (float)($itemProduct['grande_price'] ?? 0) > 0

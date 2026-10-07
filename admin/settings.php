@@ -31,7 +31,7 @@ $productTypes = [
     'Cold Brew and Premium Iced Coffee',
     'Frappe',
     'Sip and Snack',
-    'Promo and Bundles'
+    'Bundle'
 ];
 
 $errors = [];
@@ -2741,7 +2741,9 @@ if (
         $errors[] = "Grande price must be greater than 0.";
     }
 
-    if ($hasRegular && $hasGrande && $regularPrice >= $grandePrice) {
+    // Bundle prices are set per client deal (e.g. Regular 7+1 = 203, Grande 7+1 = 195),
+    // so the Regular < Grande rule only applies to normal products.
+    if ($productType !== 'Bundle' && $hasRegular && $hasGrande && $regularPrice >= $grandePrice) {
         $errors[] = "Regular price must be lower than Grande price.";
     }
 
@@ -3130,7 +3132,9 @@ if (
         $errors[] = "Grande price must be greater than 0.";
     }
 
-    if ($hasRegular && $hasGrande && $regularPrice >= $grandePrice) {
+    // Bundle prices are set per client deal (e.g. Regular 7+1 = 203, Grande 7+1 = 195),
+    // so the Regular < Grande rule only applies to normal products.
+    if ($productType !== 'Bundle' && $hasRegular && $hasGrande && $regularPrice >= $grandePrice) {
         $errors[] = "Regular price must be lower than Grande price.";
     }
 
@@ -9037,7 +9041,7 @@ const addModalForm =
                             </div>
 
                             <div class="price-note mt-2">
-                                At least one size must be enabled. When both sizes are enabled, the Regular price must be lower than the Grande price.
+                                At least one size must be enabled. When both sizes are enabled, the Regular price must be lower than the Grande price (not required for Bundle products).
                             </div>
 
                             <div class="size-price-error" id="editSizePriceError" role="alert"></div>
@@ -9195,6 +9199,7 @@ const addModalForm =
 
                             <select
                                 name="product_type"
+                                id="addProductType"
                                 class="form-select"
                                 required
                             >
@@ -9316,7 +9321,7 @@ const addModalForm =
                             </div>
 
                             <div class="price-note mt-2">
-                                At least one size must be enabled. When both sizes are enabled, the Regular price must be lower than the Grande price.
+                                At least one size must be enabled. When both sizes are enabled, the Regular price must be lower than the Grande price (not required for Bundle products).
                             </div>
 
                             <div class="size-price-error" id="addSizePriceError" role="alert"></div>
@@ -9645,7 +9650,10 @@ document.addEventListener('DOMContentLoaded', function () {
                 const regular = parseFloat(regularInput.value);
                 const grande = parseFloat(grandeInput.value);
 
-                if (Number.isFinite(regular) && Number.isFinite(grande) && regular >= grande) {
+                const typeSelect = options.typeId ? document.getElementById(options.typeId) : null;
+                const isBundle = typeSelect && typeSelect.value === 'Bundle';
+
+                if (!isBundle && Number.isFinite(regular) && Number.isFinite(grande) && regular >= grande) {
                     message = 'Regular price must be lower than Grande price.';
                 }
             }
@@ -9663,6 +9671,10 @@ document.addEventListener('DOMContentLoaded', function () {
         grandeToggle.addEventListener('change', syncSizeInputs);
         regularInput.addEventListener('input', function () { validateSizes(true); });
         grandeInput.addEventListener('input', function () { validateSizes(true); });
+        const typeField = options.typeId ? document.getElementById(options.typeId) : null;
+        if (typeField) {
+            typeField.addEventListener('change', function () { validateSizes(true); });
+        }
 
         form.addEventListener('submit', function (event) {
             if (!regularToggle.checked && !grandeToggle.checked) {
@@ -9685,7 +9697,8 @@ document.addEventListener('DOMContentLoaded', function () {
         grandeToggleId: 'addHasGrande',
         regularInputId: 'addRegularPrice',
         grandeInputId: 'addGrandePrice',
-        errorId: 'addSizePriceError'
+        errorId: 'addSizePriceError',
+        typeId: 'addProductType'
     });
 
     setupSizePricing({
@@ -9694,7 +9707,8 @@ document.addEventListener('DOMContentLoaded', function () {
         grandeToggleId: 'editHasGrande',
         regularInputId: 'editRegularPrice',
         grandeInputId: 'editGrandePrice',
-        errorId: 'editSizePriceError'
+        errorId: 'editSizePriceError',
+        typeId: 'editProductType'
     });
 
 });

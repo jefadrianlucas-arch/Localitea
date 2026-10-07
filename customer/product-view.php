@@ -39,6 +39,14 @@ $promotionQuantity = max(
     (int)($_GET['promotion_quantity'] ?? 1)
 );
 
+/*
+ * Bundle slot (promotion_rule_items.id). Lets the customer swap the
+ * configured product for another flavor from the same category.
+ */
+$promotionSlotId = isset($_GET['promotion_slot'])
+    ? (int)$_GET['promotion_slot']
+    : 0;
+
 $promotion = null;
 
 if ($promotionId > 0) {
@@ -52,14 +60,27 @@ if ($promotionId > 0) {
             r.buy_quantity,
             r.get_quantity,
             pri.role,
-            pri.size AS promotion_size
+            pri.size AS promotion_size,
+            pri.id AS slot_id
         FROM promotions p
         INNER JOIN promotion_rules r
             ON r.promotion_id = p.id
         INNER JOIN promotion_rule_items pri
             ON pri.rule_id = r.id
+        INNER JOIN products slotp
+            ON slotp.id = pri.product_id
+        INNER JOIN products chosen
+            ON chosen.id = ?
         WHERE p.id = ?
-          AND pri.product_id = ?
+          AND (
+                (? = 0 AND pri.product_id = chosen.id)
+                OR (
+                    ? > 0
+                    AND pri.id = ?
+                    AND pri.role = 'bundle'
+                    AND slotp.category_id = chosen.category_id
+                )
+              )
           AND pri.role = ?
           AND p.is_active = 1
           AND p.is_archived = 0
@@ -69,8 +90,11 @@ if ($promotionId > 0) {
     ");
 
     $promotionStmt->execute([
-        $promotionId,
         $product['id'],
+        $promotionId,
+        $promotionSlotId,
+        $promotionSlotId,
+        $promotionSlotId,
         $promotionRole
     ]);
 
@@ -99,6 +123,68 @@ if ($promotionId > 0) {
             1
         );
     }
+}
+
+/*
+ * Bundle flavor options: every available product in the same category as
+ * the product configured for this slot (only those that have the slot's
+ * configured size).
+ */
+$bundleFlavors = [];
+$bundleSlotNumber = 0;
+$bundleSlotTotal = 0;
+
+if (
+    $promotion &&
+    $promotion['rule_type'] === 'bundle' &&
+    $promotion['role'] === 'bundle'
+) {
+    $promotionSlotId = (int)$promotion['slot_id'];
+    $bundleSlotSize = strtolower(trim((string)($promotion['promotion_size'] ?? '')));
+
+    $flavorStmt = $pdo->prepare("
+        SELECT
+            pr.id,
+            pr.name,
+            pr.regular_price,
+            pr.grande_price
+        FROM promotion_rule_items pri
+        INNER JOIN products slotp
+            ON slotp.id = pri.product_id
+        INNER JOIN products pr
+            ON pr.category_id = slotp.category_id
+        WHERE pri.id = ?
+          AND pr.is_available = 1
+          AND pr.is_archived = 0
+        ORDER BY pr.name ASC
+    ");
+    $flavorStmt->execute([$promotionSlotId]);
+
+    foreach ($flavorStmt->fetchAll(PDO::FETCH_ASSOC) as $flavor) {
+        if ($bundleSlotSize === 'regular' && (float)$flavor['regular_price'] <= 0) {
+            continue;
+        }
+
+        if ($bundleSlotSize === 'grande' && (float)$flavor['grande_price'] <= 0) {
+            continue;
+        }
+
+        $bundleFlavors[] = $flavor;
+    }
+
+    $slotListStmt = $pdo->prepare("
+        SELECT pri2.id
+        FROM promotion_rule_items pri
+        INNER JOIN promotion_rule_items pri2
+            ON pri2.rule_id = pri.rule_id
+           AND pri2.role = 'bundle'
+        WHERE pri.id = ?
+        ORDER BY pri2.id ASC
+    ");
+    $slotListStmt->execute([$promotionSlotId]);
+    $bundleSlotIds = array_map('intval', $slotListStmt->fetchAll(PDO::FETCH_COLUMN));
+    $bundleSlotTotal = count($bundleSlotIds);
+    $bundleSlotNumber = (int)array_search($promotionSlotId, $bundleSlotIds, true) + 1;
 }
 
 $isPromotionGet =
@@ -139,6 +225,89 @@ $addonStmt = $pdo->prepare("
 ");
 $addonStmt->execute([$product['id']]);
 $addons = $addonStmt->fetchAll();
+
+/*
+ * Menu bundles (e.g. "Classic Milktea & Fruit Tea 7+1"): configured in the
+ * menu_bundle_options table. The customer picks a flavor for every cup.
+ * If the table does not exist or has no row for this product, the product
+ * behaves like any normal menu item.
+ */
+$menuBundleConfig = [];
+$menuBundleFlavors = [];
+$isMenuBundle = false;
+
+if (!$promotion) {
+    try {
+        $bundleCfgStmt = $pdo->prepare("
+            SELECT size, cups, category_ids
+            FROM menu_bundle_options
+            WHERE product_id = ?
+        ");
+
+        if ($bundleCfgStmt && $bundleCfgStmt->execute([$product['id']])) {
+            foreach ($bundleCfgStmt->fetchAll(PDO::FETCH_ASSOC) as $cfgRow) {
+                $cfgCats = array_values(array_filter(array_map(
+                    'intval',
+                    explode(',', (string)$cfgRow['category_ids'])
+                )));
+
+                if ((int)$cfgRow['cups'] > 0 && $cfgCats) {
+                    $menuBundleConfig[(string)$cfgRow['size']] = [
+                        'cups' => (int)$cfgRow['cups'],
+                        'cats' => $cfgCats,
+                    ];
+                }
+            }
+        }
+    } catch (Throwable $e) {
+        $menuBundleConfig = [];
+    }
+}
+
+if ($menuBundleConfig) {
+    $bundleCatIds = array_values(array_unique(array_merge(
+        ...array_values(array_column($menuBundleConfig, 'cats'))
+    )));
+    $bundleCatPlaceholders = implode(',', array_fill(0, count($bundleCatIds), '?'));
+
+    $bundleFlavorStmt = $pdo->prepare("
+        SELECT
+            p.id,
+            p.name,
+            p.category_id,
+            p.price,
+            p.regular_price,
+            p.grande_price,
+            c.name AS category_name
+        FROM products p
+        INNER JOIN categories c
+            ON c.id = p.category_id
+        WHERE p.category_id IN ($bundleCatPlaceholders)
+          AND p.is_available = 1
+          AND p.is_archived = 0
+        ORDER BY c.name ASC, p.name ASC
+    ");
+    $bundleFlavorStmt->execute($bundleCatIds);
+
+    foreach ($bundleFlavorStmt->fetchAll(PDO::FETCH_ASSOC) as $flavorRow) {
+        $menuBundleFlavors[] = [
+            'id' => (int)$flavorRow['id'],
+            'name' => (string)$flavorRow['name'],
+            'cat' => (int)$flavorRow['category_id'],
+            'category' => (string)$flavorRow['category_name'],
+            'regular' => (float)$flavorRow['regular_price'] > 0,
+            'grande' => (float)$flavorRow['grande_price'] > 0,
+            'base' => (float)$flavorRow['price'] > 0,
+            'any' => max(
+                (float)$flavorRow['price'],
+                (float)$flavorRow['regular_price'],
+                (float)$flavorRow['grande_price']
+            ) > 0,
+        ];
+    }
+
+    $isMenuBundle = !empty($menuBundleFlavors);
+}
 ?>
 
 <style>
@@ -374,6 +543,33 @@ $addons = $addonStmt->fetchAll();
         font-weight: 800;
     }
 
+    .pv-pick-row {
+        display: grid;
+        grid-template-columns: 64px minmax(0, 1fr);
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 8px;
+    }
+    .pv-pick-row label {
+        margin: 0;
+        color: #6F4E37;
+        font-size: .82rem;
+        font-weight: 700;
+    }
+    .pv-flavor-select {
+        width: 100%;
+        padding: 10px 12px;
+        border: 1.5px solid #E6DACB;
+        border-radius: 12px;
+        background: #FFFFFF;
+        color: #2C221E;
+        font-size: .95rem;
+        font-weight: 600;
+    }
+    .pv-flavor-select:focus {
+        outline: none;
+        border-color: #6F4E37;
+    }
     .pv-promo {
         display: flex;
         gap: 10px;
@@ -634,6 +830,9 @@ $addons = $addonStmt->fetchAll();
         <?php if ($promotion): ?>
             <input type="hidden" name="promotion_id" value="<?= (int)$promotion['id'] ?>">
             <input type="hidden" name="promotion_role" value="<?= htmlspecialchars($promotion['role']) ?>">
+            <?php if ($promotionSlotId > 0 && $promotion['role'] === 'bundle'): ?>
+                <input type="hidden" name="promotion_slot_id" value="<?= (int)$promotionSlotId ?>">
+            <?php endif; ?>
             <?php if ($fixedPromotionSize !== ''): ?>
                 <input type="hidden" name="size" value="<?= htmlspecialchars($fixedPromotionSize) ?>" class="fixed-promotion-size">
             <?php endif; ?>
@@ -703,14 +902,14 @@ $addons = $addonStmt->fetchAll();
                             <button type="button"
                                     class="qty-btn"
                                     aria-label="Decrease quantity"
-                                    <?= (!$isAvailable || $isPromotionGet) ? 'disabled' : 'onclick="updateQty(-1)"' ?>>
+                                    <?= (!$isAvailable || $isPromotionGet || $isMenuBundle) ? 'disabled' : 'onclick="updateQty(-1)"' ?>>
                                 <i class="bi bi-dash-lg"></i>
                             </button>
                             <span id="qty-text"><?= $promotion ? $promotionQuantity : 1 ?></span>
                             <button type="button"
                                     class="qty-btn"
                                     aria-label="Increase quantity"
-                                    <?= (!$isAvailable || $isPromotionGet) ? 'disabled' : 'onclick="updateQty(1)"' ?>>
+                                    <?= (!$isAvailable || $isPromotionGet || $isMenuBundle) ? 'disabled' : 'onclick="updateQty(1)"' ?>>
                                 <i class="bi bi-plus-lg"></i>
                             </button>
                             <input type="hidden" name="quantity" id="input-qty" value="<?= $promotion ? $promotionQuantity : 1 ?>">
@@ -751,6 +950,27 @@ $addons = $addonStmt->fetchAll();
                             </div>
                         </div>
                     </div>
+                <?php endif; ?>
+
+                <?php if (count($bundleFlavors) > 1): ?>
+                <!-- BUNDLE FLAVOR SECTION -->
+                <div class="pv-group">
+                    <div class="pv-group-head">
+                        <h3 class="pv-group-title">Flavor</h3>
+                        <?php if ($bundleSlotTotal > 1): ?>
+                            <span class="pv-group-hint">Bundle item <?= (int)$bundleSlotNumber ?> of <?= (int)$bundleSlotTotal ?></span>
+                        <?php endif; ?>
+                    </div>
+                    <select class="pv-flavor-select" aria-label="Choose flavor"
+                            onchange="window.location.href = this.value;">
+                        <?php foreach ($bundleFlavors as $flavor): ?>
+                            <option value="product-view.php?id=<?= (int)$flavor['id'] ?>&promotion_id=<?= (int)$promotion['id'] ?>&promotion_role=bundle&promotion_slot=<?= (int)$promotionSlotId ?>&promotion_quantity=<?= (int)$promotionQuantity ?>"
+                                <?= (int)$flavor['id'] === (int)$product['id'] ? 'selected' : '' ?>>
+                                <?= htmlspecialchars($flavor['name']) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
                 <?php endif; ?>
 
                 <?php if ($hasSize): ?>
@@ -810,6 +1030,18 @@ $addons = $addonStmt->fetchAll();
                             Promotion size: <strong><?= htmlspecialchars($fixedPromotionSize) ?></strong>
                         </div>
                     <?php endif; ?>
+                </div>
+                <?php endif; ?>
+
+                <?php if ($isMenuBundle): ?>
+                <!-- MENU BUNDLE FLAVORS -->
+                <div class="pv-group">
+                    <div class="pv-group-head">
+                        <h3 class="pv-group-title">Choose your flavors</h3>
+                        <span class="pv-group-hint">Required</span>
+                    </div>
+                    <div class="pv-note" id="bundlePicksNote" style="margin-bottom: 10px;"></div>
+                    <div id="bundlePicks"></div>
                 </div>
                 <?php endif; ?>
 
@@ -948,6 +1180,109 @@ $addons = $addonStmt->fetchAll();
         </div>
     </form>
 </div>
+
+<?php if ($isMenuBundle): ?>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const cfg = <?= json_encode($menuBundleConfig, JSON_UNESCAPED_UNICODE) ?>;
+    const flavors = <?= json_encode($menuBundleFlavors, JSON_UNESCAPED_UNICODE) ?>;
+    const box = document.getElementById('bundlePicks');
+    const note = document.getElementById('bundlePicksNote');
+
+    if (!box || !note) {
+        return;
+    }
+
+    function currentSize() {
+        const checked = document.querySelector('.size-radio:checked');
+        return checked ? checked.value : '';
+    }
+
+    function render() {
+        const size = currentSize();
+        const conf = cfg[size] || cfg[''] || null;
+        const previous = Array.from(box.querySelectorAll('select')).map(function (sel) {
+            return sel.value;
+        });
+
+        box.innerHTML = '';
+
+        if (!conf) {
+            note.textContent = 'Choose a size to see how many flavors you can pick.';
+            return;
+        }
+
+        note.textContent = 'Pick a flavor for each of the ' + conf.cups + ' cups. The same flavor can be picked more than once.';
+
+        const usable = flavors.filter(function (f) {
+            if (conf.cats.indexOf(f.cat) === -1) {
+                return false;
+            }
+
+            /* Cups are part of the bundle price, so any priced flavor can be picked. */
+            return f.any;
+        });
+
+        const groups = {};
+
+        usable.forEach(function (f) {
+            (groups[f.category] = groups[f.category] || []).push(f);
+        });
+
+        for (let i = 0; i < conf.cups; i++) {
+            const row = document.createElement('div');
+            row.className = 'pv-pick-row';
+
+            const label = document.createElement('label');
+            label.textContent = 'Cup ' + (i + 1);
+
+            const sel = document.createElement('select');
+            sel.name = 'bundle_picks[]';
+            sel.required = true;
+            sel.className = 'pv-flavor-select';
+            sel.setAttribute('aria-label', 'Flavor for cup ' + (i + 1));
+
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = 'Choose a flavor';
+            sel.appendChild(placeholder);
+
+            Object.keys(groups).forEach(function (category) {
+                const optgroup = document.createElement('optgroup');
+                optgroup.label = category;
+
+                groups[category].forEach(function (f) {
+                    const option = document.createElement('option');
+                    option.value = String(f.id);
+                    option.textContent = f.name;
+                    optgroup.appendChild(option);
+                });
+
+                sel.appendChild(optgroup);
+            });
+
+            if (previous[i]) {
+                const keep = sel.querySelector('option[value="' + previous[i] + '"]');
+
+                if (keep) {
+                    sel.value = previous[i];
+                }
+            }
+
+            row.appendChild(label);
+            row.appendChild(sel);
+            box.appendChild(row);
+        }
+    }
+
+    document.querySelectorAll('.size-radio').forEach(function (radio) {
+        radio.addEventListener('change', render);
+    });
+
+    render();
+});
+</script>
+<?php endif; ?>
 
 <!-- JavaScript para sa tamang pagkalkula ng Presyo (Classic vs Fixed Price) -->
 <script>

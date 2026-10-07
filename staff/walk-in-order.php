@@ -29,7 +29,7 @@ $categories = [
     'Fruit Tea',
     'Frappe',
     'Sip and Snack',
-    'Promo and Bundles'
+    'Bundle'
 ];
 
 $category = trim((string)($_GET['category'] ?? 'Classic Milktea'));
@@ -110,7 +110,7 @@ function walkinFmtRate(float $rate): string
     return rtrim(rtrim(number_format($rate, 2), '0'), '.') . '%';
 }
 
-function walkinRenderProducts(array $products, array $productAddons, string $category): void
+function walkinRenderProducts(array $products, array $productAddons, string $category, array $productBundles = []): void
 {
     ?>
     <div class="walkin-product-content">
@@ -134,6 +134,7 @@ function walkinRenderProducts(array $products, array $productAddons, string $cat
                     <?php
                     $available = (int)$product['is_available'] === 1;
                     $addonsForProduct = $productAddons[(int)$product['id']] ?? [];
+                    $bundleForProduct = $productBundles[(int)$product['id']] ?? null;
                     ?>
                     <div class="col-6 col-md-4 col-xl-3 col-xxl-2">
                         <div class="walkin-product-card <?= $available ? '' : 'is-unavailable' ?>">
@@ -162,6 +163,7 @@ function walkinRenderProducts(array $products, array $productAddons, string $cat
                                         data-regular-price="<?= htmlspecialchars((string)(float)($product['regular_price'] ?? 0), ENT_QUOTES) ?>"
                                         data-grande-price="<?= htmlspecialchars((string)(float)($product['grande_price'] ?? 0), ENT_QUOTES) ?>"
                                         data-addons='<?= htmlspecialchars(json_encode($addonsForProduct, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '[]', ENT_QUOTES) ?>'
+                                        <?php if ($bundleForProduct): ?>data-bundle='<?= htmlspecialchars(json_encode($bundleForProduct, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}', ENT_QUOTES) ?>'<?php endif; ?>
                                     >
                                         <i class="bi bi-plus-circle me-1"></i> Add
                                     </button>
@@ -302,8 +304,79 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $unitPrice = round($basePrice + $addonsTotal, 2);
 
+        /* Bundle: the cashier must pick a flavor for every cup; verified against the database. */
+        $bundlePicks = [];
+        $bundlePickKey = '';
+        $bundleConfig = null;
+
+        try {
+            $bundleCfgStmt = $pdo->prepare("SELECT size, cups, category_ids FROM menu_bundle_options WHERE product_id = ?");
+            $bundleCfgStmt->execute([$productId]);
+            $bundleCfgRows = [];
+            foreach ($bundleCfgStmt->fetchAll(PDO::FETCH_ASSOC) as $cfgRow) {
+                $bundleCfgRows[(string)$cfgRow['size']] = $cfgRow;
+            }
+            $bundleConfig = $bundleCfgRows[$size] ?? ($bundleCfgRows[''] ?? null);
+        } catch (Throwable $e) {
+            $bundleConfig = null;
+        }
+
+        if ($bundleConfig) {
+            $requiredCups = (int)$bundleConfig['cups'];
+            $allowedCategoryIds = array_values(array_filter(array_map('intval', explode(',', (string)$bundleConfig['category_ids']))));
+            $postedPicks = $_POST['bundle_picks'] ?? [];
+            if (!is_array($postedPicks)) { $postedPicks = []; }
+            $postedPicks = array_values(array_map('intval', $postedPicks));
+
+            if ($requiredCups > 0 && $allowedCategoryIds) {
+                if (count($postedPicks) !== $requiredCups || in_array(0, $postedPicks, true)) {
+                    walkinRedirect(walkinBackUrl($returnCategory, 'error=' . urlencode('Please choose a flavor for every cup of the bundle.')));
+                }
+
+                $uniquePickIds = array_values(array_unique($postedPicks));
+                $pickPlaceholders = implode(',', array_fill(0, count($uniquePickIds), '?'));
+                $pickStmt = $pdo->prepare("
+                    SELECT id, name, category_id, price, regular_price, grande_price, is_available, is_archived
+                    FROM products
+                    WHERE id IN ($pickPlaceholders)
+                ");
+                $pickStmt->execute($uniquePickIds);
+                $pickProducts = [];
+                foreach ($pickStmt->fetchAll(PDO::FETCH_ASSOC) as $pickRow) {
+                    $pickProducts[(int)$pickRow['id']] = $pickRow;
+                }
+
+                foreach ($postedPicks as $pickId) {
+                    $pick = $pickProducts[$pickId] ?? null;
+                    $pickSizePrice = max(
+                        (float)($pick['price'] ?? 0),
+                        (float)($pick['regular_price'] ?? 0),
+                        (float)($pick['grande_price'] ?? 0)
+                    );
+
+                    if (
+                        !$pick ||
+                        (int)$pick['is_available'] !== 1 ||
+                        (int)$pick['is_archived'] !== 0 ||
+                        !in_array((int)$pick['category_id'], $allowedCategoryIds, true) ||
+                        $pickSizePrice <= 0
+                    ) {
+                        walkinRedirect(walkinBackUrl($returnCategory, 'error=' . urlencode('One of the selected flavors is no longer available. Please choose again.')));
+                    }
+
+                    $bundlePicks[] = ['id' => $pickId, 'name' => (string)$pick['name']];
+                }
+
+                /* The picks describe one bundle; add more bundles one at a time. */
+                $quantity = 1;
+                $bundlePickIds = array_map(static fn(array $pickItem): int => (int)$pickItem['id'], $bundlePicks);
+                sort($bundlePickIds);
+                $bundlePickKey = '@' . md5(implode(',', $bundlePickIds));
+            }
+        }
+
         $cartKey = md5(
-            $productId . '|' . $size . '|' . $sugarLevel . '|' . $discountType . '|' . implode(',', $validAddons)
+            $productId . '|' . $size . '|' . $sugarLevel . '|' . $discountType . '|' . implode(',', $validAddons) . $bundlePickKey
         );
 
         if (isset($_SESSION['walkin_cart'][$cartKey])) {
@@ -321,6 +394,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'discount_id_number' => $discountIdNumber,
                 'price' => $unitPrice,
                 'quantity' => $quantity,
+                'bundle_picks' => $bundlePicks,
             ];
         }
 
@@ -441,6 +515,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             }
 
+            /* Bundle flavors are saved with the add-ons so staff and receipts show what to prepare per cup. */
+            $lineAddons = is_array($item['addons'] ?? null) ? array_values($item['addons']) : [];
+            if (!empty($item['bundle_picks']) && is_array($item['bundle_picks'])) {
+                $bundleCupLines = [];
+                $bundleCupNo = 1;
+                foreach ($item['bundle_picks'] as $bundlePick) {
+                    $bundleCupLines[] = 'Cup ' . $bundleCupNo . ': ' . trim((string)($bundlePick['name'] ?? ''));
+                    $bundleCupNo++;
+                }
+                $lineAddons = array_merge($bundleCupLines, $lineAddons);
+            }
+
             $subtotal += $lineSubtotal;
             $lineData[] = [
                 'product_id' => $productId,
@@ -449,7 +535,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'unit_price' => $unitPrice,
                 'subtotal' => $lineSubtotal,
                 'size' => trim((string)($item['size'] ?? '')),
-                'addons' => is_array($item['addons'] ?? null) ? array_values($item['addons']) : [],
+                'addons' => $lineAddons,
                 'sugar_level' => trim((string)($item['sugar_level'] ?? '')),
                 'discount_type' => $discountType,
             ];
@@ -689,9 +775,74 @@ if (!empty($products)) {
     }
 }
 
+/* Bundle products: cups + flavor choices come from menu_bundle_options (same as the customer menu). */
+$productBundles = [];
+if (!empty($products)) {
+    try {
+        $bundleCfgStmt = $pdo->prepare("
+            SELECT product_id, size, cups, category_ids
+            FROM menu_bundle_options
+            WHERE product_id IN ($placeholders)
+        ");
+        $bundleCfgStmt->execute($productIds);
+        $bundleCfgRows = $bundleCfgStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $bundleCategoryIds = [];
+        foreach ($bundleCfgRows as $cfgRow) {
+            foreach (explode(',', (string)$cfgRow['category_ids']) as $catId) {
+                $catId = (int)trim($catId);
+                if ($catId > 0) { $bundleCategoryIds[$catId] = true; }
+            }
+        }
+
+        $flavorsByCategory = [];
+        if ($bundleCategoryIds) {
+            $catIds = array_keys($bundleCategoryIds);
+            $catPlaceholders = implode(',', array_fill(0, count($catIds), '?'));
+            $flavorStmt = $pdo->prepare("
+                SELECT p.id, p.name, p.category_id, c.name AS category
+                FROM products p
+                INNER JOIN categories c ON c.id = p.category_id
+                WHERE p.category_id IN ($catPlaceholders)
+                  AND p.is_available = 1
+                  AND p.is_archived = 0
+                  AND (p.price > 0 OR p.regular_price > 0 OR p.grande_price > 0)
+                ORDER BY c.name ASC, p.name ASC
+            ");
+            $flavorStmt->execute($catIds);
+            foreach ($flavorStmt->fetchAll(PDO::FETCH_ASSOC) as $flavorRow) {
+                $flavorsByCategory[(int)$flavorRow['category_id']][] = [
+                    'id' => (int)$flavorRow['id'],
+                    'name' => (string)$flavorRow['name'],
+                    'category' => (string)$flavorRow['category'],
+                ];
+            }
+        }
+
+        foreach ($bundleCfgRows as $cfgRow) {
+            $flavorList = [];
+            foreach (explode(',', (string)$cfgRow['category_ids']) as $catId) {
+                $catId = (int)trim($catId);
+                foreach ($flavorsByCategory[$catId] ?? [] as $flavor) {
+                    $flavorList[] = $flavor;
+                }
+            }
+            if ((int)$cfgRow['cups'] > 0 && $flavorList) {
+                $productBundles[(int)$cfgRow['product_id']][(string)$cfgRow['size']] = [
+                    'cups' => (int)$cfgRow['cups'],
+                    'flavors' => $flavorList,
+                ];
+            }
+        }
+    } catch (Throwable $e) {
+        error_log('Walk-in bundle options error: ' . $e->getMessage());
+        $productBundles = [];
+    }
+}
+
 /* AJAX category request: return only the products column. */
 if ($isAjaxCategory) {
-    walkinRenderProducts($products, $productAddons, $category);
+    walkinRenderProducts($products, $productAddons, $category, $productBundles);
     exit;
 }
 
@@ -840,6 +991,9 @@ body { background: #F8F4EF; }
 .walkin-product-name { color: #2C221E; font-size: .86rem; font-weight: 400; line-height: 1.25; min-height: 34px; }
 .walkin-product-price { color: #6F4E37; font-weight: 400; font-size: .92rem; margin: 6px 0 10px; }
 
+.walkin-bundle-picks { display: grid; gap: 8px; }
+.walkin-bundle-pick { display: grid; grid-template-columns: 54px minmax(0, 1fr); gap: 8px; align-items: center; }
+.walkin-bundle-pick span { font-size: .78rem; font-weight: 700; color: #6F4E37; }
 .walkin-add-btn {
     width: 100%; margin-top: auto; min-height: 36px; border-radius: 10px;
     background: #6F4E37; color: #FFFFFF; border-color: #6F4E37; font-size: .78rem; font-weight: 400;
@@ -1006,7 +1160,7 @@ body.walkin-drawer-open .walkin-toast { right: 432px; width: min(380px, calc(100
         </div>
 
         <div id="walkinProductsColumn">
-            <?php walkinRenderProducts($products, $productAddons, $category); ?>
+            <?php walkinRenderProducts($products, $productAddons, $category, $productBundles); ?>
         </div>
     </section>
 </main>
@@ -1043,6 +1197,13 @@ body.walkin-drawer-open .walkin-toast { right: 432px; width: min(380px, calc(100
                     $metaParts = [];
                     if (!empty($item['size'])) { $metaParts[] = 'Size: ' . $item['size']; }
                     if (!empty($item['sugar_level'])) { $metaParts[] = 'Sugar: ' . $item['sugar_level']; }
+                    if (!empty($item['bundle_picks']) && is_array($item['bundle_picks'])) {
+                        $cupParts = [];
+                        foreach ($item['bundle_picks'] as $cupIndex => $cupPick) {
+                            $cupParts[] = 'Cup ' . ($cupIndex + 1) . ': ' . trim((string)($cupPick['name'] ?? ''));
+                        }
+                        $metaParts[] = implode(' · ', $cupParts);
+                    }
                     if (!empty($item['addons']) && is_array($item['addons'])) { $metaParts[] = 'Add-ons: ' . implode(', ', $item['addons']); }
                     if (($item['discount_type'] ?? 'none') !== 'none') { $metaParts[] = strtoupper((string)$item['discount_type']) . ' discount'; if (!empty($item['discount_id_number'])) { $metaParts[] = 'ID: ' . $item['discount_id_name'] . ' (' . $item['discount_id_number'] . ')'; } }
                     ?>
@@ -1147,6 +1308,11 @@ body.walkin-drawer-open .walkin-toast { right: 432px; width: min(380px, calc(100
                         <div class="walkin-radio-grid" id="walkinSizeOptions"></div>
                     </div>
 
+                    <div class="mb-3" id="walkinBundleSection" hidden>
+                        <span class="section-label">Flavor per cup</span>
+                        <div id="walkinBundlePicks" class="walkin-bundle-picks"></div>
+                    </div>
+
                     <div class="mb-3">
                         <span class="section-label">Sugar Level</span>
                         <div class="walkin-radio-grid">
@@ -1197,7 +1363,7 @@ body.walkin-drawer-open .walkin-toast { right: 432px; width: min(380px, calc(100
                         <div class="walkin-discount-note">Verify the customer's valid ID. Only one discount type is allowed per order.</div>
                     </div>
 
-                    <div class="mb-1">
+                    <div class="mb-1" id="walkinQtyBlock">
                         <span class="section-label">Quantity</span>
                         <div class="walkin-qty-stepper">
                             <button type="button" id="walkinQtyMinus" aria-label="Decrease">−</button>
@@ -1480,6 +1646,62 @@ body.walkin-drawer-open .walkin-toast { right: 432px; width: min(380px, calc(100
         }).join('');
     }
 
+    /* ---------- Bundle flavor pickers ---------- */
+    const bundleSection = document.getElementById('walkinBundleSection');
+    const bundlePicksEl = document.getElementById('walkinBundlePicks');
+    const qtyBlock = document.getElementById('walkinQtyBlock');
+    let activeBundle = null;
+
+    function renderBundlePicks() {
+        if (!bundleSection || !bundlePicksEl) return;
+
+        let config = null;
+        if (activeBundle) {
+            const sizeInput = addForm.querySelector('input[name="size"]:checked');
+            const sizeValue = sizeInput ? sizeInput.value : '';
+            config = activeBundle[sizeValue] || activeBundle[''] || null;
+        }
+
+        if (!config) {
+            bundleSection.hidden = true;
+            bundlePicksEl.innerHTML = '';
+            if (qtyBlock) qtyBlock.hidden = false;
+            return;
+        }
+
+        const previous = Array.from(bundlePicksEl.querySelectorAll('select')).map(function (sel) { return sel.value; });
+
+        const groups = {};
+        config.flavors.forEach(function (flavor) {
+            (groups[flavor.category] = groups[flavor.category] || []).push(flavor);
+        });
+        const optionsHtml = '<option value="">Choose flavor</option>' + Object.keys(groups).map(function (cat) {
+            return '<optgroup label="' + escapeHtml(cat) + '">' + groups[cat].map(function (flavor) {
+                return '<option value="' + flavor.id + '">' + escapeHtml(flavor.name) + '</option>';
+            }).join('') + '</optgroup>';
+        }).join('');
+
+        let html = '';
+        for (let i = 0; i < config.cups; i++) {
+            html += '<div class="walkin-bundle-pick"><span>Cup ' + (i + 1) + '</span>' +
+                '<select name="bundle_picks[]" class="form-select form-select-sm" required>' + optionsHtml + '</select></div>';
+        }
+        bundlePicksEl.innerHTML = html;
+
+        bundlePicksEl.querySelectorAll('select').forEach(function (sel, index) {
+            if (previous[index]) sel.value = previous[index];
+        });
+
+        bundleSection.hidden = false;
+        if (qtyInput) qtyInput.value = '1';
+        if (qtyBlock) qtyBlock.hidden = true;
+        updateModalTotal();
+    }
+
+    if (sizeOptions) {
+        sizeOptions.addEventListener('change', renderBundlePicks);
+    }
+
     function openProductModal(button) {
         if (!button || button.disabled || !productModal || !addForm) return;
         activeProductButton = button;
@@ -1487,6 +1709,9 @@ body.walkin-drawer-open .walkin-toast { right: 432px; width: min(380px, calc(100
         if (productIdInput) productIdInput.value = button.dataset.productId || '';
         renderSizeOptions(button);
         renderAddons(button);
+        try { activeBundle = button.dataset.bundle ? JSON.parse(button.dataset.bundle) : null; } catch (e) { activeBundle = null; }
+        if (bundlePicksEl) bundlePicksEl.innerHTML = '';
+        renderBundlePicks();
         if (qtyInput) qtyInput.value = '1';
         const sugar50 = document.getElementById('walkinSugar50');
         const discountNone = document.getElementById('walkinDiscountNone');

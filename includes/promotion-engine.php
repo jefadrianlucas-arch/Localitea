@@ -175,18 +175,22 @@ function localiteaGetActivePromotionDefinitions(PDO $pdo, ?string $date = null):
      */
     $itemStmt = $pdo->prepare("
         SELECT
+            pri.id AS item_id,
             pri.rule_id,
             pri.product_id,
             pri.role,
             pri.quantity,
             pri.size,
+            p.category_id,
             p.name AS product_name
         FROM promotion_rule_items pri
         INNER JOIN products p
             ON p.id = pri.product_id
         WHERE pri.rule_id IN ({$placeholders})
-          AND p.is_archived = 0
-          AND p.is_available = 1
+          AND (
+                pri.role = 'bundle'
+                OR (p.is_archived = 0 AND p.is_available = 1)
+              )
         ORDER BY pri.rule_id ASC, pri.id ASC
     ");
 
@@ -1121,6 +1125,102 @@ function localiteaEvaluatePromotion(
         $normalBundlePrice = 0.0;
 
         /*
+         * Slot-based bundles: each rule item is a slot, and the cart line
+         * filling it may be any flavor the customer picked from the slot's
+         * category (see add-to-cart.php). Lines are matched to a slot by
+         * promotion_slot_id and must use the slot's configured size.
+         *
+         * The bundle price is exact: the discount equals the base price of
+         * the drinks actually chosen minus the bundle price, so the
+         * customer pays the bundle price plus add-ons whichever flavors
+         * were picked. Add-ons are never discounted.
+         */
+        $bundlePromotionId = (int)($promotion['id'] ?? 0);
+        $slotLines = [];
+
+        foreach ($cart as $bundleCartItem) {
+            if (
+                (int)($bundleCartItem['promotion_source_id'] ?? 0) !== $bundlePromotionId ||
+                ($bundleCartItem['promotion_source_role'] ?? '') !== 'bundle'
+            ) {
+                continue;
+            }
+
+            $lineSlot = (int)($bundleCartItem['promotion_slot_id'] ?? 0);
+
+            if ($lineSlot > 0) {
+                $slotLines[$lineSlot][] = $bundleCartItem;
+            }
+        }
+
+        if ($slotLines) {
+            foreach ($items as $item) {
+                $slotId = (int)($item['item_id'] ?? 0);
+                $requiredQty = max(1, (int)$item['quantity']);
+                $slotSize = localiteaNormalizePromotionSize(
+                    $item['size'] ?? null
+                );
+
+                $availableQty = 0;
+                $slotBaseTotal = 0.0;
+
+                foreach ($slotLines[$slotId] ?? [] as $slotLine) {
+                    $lineQty = max(0, (int)($slotLine['quantity'] ?? 0));
+
+                    if ($lineQty <= 0) {
+                        continue;
+                    }
+
+                    $lineSize = localiteaNormalizePromotionSize(
+                        $slotLine['size'] ?? null
+                    );
+
+                    if ($slotSize !== null && $lineSize !== $slotSize) {
+                        continue;
+                    }
+
+                    $linePricing = localiteaCalculateItemPricing(
+                        $pdo,
+                        $slotLine
+                    );
+
+                    $availableQty += $lineQty;
+                    $slotBaseTotal +=
+                        $linePricing['base_unit_price'] * $lineQty;
+                }
+
+                if ($availableQty < $requiredQty) {
+                    return $result;
+                }
+
+                $possibleSets = intdiv($availableQty, $requiredQty);
+
+                $sets = $sets === null
+                    ? $possibleSets
+                    : min($sets, $possibleSets);
+
+                $normalBundlePrice +=
+                    ($slotBaseTotal / $availableQty) * $requiredQty;
+            }
+
+            $bundlePrice = (float)($promotion['bundle_price'] ?? 0);
+
+            if ($sets === null || $sets <= 0 || $bundlePrice <= 0) {
+                return $result;
+            }
+
+            $result['discount'] = round(
+                $sets * max(0.0, $normalBundlePrice - $bundlePrice),
+                2
+            );
+
+            return $result;
+        }
+
+        /*
+         * Legacy bundles (cart lines without a slot id): match by the
+         * configured product and size.
+         *
          * Bundle discount is based only on the configured drink size prices.
          * Add-ons are extras and must remain fully chargeable.
          */
