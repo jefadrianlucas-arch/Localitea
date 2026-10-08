@@ -9,8 +9,17 @@ $port = getenv('MYSQLPORT') ?: '3307';
 $db   = getenv('MYSQLDATABASE') ?: 'milktea_db';
 $user = getenv('MYSQLUSER') ?: 'root';
 $pass = getenv('MYSQLPASSWORD') ?: '';
+// Use Railway MySQL variables when deployed.
+// Fall back to XAMPP settings when running locally.
+
+$host = getenv('MYSQLHOST') ?: 'localhost';
+$port = getenv('MYSQLPORT') ?: '3307';
+$db   = getenv('MYSQLDATABASE') ?: 'milktea_db';
+$user = getenv('MYSQLUSER') ?: 'root';
+$pass = getenv('MYSQLPASSWORD') ?: '';
 $charset = 'utf8mb4';
 
+$dsn = "mysql:host=$host;port=$port;dbname=$db;charset=$charset";
 $dsn = "mysql:host=$host;port=$port;dbname=$db;charset=$charset";
 
 $options = [
@@ -22,6 +31,7 @@ $options = [
 try {
     $pdo = new PDO($dsn, $user, $pass, $options);
 } catch (\PDOException $e) {
+    die("Database connection failed: " . $e->getMessage());
     die("Database connection failed: " . $e->getMessage());
 }
 
