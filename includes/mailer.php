@@ -1,17 +1,157 @@
 <?php
 
-use PHPMailer\PHPMailer\Exception;
 use PHPMailer\PHPMailer\PHPMailer;
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
+/**
+ * Email message adapter.
+ * Uses Resend's HTTPS API when RESEND_API_KEY is configured.
+ * Falls back to the existing SMTP configuration for local testing.
+ */
+class LocaliteaEmailMessage
+{
+    public $Subject = '';
+    public $Body = '';
+    public $AltBody = '';
 
-function createLocaliteaMailer(): PHPMailer
+    private $recipientEmail = '';
+    private $recipientName = '';
+
+    public function addAddress($email, $name = ''): void
+    {
+        $email = trim((string) $email);
+
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            throw new InvalidArgumentException(
+                'A valid recipient email address is required.'
+            );
+        }
+
+        $this->recipientEmail = $email;
+        $this->recipientName = (string) $name;
+    }
+
+    public function send(): bool
+    {
+        $apiKey = trim((string) getenv('RESEND_API_KEY'));
+
+        if ($apiKey !== '') {
+            return $this->sendViaResend($apiKey);
+        }
+
+        // Keep the existing SMTP method available for local XAMPP use.
+        $mail = createLocaliteaSmtpMailer();
+
+        $mail->addAddress(
+            $this->recipientEmail,
+            $this->recipientName
+        );
+
+        $mail->Subject = $this->Subject;
+        $mail->Body = $this->Body;
+        $mail->AltBody = $this->AltBody;
+
+        return $mail->send();
+    }
+
+    private function sendViaResend(string $apiKey): bool
+    {
+        $payload = [
+            'from' => 'Localitea <onboarding@resend.dev>',
+            'to' => [$this->recipientEmail],
+            'subject' => $this->Subject,
+            'html' => $this->Body,
+            'text' => $this->AltBody,
+        ];
+
+        $jsonPayload = json_encode(
+            $payload,
+            JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+        );
+
+        if ($jsonPayload === false) {
+            throw new RuntimeException(
+                'Could not prepare the email request.'
+            );
+        }
+
+        $context = stream_context_create([
+            'http' => [
+                'method' => 'POST',
+                'header' =>
+                    "Authorization: Bearer {$apiKey}\r\n" .
+                    "Content-Type: application/json\r\n" .
+                    "Accept: application/json\r\n",
+                'content' => $jsonPayload,
+                'timeout' => 15,
+                'ignore_errors' => true,
+            ],
+        ]);
+
+        $responseBody = @file_get_contents(
+            'https://api.resend.com/emails',
+            false,
+            $context
+        );
+
+        $statusCode = 0;
+        $responseHeaders = $http_response_header ?? [];
+
+        foreach ($responseHeaders as $header) {
+            if (preg_match('/^HTTP\/\S+\s+(\d{3})/i', $header, $matches)) {
+                $statusCode = (int) $matches[1];
+            }
+        }
+
+        $responseData = is_string($responseBody)
+            ? json_decode($responseBody, true)
+            : null;
+
+        if (
+            $responseBody === false ||
+            $statusCode < 200 ||
+            $statusCode >= 300
+        ) {
+            $detail = is_array($responseData)
+                ? ($responseData['message'] ?? $responseData['error'] ?? '')
+                : '';
+
+            if (!is_string($detail) || $detail === '') {
+                $detail = 'No detailed error was returned.';
+            }
+
+            error_log(
+                'Localitea Resend API error. HTTP ' .
+                ($statusCode ?: 'no response') . ': ' .
+                $detail
+            );
+
+            throw new RuntimeException(
+                'Resend could not send the email. Check the application logs.'
+            );
+        }
+
+        return true;
+    }
+}
+
+/**
+ * Factory used by the existing email template functions.
+ */
+function createLocaliteaMailer(): LocaliteaEmailMessage
+{
+    return new LocaliteaEmailMessage();
+}
+
+/**
+ * Existing SMTP configuration retained for local development.
+ */
+function createLocaliteaSmtpMailer(): PHPMailer
 {
     $configPath = __DIR__ . '/mail-config.php';
     $localConfig = [];
 
-    // Use the private config locally when it exists.
     if (is_file($configPath)) {
         $loadedConfig = require $configPath;
 
@@ -20,11 +160,7 @@ function createLocaliteaMailer(): PHPMailer
         }
     }
 
-    // Environment variables take priority on Railway.
-    $getSetting = static function (
-        string $key,
-        $fallback = ''
-    ) {
+    $getSetting = static function (string $key, $fallback = '') {
         $value = getenv($key);
 
         return ($value !== false && $value !== '')
@@ -45,11 +181,11 @@ function createLocaliteaMailer(): PHPMailer
             'MAIL_PASSWORD',
             $localConfig['password'] ?? ''
         ),
-        'port' => (int)$getSetting(
+        'port' => (int) $getSetting(
             'MAIL_PORT',
-            (string)($localConfig['port'] ?? 465)
+            (string) ($localConfig['port'] ?? 465)
         ),
-        'encryption' => strtolower((string)$getSetting(
+        'encryption' => strtolower((string) $getSetting(
             'MAIL_ENCRYPTION',
             $localConfig['encryption'] ?? 'ssl'
         )),
@@ -65,7 +201,7 @@ function createLocaliteaMailer(): PHPMailer
     ];
 
     foreach (['host', 'username', 'password', 'from_email'] as $key) {
-        if (trim((string)$mailConfig[$key]) === '') {
+        if (trim((string) $mailConfig[$key]) === '') {
             throw new RuntimeException(
                 "Missing mail configuration: {$key}"
             );
@@ -73,23 +209,22 @@ function createLocaliteaMailer(): PHPMailer
     }
 
     $mail = new PHPMailer(true);
-
     $mail->isSMTP();
     $mail->Host = $mailConfig['host'];
     $mail->SMTPAuth = true;
     $mail->Username = $mailConfig['username'];
     $mail->Password = $mailConfig['password'];
 
-    $mail->SMTPSecure =
-        in_array($mailConfig['encryption'], ['tls', 'starttls'], true)
-            ? PHPMailer::ENCRYPTION_STARTTLS
-            : PHPMailer::ENCRYPTION_SMTPS;
+    $mail->SMTPSecure = in_array(
+        $mailConfig['encryption'],
+        ['tls', 'starttls'],
+        true
+    )
+        ? PHPMailer::ENCRYPTION_STARTTLS
+        : PHPMailer::ENCRYPTION_SMTPS;
 
     $mail->Port = $mailConfig['port'];
-    // Prevent a stalled SMTP connection from making registration
-// wait for the default, potentially long timeout.
     $mail->Timeout = 10;
-
     $mail->setFrom(
         $mailConfig['from_email'],
         $mailConfig['from_name']
