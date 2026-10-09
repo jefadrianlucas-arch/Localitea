@@ -139,15 +139,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $success =
                     "Registration successful! Please check your email and click the verification link to activate your account.";
 
-            } catch (Exception $e) {
+           } catch (Throwable $e) {
 
-                if ($pdo->inTransaction()) {
-                    $pdo->rollBack();
-                }
+    // Record the actual error in the server logs.
+    error_log(
+        'Localitea registration/verification email failed: '
+        . $e->getMessage()
+    );
 
-                $error =
-                    "Registration failed because the verification email could not be sent. Please try again.";
-            }
+    if ($pdo->inTransaction()) {
+        $pdo->rollBack();
+    }
+
+    $error =
+        "Registration failed because the verification email could not be sent. Please try again.";
+}
         }
     }
 }

@@ -86,6 +86,9 @@ function createLocaliteaMailer(): PHPMailer
             : PHPMailer::ENCRYPTION_SMTPS;
 
     $mail->Port = $mailConfig['port'];
+    // Prevent a stalled SMTP connection from making registration
+// wait for the default, potentially long timeout.
+    $mail->Timeout = 10;
 
     $mail->setFrom(
         $mailConfig['from_email'],
