@@ -4,7 +4,7 @@
 // Fall back to XAMPP settings when running locally.
 
 $host = getenv('MYSQLHOST') ?: 'localhost';
-$port = getenv('MYSQLPORT') ?: '3306';
+$port = getenv('MYSQLPORT') ?: '3307';
 $db   = getenv('MYSQLDATABASE') ?: 'milktea_db';
 $user = getenv('MYSQLUSER') ?: 'root';
 $pass = getenv('MYSQLPASSWORD') ?: '';
