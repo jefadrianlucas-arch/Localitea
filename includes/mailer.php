@@ -5,9 +5,72 @@ use PHPMailer\PHPMailer\PHPMailer;
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
+
 function createLocaliteaMailer(): PHPMailer
 {
-    $mailConfig = require __DIR__ . '/mail-config.php';
+    $configPath = __DIR__ . '/mail-config.php';
+    $localConfig = [];
+
+    // Use the private config locally when it exists.
+    if (is_file($configPath)) {
+        $loadedConfig = require $configPath;
+
+        if (is_array($loadedConfig)) {
+            $localConfig = $loadedConfig;
+        }
+    }
+
+    // Environment variables take priority on Railway.
+    $getSetting = static function (
+        string $key,
+        $fallback = ''
+    ) {
+        $value = getenv($key);
+
+        return ($value !== false && $value !== '')
+            ? $value
+            : $fallback;
+    };
+
+    $mailConfig = [
+        'host' => $getSetting(
+            'MAIL_HOST',
+            $localConfig['host'] ?? 'smtp.gmail.com'
+        ),
+        'username' => $getSetting(
+            'MAIL_USERNAME',
+            $localConfig['username'] ?? ''
+        ),
+        'password' => $getSetting(
+            'MAIL_PASSWORD',
+            $localConfig['password'] ?? ''
+        ),
+        'port' => (int)$getSetting(
+            'MAIL_PORT',
+            (string)($localConfig['port'] ?? 465)
+        ),
+        'encryption' => strtolower((string)$getSetting(
+            'MAIL_ENCRYPTION',
+            $localConfig['encryption'] ?? 'ssl'
+        )),
+        'from_email' => $getSetting(
+            'MAIL_FROM_EMAIL',
+            $localConfig['from_email']
+                ?? ($localConfig['username'] ?? '')
+        ),
+        'from_name' => $getSetting(
+            'MAIL_FROM_NAME',
+            $localConfig['from_name'] ?? 'Localitea'
+        ),
+    ];
+
+    foreach (['host', 'username', 'password', 'from_email'] as $key) {
+        if (trim((string)$mailConfig[$key]) === '') {
+            throw new RuntimeException(
+                "Missing mail configuration: {$key}"
+            );
+        }
+    }
 
     $mail = new PHPMailer(true);
 
@@ -16,8 +79,13 @@ function createLocaliteaMailer(): PHPMailer
     $mail->SMTPAuth = true;
     $mail->Username = $mailConfig['username'];
     $mail->Password = $mailConfig['password'];
-    $mail->SMTPSecure = PHPMailer::ENCRYPTION_SMTPS;
-    $mail->Port = (int)$mailConfig['port'];
+
+    $mail->SMTPSecure =
+        in_array($mailConfig['encryption'], ['tls', 'starttls'], true)
+            ? PHPMailer::ENCRYPTION_STARTTLS
+            : PHPMailer::ENCRYPTION_SMTPS;
+
+    $mail->Port = $mailConfig['port'];
 
     $mail->setFrom(
         $mailConfig['from_email'],
@@ -29,6 +97,7 @@ function createLocaliteaMailer(): PHPMailer
 
     return $mail;
 }
+
 
 /* =========================================================
    Verification EMAIL
