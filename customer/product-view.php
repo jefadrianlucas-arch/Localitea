@@ -1,5 +1,37 @@
 <?php
+if (session_status() !== PHP_SESSION_ACTIVE) {
+    session_start();
+}
 require_once '../includes/db.php';
+
+/* Restore approved and one-time-use discount eligibility. */
+$approvedCustomerDiscount = null;
+$discountAlreadyUsed = false;
+$loggedInCustomerId = (int)($_SESSION['user_id'] ?? 0);
+$loggedInRole = strtolower((string)($_SESSION['user_role'] ?? ''));
+if ($loggedInCustomerId > 0 && $loggedInRole === 'customer') {
+    try {
+        $discountStmt = $pdo->prepare("SELECT discount_type, discount_id_name, discount_id_number, discount_id_image, verification_status FROM customers WHERE id = ? LIMIT 1");
+        $discountStmt->execute([$loggedInCustomerId]);
+        $customerDiscountRow = $discountStmt->fetch(PDO::FETCH_ASSOC);
+        if ($customerDiscountRow &&
+            strtolower(trim((string)($customerDiscountRow['verification_status'] ?? ''))) === 'verified' &&
+            in_array(strtolower(trim((string)($customerDiscountRow['discount_type'] ?? ''))), ['pwd', 'senior'], true) &&
+            trim((string)($customerDiscountRow['discount_id_name'] ?? '')) !== '' &&
+            trim((string)($customerDiscountRow['discount_id_number'] ?? '')) !== '' &&
+            trim((string)($customerDiscountRow['discount_id_image'] ?? '')) !== '') {
+            $approvedCustomerDiscount = $customerDiscountRow;
+            $approvedCustomerDiscount['discount_type'] = strtolower(trim((string)$customerDiscountRow['discount_type']));
+            $usedStmt = $pdo->prepare("SELECT id FROM orders WHERE customer_id = ? AND LOWER(COALESCE(discount_type, 'none')) = ? AND COALESCE(discount_amount, 0) > 0 LIMIT 1");
+            $usedStmt->execute([$loggedInCustomerId, $approvedCustomerDiscount['discount_type']]);
+            $discountAlreadyUsed = (bool)$usedStmt->fetchColumn();
+        }
+    } catch (Throwable $e) {
+        error_log('Localitea discount eligibility lookup failed: ' . $e->getMessage());
+        $approvedCustomerDiscount = null;
+        $discountAlreadyUsed = true;
+    }
+}
 
 $id = isset($_GET['id']) ? intval($_GET['id']) : 0;
 
@@ -190,6 +222,8 @@ if (
 $isPromotionGet =
     $promotion !== null &&
     $promotionRole === 'get';
+
+$canShowSpecialDiscount = $approvedCustomerDiscount !== null && !$discountAlreadyUsed && $promotion === null;
 
 $isPromotionBuy =
     $promotion !== null &&
@@ -1120,83 +1154,42 @@ if ($menuBundleConfig) {
                         <h3 class="pv-group-title">Discount</h3>
                         <span class="pv-group-hint">Optional</span>
                     </div>
-
                     <div class="pv-choices is-flex">
-
-                        <!-- No Discount -->
                         <div class="form-check pv-choice pv-choice--pill">
-                            <input
-                                class="form-check-input"
-                                type="radio"
-                                name="discount_type"
-                                id="discount_none"
-                                value="none"
-                                checked
-                                <?= !$isAvailable ? 'disabled' : '' ?>
-                            >
+                            <input class="form-check-input" type="radio" name="discount_type" id="discount_none" value="none" checked <?= !$isAvailable ? 'disabled' : '' ?>>
                             <label class="form-check-label" for="discount_none">None</label>
                         </div>
-
-                        <!-- PWD -->
+                        <?php if ($canShowSpecialDiscount && $approvedCustomerDiscount['discount_type'] === 'pwd'): ?>
                         <div class="form-check pv-choice pv-choice--pill">
-                            <input
-                                class="form-check-input"
-                                type="radio"
-                                name="discount_type"
-                                id="discount_pwd"
-                                value="pwd"
-                                <?= !$isAvailable ? 'disabled' : '' ?>
-                            >
+                            <input class="form-check-input" type="radio" name="discount_type" id="discount_pwd" value="pwd" <?= !$isAvailable ? 'disabled' : '' ?>>
                             <label class="form-check-label" for="discount_pwd">PWD (20%)</label>
                         </div>
-
-                        <!-- Senior Citizen -->
+                        <?php elseif ($canShowSpecialDiscount && $approvedCustomerDiscount['discount_type'] === 'senior'): ?>
                         <div class="form-check pv-choice pv-choice--pill">
-                            <input
-                                class="form-check-input"
-                                type="radio"
-                                name="discount_type"
-                                id="discount_senior"
-                                value="senior"
-                                <?= !$isAvailable ? 'disabled' : '' ?>
-                            >
+                            <input class="form-check-input" type="radio" name="discount_type" id="discount_senior" value="senior" <?= !$isAvailable ? 'disabled' : '' ?>>
                             <label class="form-check-label" for="discount_senior">Senior Citizen (20%)</label>
                         </div>
-
+                        <?php endif; ?>
                     </div>
-
-                    <!-- PWD / Senior ID details (shown only when a discount is selected) -->
+                    <?php if ($canShowSpecialDiscount): ?>
                     <div class="pv-discount-details" id="pvDiscountDetails" hidden>
                         <div class="pv-discount-field">
                             <label for="pvDiscountIdName">Name on ID</label>
-                            <input
-                                type="text"
-                                class="form-control"
-                                name="discount_id_name"
-                                id="pvDiscountIdName"
-                                maxlength="100"
-                                placeholder="Full name as shown on the ID"
-                                autocomplete="off"
-                            >
+                            <input type="text" class="form-control" name="discount_id_name" id="pvDiscountIdName" maxlength="100" placeholder="Full name as shown on the ID" autocomplete="off">
                         </div>
                         <div class="pv-discount-field">
                             <label for="pvDiscountIdNumber">ID Number</label>
-                            <input
-                                type="text"
-                                class="form-control"
-                                name="discount_id_number"
-                                id="pvDiscountIdNumber"
-                                maxlength="30"
-                                placeholder="PWD / Senior Citizen ID number"
-                                autocomplete="off"
-                            >
+                            <input type="text" class="form-control" name="discount_id_number" id="pvDiscountIdNumber" maxlength="30" placeholder="PWD / Senior Citizen ID number" autocomplete="off">
                         </div>
                     </div>
-
-                    <div class="pv-note">
-                        Discount is optional. Valid identification must be presented upon pick-up.
-                    </div>
+                    <?php elseif ($discountAlreadyUsed && $approvedCustomerDiscount !== null && $promotion === null): ?>
+                    <div class="pv-note">Your approved PWD/Senior Citizen discount has already been used.</div>
+                    <?php elseif ($promotion !== null): ?>
+                    <div class="pv-note">PWD/Senior Citizen discounts cannot be applied to promotional items.</div>
+                    <?php endif; ?>
+                    <div class="pv-note">Discount is optional. Valid identification must be presented upon pick-up.</div>
                 </div>
+
             </section>
 
         </div>
