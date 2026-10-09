@@ -51,48 +51,72 @@ if (!in_array($discountType, ['none', 'pwd', 'senior'], true)) {
     $discountType = 'none';
 }
 
-    /*
-     * PWD / Senior Citizen: the customer must give the name and
-     * ID number shown on the ID. They are printed on the receipt.
-     */
-    $discountIdName = '';
-    $discountIdNumber = '';
+/*
+ * Discount eligibility is controlled by the customer's saved account record,
+ * never by ID details submitted from the browser. Only admin-approved,
+ * registered customers may use their saved PWD/Senior Citizen discount.
+ */
+$discountIdName = '';
+$discountIdNumber = '';
 
-    if ($discountType !== 'none') {
-        $discountIdName = trim(preg_replace('/\s+/', ' ', (string)($_POST['discount_id_name'] ?? '')));
-        $discountIdNumber = strtoupper(trim((string)($_POST['discount_id_number'] ?? '')));
+if ($discountType !== 'none') {
+    $idBackUrl = 'product-view.php?id=' . (int)($_POST['product_id'] ?? 0);
+    $customerId = (int)($_SESSION['user_id'] ?? 0);
+    $customerRole = (string)($_SESSION['user_role'] ?? '');
 
-        $idBackUrl = 'product-view.php?id=' . (int)($_POST['product_id'] ?? 0);
+    if ($customerId <= 0 || $customerRole !== 'customer') {
+        customerRedirect(
+            $idBackUrl . '&error=discount_unavailable',
+            'PWD and Senior Citizen discounts are available only to approved customer accounts.'
+        );
+    }
 
-        if ($discountIdName === '' || mb_strlen($discountIdName) > 100) {
+    $discountStmt = $pdo->prepare("
+        SELECT discount_type, discount_id_name, discount_id_number, verification_status
+        FROM customers
+        WHERE id = ?
+        LIMIT 1
+    ");
+    $discountStmt->execute([$customerId]);
+    $customerDiscount = $discountStmt->fetch(PDO::FETCH_ASSOC);
+
+    $savedType = strtolower(trim((string)($customerDiscount['discount_type'] ?? '')));
+    $savedStatus = strtolower(trim((string)($customerDiscount['verification_status'] ?? '')));
+    $savedIdNumber = strtoupper(trim((string)($customerDiscount['discount_id_number'] ?? '')));
+    $savedIdName = trim(preg_replace('/\s+/', ' ', (string)($customerDiscount['discount_id_name'] ?? '')));
+
+    if (
+        !$customerDiscount ||
+        $savedStatus !== 'verified' ||
+        $savedType !== $discountType ||
+        $savedIdName === '' ||
+        $savedIdNumber === ''
+    ) {
+        customerRedirect(
+            $idBackUrl . '&error=discount_unavailable',
+            'Your PWD/Senior Citizen ID must be approved by the admin before the discount can be used.'
+        );
+    }
+
+    // Use the verified ID stored in the database, not browser-submitted values.
+    $discountIdName = $savedIdName;
+    $discountIdNumber = $savedIdNumber;
+
+    /* One discount = one cardholder per order. */
+    foreach ($_SESSION['cart'] ?? [] as $existingItem) {
+        $existingId = strtoupper(trim((string)($existingItem['discount_id_number'] ?? '')));
+        if (
+            ($existingItem['discount_type'] ?? 'none') === $discountType &&
+            $existingId !== '' &&
+            $existingId !== $discountIdNumber
+        ) {
             customerRedirect(
                 $idBackUrl . '&error=discount_id',
-                'Please enter the name on your ' . strtoupper($discountType) . ' ID.'
+                'Your cart already uses a different ID for this discount. Use the same approved ID for the whole order.'
             );
-        }
-
-        if (!preg_match('/^[A-Z0-9][A-Z0-9\-\/ ]{2,29}$/', $discountIdNumber)) {
-            customerRedirect(
-                $idBackUrl . '&error=discount_id',
-                'Please enter a valid ID number (letters, numbers and dashes only).'
-            );
-        }
-
-        /* One discount = one cardholder per order. */
-        foreach ($_SESSION['cart'] ?? [] as $existingItem) {
-            $existingId = strtoupper((string)($existingItem['discount_id_number'] ?? ''));
-            if (
-                ($existingItem['discount_type'] ?? 'none') === $discountType
-                && $existingId !== ''
-                && $existingId !== $discountIdNumber
-            ) {
-                customerRedirect(
-                    $idBackUrl . '&error=discount_id',
-                    'Your cart already uses ID ' . $existingId . ' for the discount. Use the same ID for the whole order.'
-                );
-            }
         }
     }
+}
 
     $quantity = isset($_POST['quantity'])
         ? (int)$_POST['quantity']
@@ -379,6 +403,12 @@ if (!in_array($discountType, ['none', 'pwd', 'senior'], true)) {
         $_SESSION['selected_promotion_id'] = $validPromotionId;
     }
 
+    /* Promotions cannot be combined with PWD/Senior Citizen discounts. */
+    if ($validPromotionId > 0) {
+        $discountType = 'none';
+        $discountIdName = '';
+        $discountIdNumber = '';
+    }
 
     /*
      * =========================================================

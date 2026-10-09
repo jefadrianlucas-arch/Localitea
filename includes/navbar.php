@@ -690,6 +690,43 @@ $navbar_cart = $navbar_page === 'cart.php';
         min-height: 46px;
     }
 }
+/* =========================================================
+   PHONE / TABLET MENU: FLOATS OVER THE PAGE
+   The opened menu no longer pushes the page content down;
+   it drops down on top of it like a small floating card.
+========================================================= */
+@media (max-width: 991.98px) {
+    .navbar-custom .navbar-collapse {
+        position: absolute;
+        top: 100%;
+        left: 12px;
+        right: 12px;
+        margin: 6px 0 0;
+        padding: 8px;
+        background: #FFFFFF;
+        border: 1px solid #E6DACB;
+        border-radius: 16px;
+        box-shadow: 0 14px 32px rgba(44, 34, 30, 0.18);
+        max-height: calc(100vh - 90px);
+        max-height: calc(100dvh - 90px);
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        z-index: 1040;
+
+        /* Still scrollable on short screens, but without a visible scrollbar */
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+    }
+
+    .navbar-custom .navbar-collapse::-webkit-scrollbar {
+        display: none;
+    }
+
+    /* No scrollbar flash while the menu is opening / closing */
+    .navbar-custom .navbar-collapse.collapsing {
+        overflow: hidden;
+    }
+}
 </style>
 
 <nav class="navbar navbar-expand-lg navbar-custom sticky-top">
@@ -875,12 +912,9 @@ $navbar_cart = $navbar_page === 'cart.php';
                         </ul>
                     </li>
                 <?php else: ?>
+                    <!-- Only "Log in" lives in the header; "Sign up" is inside the login page -->
                     <li class="nav-item">
-                        <a class="btn btn-outline-dark me-2" href="../auth/login.php">Login</a>
-                    </li>
-
-                    <li class="nav-item">
-                        <a class="btn btn-primary-custom" href="../auth/register.php">Register</a>
+                        <a class="btn btn-outline-dark" href="../auth/login.php">Log in</a>
                     </li>
                 <?php endif; ?>
 

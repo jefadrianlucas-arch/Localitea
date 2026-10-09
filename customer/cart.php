@@ -1468,6 +1468,58 @@ require_once '../includes/navbar.php';
     body.checkout-loading-active { overflow: hidden; }
     @keyframes checkoutSpin { to { transform: rotate(360deg); } }
 
+    /* Localitea toast notifications replace browser "localhost says" alerts. */
+    .localitea-toast-container {
+        position: fixed;
+        top: 92px;
+        right: 22px;
+        z-index: 3000;
+        width: min(420px, calc(100vw - 28px));
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        pointer-events: none;
+    }
+    .localitea-toast {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 15px 16px;
+        border: 1px solid #F2A6A0;
+        border-left: 5px solid #C62828;
+        border-radius: 14px;
+        background: #FFF1F0;
+        color: #7F1D1D;
+        box-shadow: 0 12px 32px rgba(44, 34, 30, .18);
+        opacity: 0;
+        transform: translateY(-8px);
+        transition: opacity .2s ease, transform .2s ease;
+        pointer-events: auto;
+    }
+    .localitea-toast.is-visible { opacity: 1; transform: translateY(0); }
+    .localitea-toast.is-success { border-color: #A7D7B5; border-left-color: #287A4B; background: #F0FFF4; color: #22543D; }
+    .localitea-toast.is-warning { border-color: #F2D19B; border-left-color: #B7791F; background: #FFFAEB; color: #744210; }
+    .localitea-toast-icon {
+        flex: 0 0 28px;
+        width: 28px;
+        height: 28px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        background: #FBCACA;
+        color: #B91C1C;
+        font-size: 1.1rem;
+        font-weight: 800;
+        line-height: 1;
+    }
+    .localitea-toast.is-success .localitea-toast-icon { background: #C9F0D4; color: #287A4B; }
+    .localitea-toast.is-warning .localitea-toast-icon { background: #FDE7B0; color: #9A6700; }
+    .localitea-toast-message { flex: 1; font-size: .9rem; line-height: 1.45; overflow-wrap: anywhere; }
+    @media (max-width: 575.98px) {
+        .localitea-toast-container { top: 78px; right: 14px; }
+    }
+
     @media (prefers-reduced-motion: no-preference) {
         .ck-choice .form-check-label,
         .cart-edit-link,
@@ -1577,6 +1629,8 @@ require_once '../includes/navbar.php';
         <p class="checkout-loading-text">Please wait while we process your checkout.</p>
     </div>
 </div>
+
+<div id="localiteaToastContainer" class="localitea-toast-container" aria-live="polite" aria-atomic="true"></div>
 
 <div class="container ck-page py-4 py-md-5">
 
@@ -2765,6 +2819,36 @@ function handlePaymentMethodChange() {
 |--------------------------------------------------------------------------
 */
 
+function showCartToast(message, type = 'error') {
+    const container = document.getElementById('localiteaToastContainer');
+    if (!container) {
+        console.error(message);
+        return;
+    }
+
+    const toast = document.createElement('div');
+    toast.className = 'localitea-toast' + (type === 'success' ? ' is-success' : type === 'warning' ? ' is-warning' : '');
+
+    const icon = document.createElement('span');
+    icon.className = 'localitea-toast-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.textContent = type === 'success' ? '✓' : type === 'warning' ? '!' : '!';
+
+    const text = document.createElement('div');
+    text.className = 'localitea-toast-message';
+    text.textContent = String(message || 'Something went wrong. Please try again.');
+
+    toast.append(icon, text);
+    container.appendChild(toast);
+    requestAnimationFrame(() => toast.classList.add('is-visible'));
+
+    window.setTimeout(() => {
+        toast.classList.remove('is-visible');
+        window.setTimeout(() => toast.remove(), 250);
+    }, 5500);
+}
+
+
 function validateTime() {
 
     const nowRadio = document.getElementById('now');
@@ -2786,7 +2870,7 @@ function validateTime() {
 
         if (!dateInput.value) {
 
-            alert("Please select a pick-up date.");
+            showCartToast("Please select a pick-up date.");
 
             dateInput.focus();
 
@@ -2796,7 +2880,7 @@ function validateTime() {
 
         if (!timeInput.value) {
 
-            alert("Please select a pick-up time.");
+            showCartToast("Please select a pick-up time.");
 
             timeInput.focus();
 
@@ -2809,7 +2893,7 @@ function validateTime() {
             timeInput.value > "22:00"
         ) {
 
-            alert(
+            showCartToast(
                 "Please select a pick-up time between 9:00 AM and 10:00 PM."
             );
 
@@ -2842,7 +2926,7 @@ function validateTime() {
             currentMinutes > closingMinutes
         ) {
 
-            alert(
+            showCartToast(
                 "The store is open from 9:00 AM to 10:00 PM. Please choose Pick-up Later."
             );
 
@@ -2890,7 +2974,7 @@ function handleCheckoutSubmit(event) {
     );
 
     if (!selectedPayment) {
-        alert("Please select a payment method.");
+        showCartToast("Please select a payment method.");
         return false;
     }
 
@@ -3001,7 +3085,7 @@ async function processCheckoutAjax() {
         checkoutSubmitting = false;
         setCheckoutLoading(false);
 
-        alert(
+        showCartToast(
             error && error.message
                 ? error.message
                 : 'Unable to place your order right now.'
@@ -3022,7 +3106,7 @@ function showGcashModal() {
 
     if (!modalElement) {
 
-        alert("GCash payment modal could not be loaded.");
+        showCartToast("GCash payment modal could not be loaded.");
 
         return;
     }

@@ -33,6 +33,29 @@ try {
     $sidebarUnreadNotifications = 0;
 }
 
+$sidebarCurrentPage = basename($_SERVER['PHP_SELF']);
+$sidebarOrderGroupActive = in_array(
+    $sidebarCurrentPage,
+    ['orders.php', 'discount-verifications.php'],
+    true
+);
+
+$sidebarPendingIdVerifications = 0;
+
+try {
+    if (isset($pdo)) {
+        $sidebarPendingIdVerifications = (int)$pdo->query("
+            SELECT COUNT(*)
+            FROM customers
+            WHERE verification_status = 'pending'
+              AND discount_id_image IS NOT NULL
+              AND discount_id_image <> ''
+        ")->fetchColumn();
+    }
+} catch (Throwable $e) {
+    $sidebarPendingIdVerifications = 0;
+}
+
 $adminLogoPath = $adminLogoPath ?? null;
 $adminLogoUrl  = null;
 
@@ -222,6 +245,57 @@ $adminShowBrandText = $adminShowBrandText ?? ($adminLogoUrl === null);
 .sidebar-nav .nav-link.active .sidebar-notification-badge {
     background: #ffffff;
     color: #4A3525;
+}
+
+/* =========================================================
+   ORDER DROPDOWN (All Orders / ID Verification)
+========================================================= */
+
+.sidebar-nav button.nav-link {
+    background: transparent;
+    border: 0;
+    text-align: left;
+    font-family: inherit;
+    cursor: pointer;
+}
+
+.sidebar-nav .sidebar-group-toggle.has-active {
+    background: #F0E6D6;
+}
+
+.sidebar-nav .sidebar-caret {
+    margin-left: auto;
+    transition: transform .2s ease;
+}
+
+.sidebar-nav .sidebar-notification-badge + .sidebar-caret {
+    margin-left: 8px;
+}
+
+.sidebar-nav .sidebar-group-toggle[aria-expanded="true"] .sidebar-caret {
+    transform: rotate(180deg);
+}
+
+.sidebar-submenu {
+    display: none;
+    list-style: none;
+    margin: 0 0 4px;
+    padding: 0;
+}
+
+.sidebar-submenu.is-open {
+    display: block;
+}
+
+.sidebar-submenu .nav-link {
+    padding-left: 40px;
+    font-size: 0.85rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .sidebar-nav .sidebar-caret {
+        transition: none;
+    }
 }
 
 /* =========================================================
@@ -471,15 +545,61 @@ $adminShowBrandText = $adminShowBrandText ?? ($adminLogoUrl === null);
             </a>
         </li>
 
-        <!-- ORDERS -->
+        <!-- ORDERS (dropdown) -->
         <li class="nav-item">
-            <a
-                href="orders.php"
-                class="nav-link <?= basename($_SERVER['PHP_SELF']) === 'orders.php' ? 'active' : '' ?>"
+            <button
+                type="button"
+                class="nav-link sidebar-group-toggle <?= $sidebarOrderGroupActive ? 'has-active' : '' ?>"
+                id="sidebarOrderToggle"
+                aria-expanded="<?= $sidebarOrderGroupActive ? 'true' : 'false' ?>"
+                aria-controls="sidebarOrderMenu"
             >
                 <i class="bi bi-bag-check-fill"></i>
                 Order
-            </a>
+
+                <?php if ($sidebarPendingIdVerifications > 0): ?>
+                    <span class="sidebar-notification-badge">
+                        <?= $sidebarPendingIdVerifications > 99
+                            ? '99+'
+                            : $sidebarPendingIdVerifications ?>
+                    </span>
+                <?php endif; ?>
+
+                <i class="bi bi-chevron-down sidebar-caret"></i>
+            </button>
+
+            <ul
+                class="sidebar-submenu <?= $sidebarOrderGroupActive ? 'is-open' : '' ?>"
+                id="sidebarOrderMenu"
+            >
+                <li>
+                    <a
+                        href="orders.php"
+                        class="nav-link <?= $sidebarCurrentPage === 'orders.php' ? 'active' : '' ?>"
+                    >
+                        <i class="bi bi-list-ul"></i>
+                        All Orders
+                    </a>
+                </li>
+
+                <li>
+                    <a
+                        href="discount-verifications.php"
+                        class="nav-link <?= $sidebarCurrentPage === 'discount-verifications.php' ? 'active' : '' ?>"
+                    >
+                        <i class="bi bi-patch-check-fill"></i>
+                        ID Verification
+
+                        <?php if ($sidebarPendingIdVerifications > 0): ?>
+                            <span class="sidebar-notification-badge">
+                                <?= $sidebarPendingIdVerifications > 99
+                                    ? '99+'
+                                    : $sidebarPendingIdVerifications ?>
+                            </span>
+                        <?php endif; ?>
+                    </a>
+                </li>
+            </ul>
         </li>
 
                     <!-- SALES REPORTS -->
@@ -533,6 +653,24 @@ $adminShowBrandText = $adminShowBrandText ?? ($adminLogoUrl === null);
             </div>
 
 <div class="sidebar-backdrop" id="adminSidebarBackdrop"></div>
+
+<script>
+(function () {
+    var toggle = document.getElementById('sidebarOrderToggle');
+    var menu = document.getElementById('sidebarOrderMenu');
+
+    if (!toggle || !menu) {
+        return;
+    }
+
+    toggle.addEventListener('click', function () {
+        var open = !menu.classList.contains('is-open');
+
+        menu.classList.toggle('is-open', open);
+        toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+})();
+</script>
 
 <script>
 (function () {

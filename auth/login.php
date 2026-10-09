@@ -3,6 +3,8 @@ session_start();
 require_once '../includes/db.php';
 
 $error = '';
+$password_error = '';
+$email = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
@@ -87,7 +89,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
     } else {
-        $error = "Invalid email or password.";
+        $password_error = "Incorrect email or password. Please try again.";
     }
 }
 
@@ -169,6 +171,28 @@ body {
     font-size: 0.82rem;
     text-align: center;
     margin: 0 0 24px;
+}
+
+/* Inline error under the password field */
+.login-input.login-input-error {
+    border-color: #B85C5C;
+    box-shadow: 0 0 0 3px rgba(184, 92, 92, 0.10);
+}
+
+.login-field-error {
+    display: flex;
+    align-items: flex-start;
+    gap: 5px;
+    margin-top: 6px;
+    color: #8B3030;
+    font-size: 0.72rem;
+    font-weight: 600;
+    line-height: 1.35;
+}
+
+.login-field-error i {
+    font-size: 0.8rem;
+    line-height: 1.3;
 }
 
 /* Error */
@@ -538,6 +562,7 @@ body {
                         class="login-input"
                         placeholder="juan@email.com"
                         autocomplete="email"
+                        value="<?= htmlspecialchars($email, ENT_QUOTES, 'UTF-8') ?>"
                         required
                     >
                 </div>
@@ -555,9 +580,13 @@ body {
                             type="password"
                             id="loginPassword"
                             name="password"
-                            class="login-input"
+                            class="login-input<?= $password_error ? ' login-input-error' : '' ?>"
                             placeholder="••••••••"
                             autocomplete="current-password"
+                            <?php if ($password_error): ?>
+                            aria-invalid="true"
+                            aria-describedby="loginPasswordError"
+                            <?php endif; ?>
                             required
                         >
 
@@ -572,6 +601,17 @@ body {
                             <i class="bi bi-eye" aria-hidden="true"></i>
                         </button>
                     </div>
+
+                    <?php if ($password_error): ?>
+                        <div
+                            class="login-field-error"
+                            id="loginPasswordError"
+                            role="alert"
+                        >
+                            <i class="bi bi-exclamation-circle" aria-hidden="true"></i>
+                            <span><?= htmlspecialchars($password_error) ?></span>
+                        </div>
+                    <?php endif; ?>
                 </div>
 
                 <div class="text-end mb-3">
@@ -665,3 +705,32 @@ body {
 <script
     src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
 ></script>
+
+<script>
+
+document.addEventListener('DOMContentLoaded', function () {
+    const email = document.getElementById('loginEmail');
+    const password = document.getElementById('loginPassword');
+    const error = document.getElementById('loginPasswordError');
+
+    if (!password || !error) {
+        return;
+    }
+
+    function clearError() {
+        error.remove();
+        password.classList.remove('login-input-error');
+        password.removeAttribute('aria-invalid');
+        password.removeAttribute('aria-describedby');
+    }
+
+    password.addEventListener('input', clearError);
+
+    if (email) {
+        email.addEventListener('input', clearError);
+    }
+
+    password.focus({ preventScroll: true });
+    password.select();
+});
+</script>

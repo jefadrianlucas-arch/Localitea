@@ -2,14 +2,83 @@
 require_once '../includes/db.php';
 require_once '../includes/mailer.php';
 
+/*
+|--------------------------------------------------------------------------
+| PWD / SENIOR ID PHOTO HELPERS
+|--------------------------------------------------------------------------
+| Photos are saved in storage/discount-ids/ (blocked from direct URL
+| access). Admin views them through admin/view-discount-id.php.
+*/
+
+/* Returns '' when the upload is acceptable, otherwise an error message. */
+function validateDiscountIdPhoto(array $file): string
+{
+    if (($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+        return "Please upload a clear photo of your ID.";
+    }
+
+    if (($file['size'] ?? 0) > 5 * 1024 * 1024) {
+        return "The ID photo must not exceed 5MB.";
+    }
+
+    $finfo = new finfo(FILEINFO_MIME_TYPE);
+    $mime = $finfo->file($file['tmp_name']);
+
+    if (!in_array($mime, ['image/jpeg', 'image/png'], true)) {
+        return "Invalid ID photo. Only JPG, JPEG, or PNG files are allowed.";
+    }
+
+    return '';
+}
+
+/* Moves a validated upload into storage. Returns the relative path or null. */
+function saveDiscountIdPhoto(array $file): ?string
+{
+    $finfo = new finfo(FILEINFO_MIME_TYPE);
+    $extension = $finfo->file($file['tmp_name']) === 'image/png' ? 'png' : 'jpg';
+
+    $directory = dirname(__DIR__) . '/storage/discount-ids/';
+
+    if (!is_dir($directory) && !mkdir($directory, 0755, true)) {
+        return null;
+    }
+
+    /* Block direct access (Apache / XAMPP). */
+    $htaccess = $directory . '.htaccess';
+
+    if (!is_file($htaccess)) {
+        @file_put_contents(
+            $htaccess,
+            "Require all denied\n<IfModule !mod_authz_core.c>\nDeny from all\n</IfModule>\n"
+        );
+    }
+
+    $filename = 'discountid_' . date('Ymd_His') . '_' . bin2hex(random_bytes(8)) . '.' . $extension;
+
+    if (!move_uploaded_file($file['tmp_name'], $directory . $filename)) {
+        return null;
+    }
+
+    return 'storage/discount-ids/' . $filename;
+}
+
 $error = '';
 $success = '';
+$duplicateDiscountId = false;
+$password_error = '';
+$confirm_error = '';
 
 $name = '';
 $email = '';
 $mobile = '';
 $password = '';
 $confirm_password = '';
+
+$wantsDiscount = false;
+$discount_type = '';
+$discount_id_name = '';
+$discount_id_number = '';
+$discount_id_image = null;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
@@ -18,6 +87,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $mobile = trim($_POST['mobile'] ?? '');
     $password = $_POST['password'] ?? '';
     $confirm_password = $_POST['confirm_password'] ?? '';
+
+    /* Optional: PWD / Senior Citizen details (one-time verification). */
+    $wantsDiscount = ($_POST['has_discount'] ?? '') === '1';
+    $discount_type = strtolower(trim((string)($_POST['discount_type'] ?? '')));
+    $discount_id_name = trim(preg_replace('/\s+/', ' ', (string)($_POST['discount_id_name'] ?? '')));
+    $discount_id_number = strtoupper(trim((string)($_POST['discount_id_number'] ?? '')));
 
     if ($name === '' || $email === '' || $mobile === '' || $password === '') {
 
@@ -33,11 +108,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     } elseif (strlen($password) < 8) {
 
-        $error = "Password must be at least 8 characters long.";
+        $password_error = "Password must be at least 8 characters long.";
 
     } elseif ($password !== $confirm_password) {
 
-        $error = "Passwords do not match.";
+        $confirm_error = "Passwords do not match.";
+
+    } elseif ($wantsDiscount && !in_array($discount_type, ['pwd', 'senior'], true)) {
+
+        $error = "Please choose PWD or Senior Citizen.";
+
+    } elseif ($wantsDiscount && ($discount_id_name === '' || mb_strlen($discount_id_name) > 100)) {
+
+        $error = "Please enter the name shown on your ID.";
+
+    } elseif ($wantsDiscount && !preg_match('/^[A-Z0-9][A-Z0-9\-\/ ]{2,29}$/', $discount_id_number)) {
+
+        $error = "Please enter a valid ID number (letters, numbers and dashes only).";
+
+    } elseif (
+        $wantsDiscount &&
+        ($photoError = validateDiscountIdPhoto($_FILES['discount_id_image'] ?? [])) !== ''
+    ) {
+
+        $error = $photoError;
 
     } else {
 
@@ -75,6 +169,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             try {
 
+                // A previously submitted ID cannot be reused for discount eligibility.
+                // Registration itself must still proceed as a regular customer.
+                if ($wantsDiscount) {
+                    $duplicateCheck = $pdo->prepare("
+                        SELECT id FROM customers
+                        WHERE UPPER(TRIM(discount_id_number)) = ?
+                        LIMIT 1
+                    ");
+                    $duplicateCheck->execute([$discount_id_number]);
+                    $duplicateDiscountId = (bool)$duplicateCheck->fetchColumn();
+                }
+
+                if ($wantsDiscount && !$duplicateDiscountId) {
+
+                    $discount_id_image = saveDiscountIdPhoto($_FILES['discount_id_image']);
+
+                    if ($discount_id_image === null) {
+                        throw new RuntimeException('ID_UPLOAD');
+                    }
+                }
+
                 $pdo->beginTransaction();
 
                 $ins = $pdo->prepare("
@@ -98,6 +213,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $tokenHash,
                     $expiresAt
                 ]);
+
+                /* Save the PWD / Senior details. Status stays "pending" until an admin approves it. */
+                if ($wantsDiscount && !$duplicateDiscountId && $discount_id_image !== null) {
+
+                    $pdo->prepare("
+                        UPDATE customers
+                        SET
+                            discount_type = ?,
+                            discount_id_name = ?,
+                            discount_id_number = ?,
+                            discount_id_image = ?,
+                            verification_status = 'pending'
+                        WHERE id = ?
+                    ")->execute([
+                        $discount_type,
+                        $discount_id_name,
+                        $discount_id_number,
+                        $discount_id_image,
+                        (int)$pdo->lastInsertId()
+                    ]);
+                }
 
                 /*
                  * Build the verification URL dynamically from the current
@@ -139,21 +275,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $success =
                     "Registration successful! Please check your email and click the verification link to activate your account.";
 
-           } catch (Throwable $e) {
+            } catch (Throwable $e) {
+                // Roll back account creation if any part of registration fails.
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
 
-    // Record the actual error in the server logs.
-    error_log(
-        'Localitea registration/verification email failed: '
-        . $e->getMessage()
-    );
+                // Remove an uploaded ID photo if its database record was not saved.
+                if (
+                    $discount_id_image !== null &&
+                    is_string($discount_id_image) &&
+                    $discount_id_image !== ''
+                ) {
+                    $orphanedPhoto = dirname(__DIR__) . '/' . ltrim($discount_id_image, '/');
+                    if (is_file($orphanedPhoto)) {
+                        @unlink($orphanedPhoto);
+                    }
+                }
 
-    if ($pdo->inTransaction()) {
-        $pdo->rollBack();
-    }
+                // Keep technical details in the server log, not in the customer-facing message.
+                error_log(
+                    'Localitea registration/verification email failed: ' .
+                    $e->getMessage()
+                );
 
-    $error =
-        "Registration failed because the verification email could not be sent. Please try again.";
-}
+                $error =
+                    'Registration failed because the verification email could not be sent. Please try again.';
+            }
         }
     }
 }
@@ -317,6 +465,31 @@ body {
     box-shadow: 0 0 0 3px rgba(184, 92, 92, 0.10);
 }
 
+.register-field-error {
+    display: flex;
+    align-items: flex-start;
+    gap: 5px;
+    margin-top: 6px;
+    color: #8B3030;
+    font-size: 0.72rem;
+    font-weight: 600;
+    line-height: 1.35;
+}
+
+.register-terms-error {
+    margin-top: -4px;
+    margin-bottom: 12px;
+}
+
+.register-field-error[hidden] {
+    display: none;
+}
+
+.register-field-error i {
+    font-size: 0.8rem;
+    line-height: 1.3;
+}
+
 .register-input.field-success {
     border-color: #6F4E37;
 }
@@ -361,6 +534,86 @@ body {
 
 .password-toggle i {
     font-size: 0.92rem;
+}
+
+/* PWD / Senior note */
+.register-discount-note {
+    color: #756960;
+    font-size: 0.7rem;
+    line-height: 1.4;
+}
+
+.register-input[type="file"] {
+    padding: 6px 10px;
+}
+
+.register-discount-note {
+    margin: 0;
+}
+
+.register-discount-summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: -2px 0 12px;
+    padding: 8px 10px;
+    border: 1px solid #E4D7CB;
+    border-radius: 8px;
+    background: #FBF8F4;
+    color: #4A3525;
+    font-size: 0.74rem;
+}
+
+.register-discount-summary[hidden] {
+    display: none;
+}
+
+.register-discount-summary i {
+    color: #2F7D4F;
+}
+
+.register-discount-summary-text {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
+}
+
+.register-discount-edit {
+    border: 0;
+    background: transparent;
+    color: #6F4E37;
+    font-size: 0.74rem;
+    font-weight: 700;
+    padding: 2px 6px;
+    cursor: pointer;
+}
+
+.register-discount-edit:hover {
+    color: #4A3525;
+    text-decoration: underline;
+}
+
+.register-policy-dialog.register-discount-dialog {
+    width: min(460px, 100%);
+    height: auto;
+    max-height: 90vh;
+}
+
+.register-discount-footer {
+    display: flex;
+    gap: 10px;
+    flex: 0 0 auto;
+    padding: 14px 20px 18px;
+    border-top: 1px solid #E4D7CB;
+    background: #FBF8F4;
+}
+
+.register-discount-footer > * {
+    flex: 1 1 0;
+    width: auto;
 }
 
 /* Terms */
@@ -491,7 +744,7 @@ body {
 .register-toast-container {
     position: fixed;
     right: 20px;
-    bottom: 20px;
+    top: 20px;
     width: min(340px, calc(100vw - 40px));
     z-index: 2000;
     pointer-events: none;
@@ -637,7 +890,7 @@ body {
 
     .register-toast-container {
         right: 12px;
-        bottom: 12px;
+        top: 12px;
         width: calc(100vw - 24px);
     }
 }
@@ -667,7 +920,8 @@ body {
 }
 
 /* =========================================================
-   STATIC LAYOUT — tablet/desktop: the page itself never scrolls.
+   COMPACT LAYOUT — tablet/desktop: no scrollbar inside the card.
+   The card grows with its content and stays centered.
    If your navbar is taller/shorter than 76px, change --nav-h.
    (Phones keep normal scrolling because the form can't fit.)
 ========================================================= */
@@ -676,28 +930,22 @@ body {
 }
 
 @media (min-width: 768px) {
-    html,
-    body {
-        height: 100%;
-        overflow: hidden;
-    }
-
     .register-page {
-        height: calc(100vh - var(--nav-h));
-        height: calc(100dvh - var(--nav-h));
-        min-height: 0;
-        padding: 16px 20px;
-        overflow: hidden;
+        height: auto;
+        min-height: calc(100vh - var(--nav-h));
+        min-height: calc(100dvh - var(--nav-h));
+        padding: 12px 20px;
+        overflow: visible;
     }
 
     .register-card {
-        height: 100%;
-        max-height: 640px;
+        height: auto;
+        max-height: none;
     }
 
     .register-form-panel {
-        padding: 24px 48px;
-        overflow-y: auto; /* safety net: only the form scrolls on very short screens */
+        padding: 20px 48px;
+        overflow: visible;
     }
 
     .register-title {
@@ -706,11 +954,11 @@ body {
     }
 
     .register-form-panel .mb-3 {
-        margin-bottom: 11px !important;
+        margin-bottom: 9px !important;
     }
 
     .register-input {
-        min-height: 38px;
+        min-height: 36px;
     }
 }
 
@@ -775,7 +1023,7 @@ body {
 
             <h1 class="register-title">Sign Up</h1>
 
-            <form id="registerForm" method="POST" novalidate>
+            <form id="registerForm" method="POST" enctype="multipart/form-data" novalidate>
 
                 <div class="mb-3">
                     <label
@@ -854,7 +1102,8 @@ body {
                             type="password"
                             id="password"
                             name="password"
-                            class="register-input"
+                            class="register-input<?= $password_error ? ' field-error' : '' ?>"
+                            <?= $password_error ? 'aria-invalid="true"' : '' ?>
                             placeholder="••••••••"
                             autocomplete="new-password"
                             minlength="8"
@@ -869,6 +1118,16 @@ body {
                         >
                             <i class="bi bi-eye"></i>
                         </button>
+                    </div>
+
+                    <div
+                        class="register-field-error"
+                        id="passwordError"
+                        role="alert"
+                        <?= $password_error ? '' : 'hidden' ?>
+                    >
+                        <i class="bi bi-exclamation-circle" aria-hidden="true"></i>
+                        <span><?= htmlspecialchars($password_error, ENT_QUOTES, 'UTF-8') ?></span>
                     </div>
                 </div>
 
@@ -885,7 +1144,8 @@ body {
                             type="password"
                             id="confirm_password"
                             name="confirm_password"
-                            class="register-input"
+                            class="register-input<?= $confirm_error ? ' field-error' : '' ?>"
+                            <?= $confirm_error ? 'aria-invalid="true"' : '' ?>
                             placeholder="••••••••"
                             autocomplete="new-password"
                             minlength="8"
@@ -900,6 +1160,158 @@ body {
                         >
                             <i class="bi bi-eye"></i>
                         </button>
+                    </div>
+
+                    <div
+                        class="register-field-error"
+                        id="confirmPasswordError"
+                        role="alert"
+                        <?= $confirm_error ? '' : 'hidden' ?>
+                    >
+                        <i class="bi bi-exclamation-circle" aria-hidden="true"></i>
+                        <span><?= htmlspecialchars($confirm_error, ENT_QUOTES, 'UTF-8') ?></span>
+                    </div>
+                </div>
+
+                <!-- PWD / Senior Citizen (optional, one-time verification) -->
+                <div class="mb-3 register-terms">
+                    <input
+                        type="checkbox"
+                        class="form-check-input"
+                        id="registerHasDiscount"
+                        name="has_discount"
+                        value="1"
+                        <?= $wantsDiscount ? 'checked' : '' ?>
+                    >
+
+                    <label for="registerHasDiscount">
+                        I am a PWD / Senior Citizen and want to avail the 20% discount
+                    </label>
+                </div>
+
+                <!-- Short summary shown after the PWD / Senior details are saved -->
+                <div class="register-discount-summary" id="registerDiscountSummary" hidden>
+                    <i class="bi bi-patch-check-fill" aria-hidden="true"></i>
+                    <span class="register-discount-summary-text" id="registerDiscountSummaryText"></span>
+                    <button type="button" class="register-discount-edit" id="registerDiscountEdit">
+                        Edit
+                    </button>
+                </div>
+
+                <!-- PWD / Senior details modal (fields still belong to this form) -->
+                <div class="register-policy-modal" id="registerDiscountModal" aria-hidden="true">
+                    <div
+                        class="register-policy-dialog register-discount-dialog"
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="registerDiscountTitle"
+                    >
+                        <div class="register-policy-header">
+                            <h3 class="register-policy-title" id="registerDiscountTitle">
+                                PWD / Senior Citizen discount
+                            </h3>
+                            <button
+                                type="button"
+                                class="register-policy-close"
+                                id="registerDiscountClose"
+                                aria-label="Close"
+                            >
+                                <i class="bi bi-x-lg"></i>
+                            </button>
+                        </div>
+
+                        <div class="register-policy-body register-discount-body">
+
+                            <div class="mb-3">
+                                <label for="registerDiscountType" class="register-form-label">
+                                    Discount type
+                                </label>
+
+                                <select
+                                    id="registerDiscountType"
+                                    name="discount_type"
+                                    class="register-input"
+                                >
+                                    <option value="">Choose one</option>
+                                    <option value="pwd" <?= $discount_type === 'pwd' ? 'selected' : '' ?>>PWD</option>
+                                    <option value="senior" <?= $discount_type === 'senior' ? 'selected' : '' ?>>Senior Citizen</option>
+                                </select>
+                            </div>
+
+                            <div class="mb-3">
+                                <label for="registerDiscountName" class="register-form-label">
+                                    Name on ID
+                                </label>
+
+                                <input
+                                    type="text"
+                                    id="registerDiscountName"
+                                    name="discount_id_name"
+                                    class="register-input"
+                                    placeholder="Full name as shown on the ID"
+                                    maxlength="100"
+                                    autocomplete="off"
+                                    value="<?= htmlspecialchars($discount_id_name, ENT_QUOTES, 'UTF-8') ?>"
+                                >
+                            </div>
+
+                            <div class="mb-3">
+                                <label for="registerDiscountNumber" class="register-form-label">
+                                    ID number
+                                </label>
+
+                                <input
+                                    type="text"
+                                    id="registerDiscountNumber"
+                                    name="discount_id_number"
+                                    class="register-input"
+                                    placeholder="PWD / Senior Citizen ID number"
+                                    maxlength="30"
+                                    autocomplete="off"
+                                    value="<?= htmlspecialchars($discount_id_number, ENT_QUOTES, 'UTF-8') ?>"
+                                >
+                            </div>
+
+                            <div class="mb-3">
+                                <label for="registerDiscountImage" class="register-form-label">
+                                    Photo of your ID
+                                </label>
+
+                                <input
+                                    type="file"
+                                    id="registerDiscountImage"
+                                    name="discount_id_image"
+                                    class="register-input"
+                                    accept=".jpg,.jpeg,.png,image/jpeg,image/png"
+                                >
+                            </div>
+
+                            <div
+                                class="register-field-error"
+                                id="registerDiscountError"
+                                role="alert"
+                                hidden
+                            >
+                                <i class="bi bi-exclamation-circle" aria-hidden="true"></i>
+                                <span></span>
+                            </div>
+
+                            <p class="register-discount-note">
+                                One-time verification only. JPG or PNG, up to 5MB. Your ID photo is
+                                used only to verify your discount and can be seen only by authorized
+                                staff. The discount is available after our staff approves your ID.
+                            </p>
+
+                        </div>
+
+                        <div class="register-discount-footer">
+                            <button type="button" class="btn-register-secondary" id="registerDiscountCancel">
+                                Cancel
+                            </button>
+                            <button type="button" class="btn btn-register" id="registerDiscountSave">
+                                Save details
+                            </button>
+                        </div>
                     </div>
                 </div>
 
@@ -924,6 +1336,16 @@ body {
                             Privacy Policy
                         </a>.
                     </label>
+                </div>
+
+                <div
+                    class="register-field-error register-terms-error"
+                    id="termsError"
+                    role="alert"
+                    hidden
+                >
+                    <i class="bi bi-exclamation-circle" aria-hidden="true"></i>
+                    <span></span>
                 </div>
 
                 <button
@@ -1007,6 +1429,12 @@ body {
             <span class="register-toast-progress" aria-hidden="true"></span>
         </div>
     <?php endif; ?>
+    <?php if ($success && $duplicateDiscountId): ?>
+        <div class="register-toast register-toast-error" role="alert">
+            <span class="register-toast-icon" aria-hidden="true"><i class="bi bi-exclamation-circle"></i></span>
+            <span class="register-toast-message">ID is already used. Your account was registered without discount eligibility.</span>
+        </div>
+    <?php endif; ?>
 </div>
 
 <script>
@@ -1020,6 +1448,9 @@ document.addEventListener('DOMContentLoaded', function () {
     const confirmPassword = document.getElementById('confirm_password');
     const terms = document.getElementById('terms');
     const toastContainer = document.getElementById('registerToastContainer');
+    const passwordMsg = document.getElementById('passwordError');
+    const confirmMsg = document.getElementById('confirmPasswordError');
+    const termsMsg = document.getElementById('termsError');
 
     if (!form) {
         return;
@@ -1152,7 +1583,34 @@ document.addEventListener('DOMContentLoaded', function () {
        FIELD STATE HELPERS
     --------------------------------------------------------- */
 
+    /* Inline message shown right under the password fields */
+    function showFieldMessage(field, message) {
+
+        const box =
+            field === password
+                ? passwordMsg
+                : field === confirmPassword
+                    ? confirmMsg
+                    : termsMsg;
+
+        if (!field || !box) {
+            return;
+        }
+
+        const text = box.querySelector('span');
+
+        if (text) {
+            text.textContent = message || '';
+        }
+
+        box.hidden = !message;
+    }
+
     function clearFieldErrors() {
+
+        showFieldMessage(password, '');
+        showFieldMessage(confirmPassword, '');
+        showFieldMessage(terms, '');
 
         [
             nameInput,
@@ -1283,12 +1741,9 @@ document.addEventListener('DOMContentLoaded', function () {
             password.value !== confirmPassword.value
         ) {
             markFieldError(confirmPassword);
+            showFieldMessage(confirmPassword, 'Passwords do not match.');
 
             if (showToast) {
-                showRegisterToast(
-                    'Passwords do not match.'
-                );
-
                 confirmPassword.focus();
             }
 
@@ -1297,6 +1752,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
         confirmPassword.classList.remove('field-error');
         confirmPassword.removeAttribute('aria-invalid');
+        showFieldMessage(confirmPassword, '');
 
         return true;
     }
@@ -1317,6 +1773,261 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         );
 
+    }
+
+    if (terms) {
+        terms.addEventListener('change', function () {
+            if (terms.checked) {
+                terms.classList.remove('field-error');
+                terms.removeAttribute('aria-invalid');
+                showFieldMessage(terms, '');
+            }
+        });
+    }
+
+    if (password) {
+        password.addEventListener('input', function () {
+            if (password.value.length >= 8) {
+                password.classList.remove('field-error');
+                password.removeAttribute('aria-invalid');
+                showFieldMessage(password, '');
+            }
+        });
+    }
+
+    /* ---------------------------------------------------------
+       PWD / SENIOR DETAILS (modal)
+    --------------------------------------------------------- */
+
+    const hasDiscountBox = document.getElementById('registerHasDiscount');
+    const discountModal = document.getElementById('registerDiscountModal');
+    const discountSummary = document.getElementById('registerDiscountSummary');
+    const discountSummaryText = document.getElementById('registerDiscountSummaryText');
+    const discountEdit = document.getElementById('registerDiscountEdit');
+    const discountError = document.getElementById('registerDiscountError');
+    const dType = document.getElementById('registerDiscountType');
+    const dName = document.getElementById('registerDiscountName');
+    const dNumber = document.getElementById('registerDiscountNumber');
+    const dImage = document.getElementById('registerDiscountImage');
+    const discountOpenOnLoad = <?= ($wantsDiscount && !$success) ? 'true' : 'false' ?>;
+
+    let discountSaved = false;
+
+    function setDiscountError(message) {
+
+        if (!discountError) {
+            return;
+        }
+
+        const text = discountError.querySelector('span');
+
+        if (text) {
+            text.textContent = message || '';
+        }
+
+        discountError.hidden = !message;
+    }
+
+    function clearDiscountFieldErrors() {
+
+        [dType, dName, dNumber, dImage].forEach(function (field) {
+
+            if (!field) {
+                return;
+            }
+
+            field.classList.remove('field-error');
+            field.removeAttribute('aria-invalid');
+        });
+    }
+
+    /* Returns '' when everything is fine, otherwise the first error message. */
+    function validateDiscount() {
+
+        clearDiscountFieldErrors();
+
+        let message = '';
+
+        if (!dType.value) {
+            markFieldError(dType);
+            message = 'Please choose PWD or Senior Citizen.';
+        }
+
+        if (dName.value.trim() === '') {
+            markFieldError(dName);
+            message = message || 'Please enter the name shown on your ID.';
+        }
+
+        if (!/^[A-Za-z0-9][A-Za-z0-9\-\/ ]{2,29}$/.test(dNumber.value.trim())) {
+            markFieldError(dNumber);
+            message = message || 'Please enter a valid ID number (letters, numbers and dashes only).';
+        }
+
+        if (!dImage.files.length) {
+            markFieldError(dImage);
+            message = message || 'Please upload a photo of your ID.';
+        } else if (dImage.files[0].size > 5 * 1024 * 1024) {
+            markFieldError(dImage);
+            message = message || 'The ID photo must not exceed 5MB.';
+        } else if (!['image/jpeg', 'image/png'].includes(dImage.files[0].type)) {
+            markFieldError(dImage);
+            message = message || 'The ID photo must be a JPG or PNG file.';
+        }
+
+        setDiscountError(message);
+
+        return message;
+    }
+
+    function updateDiscountSummary() {
+
+        if (!discountSummary || !discountSummaryText) {
+            return;
+        }
+
+        if (discountSaved && hasDiscountBox && hasDiscountBox.checked) {
+
+            const label = dType.value === 'senior' ? 'Senior Citizen' : 'PWD';
+            const fileName = dImage.files.length ? dImage.files[0].name : '';
+
+            discountSummaryText.textContent =
+                label + ' ID ' + dNumber.value.trim().toUpperCase() +
+                (fileName ? ' · ' + fileName : '');
+
+            discountSummary.hidden = false;
+
+        } else {
+
+            discountSummary.hidden = true;
+        }
+    }
+
+    function openDiscountModal() {
+
+        if (!discountModal) {
+            return;
+        }
+
+        discountModal.classList.add('is-open');
+        discountModal.setAttribute('aria-hidden', 'false');
+        document.body.style.overflow = 'hidden';
+
+        const firstError = discountModal.querySelector('.field-error');
+
+        (firstError || dType).focus();
+    }
+
+    function closeDiscountModal() {
+
+        if (!discountModal) {
+            return;
+        }
+
+        discountModal.classList.remove('is-open');
+        discountModal.setAttribute('aria-hidden', 'true');
+        document.body.style.overflow = '';
+    }
+
+    function resetDiscount() {
+
+        dType.value = '';
+        dName.value = '';
+        dNumber.value = '';
+        dImage.value = '';
+
+        discountSaved = false;
+
+        setDiscountError('');
+        clearDiscountFieldErrors();
+        updateDiscountSummary();
+    }
+
+    function cancelDiscountModal() {
+
+        /* Never saved -> the customer changed their mind, so untick the box. */
+        if (!discountSaved && hasDiscountBox) {
+            hasDiscountBox.checked = false;
+            resetDiscount();
+        }
+
+        closeDiscountModal();
+
+        if (hasDiscountBox) {
+            hasDiscountBox.focus();
+        }
+    }
+
+    if (hasDiscountBox && discountModal && dType && dName && dNumber && dImage) {
+
+        hasDiscountBox.addEventListener('change', function () {
+
+            if (hasDiscountBox.checked) {
+                openDiscountModal();
+            } else {
+                closeDiscountModal();
+                resetDiscount();
+            }
+        });
+
+        document
+            .getElementById('registerDiscountSave')
+            .addEventListener('click', function () {
+
+                if (validateDiscount() !== '') {
+                    return;
+                }
+
+                discountSaved = true;
+                updateDiscountSummary();
+                closeDiscountModal();
+            });
+
+        document
+            .getElementById('registerDiscountCancel')
+            .addEventListener('click', cancelDiscountModal);
+
+        document
+            .getElementById('registerDiscountClose')
+            .addEventListener('click', cancelDiscountModal);
+
+        if (discountEdit) {
+            discountEdit.addEventListener('click', openDiscountModal);
+        }
+
+        discountModal.addEventListener('click', function (event) {
+            if (event.target === discountModal) {
+                cancelDiscountModal();
+            }
+        });
+
+        /* Enter inside the modal saves the details instead of submitting the whole form. */
+        discountModal.addEventListener('keydown', function (event) {
+
+            if (
+                event.key === 'Enter' &&
+                event.target.tagName === 'INPUT' &&
+                event.target.type !== 'file'
+            ) {
+                event.preventDefault();
+                document.getElementById('registerDiscountSave').click();
+            }
+        });
+
+        document.addEventListener('keydown', function (event) {
+
+            if (
+                event.key === 'Escape' &&
+                discountModal.classList.contains('is-open')
+            ) {
+                cancelDiscountModal();
+            }
+        });
+
+        /* The page was reloaded by the server (error): a file cannot be refilled. */
+        if (discountOpenOnLoad && hasDiscountBox.checked) {
+            setDiscountError('Please upload your ID photo again.');
+            openDiscountModal();
+        }
     }
 
     /* ---------------------------------------------------------
@@ -1380,6 +2091,10 @@ document.addEventListener('DOMContentLoaded', function () {
         ) {
 
             markFieldError(password);
+            showFieldMessage(
+                password,
+                'Password must be at least 8 characters long.'
+            );
             valid = false;
 
         }
@@ -1390,6 +2105,10 @@ document.addEventListener('DOMContentLoaded', function () {
         ) {
 
             markFieldError(confirmPassword);
+            showFieldMessage(
+                confirmPassword,
+                'Please confirm your password.'
+            );
             valid = false;
 
         } else if (
@@ -1398,6 +2117,10 @@ document.addEventListener('DOMContentLoaded', function () {
         ) {
 
             markFieldError(confirmPassword);
+            showFieldMessage(
+                confirmPassword,
+                'Passwords do not match.'
+            );
             valid = false;
 
         }
@@ -1405,8 +2128,24 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!terms || !terms.checked) {
 
             markFieldError(terms);
+            showFieldMessage(
+                terms,
+                'Please agree to the Terms and Conditions and Privacy Policy.'
+            );
             valid = false;
 
+        }
+
+        /* PWD / Senior details live in the modal. */
+        let discountMessage = '';
+
+        if (hasDiscountBox && hasDiscountBox.checked) {
+
+            discountMessage = validateDiscount();
+
+            if (discountMessage !== '') {
+                valid = false;
+            }
         }
 
         if (!valid) {
@@ -1414,15 +2153,17 @@ document.addEventListener('DOMContentLoaded', function () {
             let message =
                 'Please check the highlighted field(s).';
 
+            /* Password problems are shown inline under the field,
+               so the toast is only for the other fields. */
+            const otherInvalid = [
+                nameInput,
+                emailInput,
+                mobileInput
+            ].some(function (field) {
+                return field && field.classList.contains('field-error');
+            });
+
             if (
-                confirmPassword &&
-                confirmPassword.classList.contains('field-error') &&
-                password &&
-                confirmPassword.value !== password.value
-            ) {
-                message =
-                    'Passwords do not match.';
-            } else if (
                 mobileInput &&
                 mobileInput.classList.contains('field-error')
             ) {
@@ -1435,21 +2176,25 @@ document.addEventListener('DOMContentLoaded', function () {
             ) {
                 message =
                     'Please enter a valid email address.';
-            } else if (
-                terms &&
-                terms.classList.contains('field-error')
-            ) {
-                message =
-                    'Please agree to the Terms and Conditions.';
-            } else if (
-                password &&
-                password.classList.contains('field-error')
-            ) {
-                message =
-                    'Password must be at least 8 characters long.';
             }
 
-            showRegisterToast(message);
+            const pageFieldInvalid = [
+                nameInput,
+                emailInput,
+                mobileInput,
+                password,
+                confirmPassword,
+                terms
+            ].some(function (field) {
+                return field && field.classList.contains('field-error');
+            });
+
+            if (otherInvalid) {
+                showRegisterToast(message);
+            } else if (discountMessage !== '' && !pageFieldInvalid) {
+                /* Only the ID details are missing: reopen the modal on the problem. */
+                openDiscountModal();
+            }
 
             const fieldToFocus =
                 firstErrorField([
@@ -1679,7 +2424,9 @@ document.addEventListener('DOMContentLoaded', function () {
             <p>
                 Local Milktea House may collect information you provide during registration and
                 ordering, including your full name, email address, mobile number, order
-                details, and payment-related information submitted for verification.
+                details, and payment-related information submitted for verification. If you apply for the
+                PWD / Senior Citizen discount, we also collect the name and number shown on
+                your ID and a photo of your ID, which are used only to verify your discount.
             </p>
 
             <h4>2. How We Use Your Information</h4>

@@ -675,6 +675,77 @@ try {
 
     $pdo->beginTransaction();
 
+    /*
+     * ================================================================
+     * ENFORCE ONE-TIME PWD / SENIOR DISCOUNT USE
+     * ================================================================
+     * The discount is consumed only when it is actually applied to this
+     * order. Lock the customer's row to prevent two simultaneous checkouts
+     * from both passing the previous-use check.
+     * A successfully inserted discounted order is the permanent record
+     * that the discount has been used; a rolled-back checkout does not count.
+     */
+    if ($appliedDiscountType !== 'none') {
+        if (!$isRegisteredCustomer || !$customer_id) {
+            checkoutFail('PWD and Senior Citizen discounts are available only to approved customer accounts.');
+        }
+
+        $lockedCustomerStmt = $pdo->prepare("
+            SELECT discount_type, verification_status, discount_id_name, discount_id_number
+            FROM customers
+            WHERE id = ?
+            LIMIT 1
+            FOR UPDATE
+        ");
+        $lockedCustomerStmt->execute([$customer_id]);
+        $lockedCustomer = $lockedCustomerStmt->fetch(PDO::FETCH_ASSOC);
+
+        $lockedType = strtolower(trim((string)($lockedCustomer['discount_type'] ?? '')));
+        $lockedStatus = strtolower(trim((string)($lockedCustomer['verification_status'] ?? '')));
+        $lockedIdName = trim((string)($lockedCustomer['discount_id_name'] ?? ''));
+        $lockedIdNumber = strtoupper(trim((string)($lockedCustomer['discount_id_number'] ?? '')));
+
+        if (
+            !$lockedCustomer ||
+            $lockedStatus !== 'verified' ||
+            $lockedType !== $appliedDiscountType ||
+            $lockedIdName === '' ||
+            $lockedIdNumber === ''
+        ) {
+            checkoutFail('Your PWD/Senior Citizen ID must be approved and match your account before using the discount.');
+        }
+
+        // Confirm the cart's submitted ID corresponds to the approved ID on this account.
+        $cartDiscountIdNumber = '';
+        foreach ($_SESSION['cart'] as $discountCartItem) {
+            $lineType = strtolower(trim((string)($discountCartItem['discount_type'] ?? 'none')));
+            if ($lineType === $appliedDiscountType) {
+                $cartDiscountIdNumber = strtoupper(trim((string)($discountCartItem['discount_id_number'] ?? '')));
+                break;
+            }
+        }
+
+        if ($cartDiscountIdNumber === '' || !hash_equals($lockedIdNumber, $cartDiscountIdNumber)) {
+            checkoutFail('The discount ID in your cart does not match the approved ID on your account.');
+        }
+
+        // Any prior order where this discount was actually applied consumes it,
+        // regardless of that order's current status.
+        $previousUseStmt = $pdo->prepare("
+            SELECT id
+            FROM orders
+            WHERE customer_id = ?
+              AND LOWER(COALESCE(discount_type, 'none')) = ?
+              AND COALESCE(discount_amount, 0) > 0
+            LIMIT 1
+        ");
+        $previousUseStmt->execute([$customer_id, $appliedDiscountType]);
+
+        if ($previousUseStmt->fetchColumn()) {
+            checkoutFail('Your PWD/Senior Citizen discount has already been used once and cannot be used on another order.');
+        }
+    }
+
 
     /*
      * ================================================================

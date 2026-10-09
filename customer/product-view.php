@@ -733,10 +733,21 @@ if ($menuBundleConfig) {
         white-space: nowrap;
     }
 
-    /* Multi choice (add-ons) = checkbox mark, outlined tile */
+    /* Multi choice (add-ons): reserve a dedicated column for the price so
+       it remains visible even when the product card becomes narrow. */
     .pv-choice--addon .form-check-label {
-        justify-content: flex-start;
-        gap: 10px;
+        display: grid;
+        grid-template-columns: 17px minmax(0, 1fr) max-content;
+        align-items: center;
+        justify-content: initial;
+        gap: 6px;
+        min-width: 0;
+    }
+    .pv-choice--addon .pv-choice-meta {
+        margin-left: 0;
+        white-space: nowrap;
+        flex-shrink: 0;
+        font-size: .72rem;
     }
     .pv-choice--addon .form-check-label::before {
         content: "";
@@ -815,6 +826,17 @@ if ($menuBundleConfig) {
 
     @media (max-width: 420px) {
         .pv-choices.is-addons { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .pv-choice--addon .form-check-label {
+            grid-template-columns: 16px minmax(0, 1fr) max-content;
+            gap: 5px;
+            padding: 7px 8px;
+            font-size: .76rem;
+        }
+        .pv-choice--addon .form-check-label::before {
+            width: 16px;
+            height: 16px;
+        }
+        .pv-choice--addon .pv-choice-meta { font-size: .68rem; }
         .pv-choices.is-sugar { gap: 5px; }
         .pv-choice--pill .form-check-label { padding: 6px 4px; }
     }
