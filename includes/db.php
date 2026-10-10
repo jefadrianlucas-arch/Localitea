@@ -4,7 +4,7 @@
 // Fall back to XAMPP settings when running locally.
 
 $host = getenv('MYSQLHOST') ?: 'localhost';
-$port = getenv('MYSQLPORT') ?: '3307';
+$port = getenv('MYSQLPORT') ?: '3306';
 $db   = getenv('MYSQLDATABASE') ?: 'milktea_db';
 $user = getenv('MYSQLUSER') ?: 'root';
 $pass = getenv('MYSQLPASSWORD') ?: '';
@@ -23,7 +23,7 @@ try {
 } catch (\PDOException $e) {
     die("Database connection failed: " . $e->getMessage());
 }
-
+    
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
