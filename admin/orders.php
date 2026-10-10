@@ -4,9 +4,6 @@ session_start();
 require_once '../includes/db.php';
 require_once '../includes/mailer.php';
 
-
-
-
 /* =========================================================
    ADMIN ACCESS ONLY
    Staff users are NOT allowed to use this page.
@@ -281,23 +278,6 @@ if ($target_order_id > 0) {
 }
 
 /* =========================================================
-   PAYMENT-BASED INITIAL WORKFLOW FIX
-   Only GCash orders should use Pending Verification.
-   Cash orders can proceed directly to Confirmed because there
-   is no digital payment proof that needs to be checked.
-
-   This also repairs existing orders that were incorrectly saved
-   as pending_verification by moving non-GCash pending orders to
-   confirmed.
-========================================================= */
-/*
- * Pending statuses are now intentional:
- *  - pending_verification = GCash payment proof awaiting verification
- *
- * Cash orders are created directly as Confirmed by checkout.php.
- */
-
-/* =========================================================
    REDIRECT HELPER
 ========================================================= */
 function adminOrdersRedirect(
@@ -429,7 +409,6 @@ if (
             (int)($_POST['page'] ?? 1)
         );
 
-
     if (!in_array(
         $posted_status,
         $valid_filters,
@@ -440,7 +419,6 @@ if (
             'pending_verification';
     }
 
-
     if (
         $order_id > 0
         && $cancellation_reason !== ''
@@ -449,7 +427,6 @@ if (
         try {
 
             $pdo->beginTransaction();
-
 
             /* ---------------------------------------------
                GET ORDER
@@ -478,14 +455,12 @@ if (
                     PDO::FETCH_ASSOC
                 );
 
-
             if (!$orderData) {
 
                 throw new RuntimeException(
                     'Order not found.'
                 );
             }
-
 
             /* ---------------------------------------------
                ALLOWED CANCELLATION STATUSES
@@ -499,7 +474,6 @@ if (
                 'ready'
             ];
 
-
             if (!in_array(
                 $orderData['status'],
                 $allowed_to_cancel,
@@ -510,7 +484,6 @@ if (
                     'This order can no longer be cancelled.'
                 );
             }
-
 
             $previous_status =
                 (string)$orderData['status'];
@@ -539,7 +512,6 @@ if (
                 $refund_requested_at = date('Y-m-d H:i:s');
             }
 
-
             /* ---------------------------------------------
                CANCEL ORDER
             --------------------------------------------- */
@@ -561,7 +533,6 @@ if (
                 $refund_requested_at,
                 $order_id
             ]);
-
 
             /* ---------------------------------------------
                SAVE STATUS HISTORY
@@ -597,7 +568,6 @@ if (
                 $cancellation_reason
             ]);
 
-
             /* ---------------------------------------------
                CUSTOMER NOTIFICATION
             --------------------------------------------- */
@@ -609,11 +579,9 @@ if (
                     ?: 'Order'
                 );
 
-
             $customerMessage =
                 "Your order {$orderIdentifier} has been cancelled. "
                 . "Reason: {$cancellation_reason}.";
-
 
             $notificationStmt = $pdo->prepare("
                 INSERT INTO notifications
@@ -640,9 +608,7 @@ if (
                 $order_id
             ]);
 
-
             $pdo->commit();
-
 
             /* ---------------------------------------------
                AJAX RESPONSE
@@ -657,7 +623,6 @@ if (
                 'message' =>
                     "Order {$orderIdentifier} cancelled successfully."
             ];
-
 
         } catch (Throwable $e) {
 
@@ -690,7 +655,6 @@ if (
         ];
     }
 
-
     /* ---------------------------------------------
        AJAX RESPONSE
     --------------------------------------------- */
@@ -708,7 +672,6 @@ if (
 
         exit;
     }
-
 
     /* ---------------------------------------------
        NORMAL POST FALLBACK
@@ -1242,82 +1205,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_status'])) {
 
                     if (!empty($orderData['customer_id']) && $notification['type'] !== null) {
 
-
-
-
                                             $notificationStmt = $pdo->prepare("
-
 
                                                 INSERT INTO notifications
 
-
                                                 (
-
 
                                                     recipient_role,
 
-
                                                     recipient_id,
-
 
                                                     type,
 
-
                                                     message,
-
 
                                                     reference_id
 
-
                                                 )
-
 
                                                 VALUES
 
-
                                                 (
-
 
                                                     'customer',
 
+                                                    ?,
 
                                                     ?,
 
-
                                                     ?,
-
-
-                                                    ?,
-
 
                                                     ?
 
-
                                                 )
-
 
                                             ");
 
-
-
                                             $notificationStmt->execute([
-
 
                                                 $orderData['customer_id'],
 
-
                                                 $notification['type'],
-
 
                                                 $notification['message'],
 
-
                                                 $order_id
 
-
                                             ]);
-
-
 
                                             /* ---------------------------------------------
                                                CUSTOMER PREPARING EMAIL
@@ -1369,8 +1303,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_status'])) {
                                                 }
                                             }
 
-
-                    } 
+                    }
 
                     $ajaxResponse = [
                     'success' => true,
@@ -1533,7 +1466,6 @@ if ($search !== '') {
     $params[] = $selected_status;
 
 }
-
 
 /*
  * =========================================================
@@ -3731,7 +3663,6 @@ require_once '../includes/header.php';
         margin-bottom: 12px;
     }
 
-
     .order-item-row:first-child {
         padding-top: 0;
     }
@@ -4351,7 +4282,6 @@ require_once '../includes/header.php';
     }
 }
 
-
 /* =========================================================
    TARGET ORDER FROM ADMIN NOTIFICATION
 ========================================================= */
@@ -4365,9 +4295,6 @@ require_once '../includes/header.php';
     position: relative;
     z-index: 5;
 }
-
-
-
 
     /* =========================================================
        TABULAR ACTIVE ORDERS
@@ -4840,7 +4767,6 @@ require_once '../includes/header.php';
         }
     }
 
-
     /* POLISHED ORDER DETAILS MODAL */
     .order-details-modal-dialog .modal-content {
         border: 1px solid #CDBBAA;
@@ -4963,7 +4889,6 @@ require_once '../includes/header.php';
             margin: 12px 0 14px;
         }
     }
-
 
     /* =========================================================
        RESPONSIVE POLISH (desktop / tablet / mobile)
@@ -5943,8 +5868,6 @@ require_once '../includes/header.php';
                                         <hr class="order-modal-divider">
 
                                         <!-- CUSTOMER / PICKUP / PAYMENT -->
-                                    
-                                        
 
                                         <div class="row g-3 mb-4 order-info-grid">
                                             <div class="col-md-3">
@@ -6693,8 +6616,6 @@ require_once '../includes/header.php';
                 <?php endif; ?>
 
             <?php endif; ?>
-
-
 
             </section>
 
@@ -8394,7 +8315,6 @@ require_once '../includes/header.php';
 
             </details>
 
-
     </main>
 
 </div>
@@ -8958,6 +8878,51 @@ document.addEventListener('DOMContentLoaded', function () {
     }, true);
 
     /*
+     * Cancel Order modal close handling.
+     * This modal lives outside .admin-content, so the delegated fallback
+     * handler below never reaches its X / "Keep Order" buttons. Handle them
+     * at document level (capture phase) so they always close the modal,
+     * whether it was opened through Bootstrap or the Localitea fallback.
+     */
+    document.addEventListener('click', function (event) {
+        const dismissButton = event.target.closest(
+            '#adminCancelOrderModal [data-bs-dismiss="modal"]'
+        );
+
+        if (!dismissButton) {
+            return;
+        }
+
+        const cancelOrderModal = document.getElementById(
+            'adminCancelOrderModal'
+        );
+
+        if (!cancelOrderModal) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (window.bootstrap && bootstrap.Modal) {
+            const instance =
+                bootstrap.Modal.getInstance(cancelOrderModal) ||
+                bootstrap.Modal.getOrCreateInstance(cancelOrderModal);
+            instance.hide();
+
+            /* Safety net: force-close if Bootstrap did not finish hiding. */
+            window.setTimeout(function () {
+                if (cancelOrderModal.classList.contains('show')) {
+                    closeLocaliteaModal(cancelOrderModal);
+                    cleanupStaleModalState();
+                }
+            }, 500);
+        } else {
+            closeLocaliteaModal(cancelOrderModal);
+        }
+    }, true);
+
+    /*
      * Fallback close handling for the local View Details modal when
      * Bootstrap JS is unavailable. Bootstrap can still handle its own
      * modals normally when it is loaded.
@@ -9061,12 +9026,10 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-
     const preserveScrollForms =
         document.querySelectorAll(
             '.order-search-form, .cancelled-filter-form, form:has(button[name="update_status"]), form:has(button[name="cancel_order"])'
         );
-
 
     preserveScrollForms.forEach(function (form) {
 
@@ -9081,7 +9044,6 @@ document.addEventListener('DOMContentLoaded', function () {
 
     });
 
-
     /* Also preserve scroll position when clicking pagination links
        (both the main Orders pagination and the Cancelled Orders
        pagination), so paging through results does not jump back
@@ -9091,7 +9053,6 @@ document.addEventListener('DOMContentLoaded', function () {
             '.pagination .page-link[href]'
         );
 
-
     paginationLinks.forEach(function (link) {
 
         link.addEventListener('click', function (event) {
@@ -9099,7 +9060,6 @@ document.addEventListener('DOMContentLoaded', function () {
             if (link.closest('.page-item.disabled')) {
                 return;
             }
-
 
             sessionStorage.setItem(
                 'adminOrdersScrollY',
@@ -9112,7 +9072,6 @@ document.addEventListener('DOMContentLoaded', function () {
 
 });
 </script>
-
 
 <!-- =========================================================
      SCRIPT 2
@@ -9141,12 +9100,10 @@ document.addEventListener(
                         'select[name="cancellation_reason"]'
                     );
 
-
                 const otherWrap =
                     modal.querySelector(
                         '[data-other-reason]'
                     );
-
 
                 const otherTextarea =
                     otherWrap
@@ -9155,15 +9112,12 @@ document.addEventListener(
                         )
                         : null;
 
-
                 const form =
                     modal.querySelector('form');
-
 
                 if (!select || !form) {
                     return;
                 }
-
 
                 select.addEventListener(
                     'change',
@@ -9175,7 +9129,6 @@ document.addEventListener(
                                 otherWrap.style.display =
                                     'block';
                             }
-
 
                             if (otherTextarea) {
 
@@ -9193,7 +9146,6 @@ document.addEventListener(
                                     'none';
                             }
 
-
                             if (otherTextarea) {
 
                                 otherTextarea.required =
@@ -9208,7 +9160,6 @@ document.addEventListener(
                     }
                 );
 
-
                 form.addEventListener(
                     'submit',
                     function (event) {
@@ -9219,7 +9170,6 @@ document.addEventListener(
                                 otherTextarea
                                     ? otherTextarea.value.trim()
                                     : '';
-
 
                             if (reason === '') {
 
@@ -9232,13 +9182,11 @@ document.addEventListener(
                                 return;
                             }
 
-
                             /*
                              * Replace the select value with
                              * the custom reason before submitting.
                              */
                             select.value = reason;
-
 
                             /*
                              * The select does not contain the
@@ -9250,18 +9198,14 @@ document.addEventListener(
                                     'option'
                                 );
 
-
                             customOption.value =
                                 reason;
-
 
                             customOption.textContent =
                                 reason;
 
-
                             customOption.selected =
                                 true;
-
 
                             select.appendChild(
                                 customOption
@@ -9276,7 +9220,6 @@ document.addEventListener(
 
     }
 );
-
 
 /* =========================================================
    PRINT RECEIPT
@@ -9385,7 +9328,6 @@ function printReceipt(modalId) {
 
 </script>
 
-
 <!-- =========================================================
      SCRIPT 3
      AJAX ORDER STATUS + AJAX CANCEL ORDER
@@ -9395,7 +9337,6 @@ function printReceipt(modalId) {
 document.addEventListener(
     'DOMContentLoaded',
     function () {
-
 
         /* =====================================================
            UPDATE WORKFLOW COUNT
@@ -9410,29 +9351,24 @@ document.addEventListener(
                 return;
             }
 
-
             const card =
                 document.querySelector(
                     '.workflow-card.workflow-' +
                     status
                 );
 
-
             if (!card) {
                 return;
             }
-
 
             const countElement =
                 card.querySelector(
                     '.workflow-count'
                 );
 
-
             if (!countElement) {
                 return;
             }
-
 
             const currentCount =
                 parseInt(
@@ -9440,19 +9376,16 @@ document.addEventListener(
                     10
                 ) || 0;
 
-
             const newCount =
                 Math.max(
                     0,
                     currentCount + change
                 );
 
-
             countElement.textContent =
                 newCount;
 
         }
-
 
         /* =====================================================
            AJAX TOAST
@@ -9467,7 +9400,6 @@ document.addEventListener(
                     'ajaxOrdersToast'
                 );
 
-
             if (existingToast) {
 
                 const existingWrap =
@@ -9475,35 +9407,29 @@ document.addEventListener(
                         '.orders-toast-wrap'
                     );
 
-
                 if (existingWrap) {
                     existingWrap.remove();
                 }
 
             }
 
-
             const wrap =
                 document.createElement(
                     'div'
                 );
 
-
             wrap.className =
                 'orders-toast-wrap';
-
 
             wrap.setAttribute(
                 'aria-live',
                 'polite'
             );
 
-
             wrap.setAttribute(
                 'aria-atomic',
                 'true'
             );
-
 
             wrap.innerHTML = `
 
@@ -9523,13 +9449,11 @@ document.addEventListener(
 
                     </span>
 
-
                     <span
                         class="orders-toast-message"
                     >
                         ${message}
                     </span>
-
 
                     <button
                         type="button"
@@ -9543,7 +9467,6 @@ document.addEventListener(
 
                     </button>
 
-
                     <span
                         class="orders-toast-progress"
                         aria-hidden="true"
@@ -9553,23 +9476,19 @@ document.addEventListener(
 
             `;
 
-
             document.body.appendChild(
                 wrap
             );
-
 
             const toast =
                 wrap.querySelector(
                     '.orders-toast'
                 );
 
-
             const closeButton =
                 wrap.querySelector(
                     '.orders-toast-close'
                 );
-
 
             function removeToast() {
 
@@ -9577,11 +9496,9 @@ document.addEventListener(
                     return;
                 }
 
-
                 toast.classList.add(
                     'orders-toast-is-closing'
                 );
-
 
                 setTimeout(
                     function () {
@@ -9594,7 +9511,6 @@ document.addEventListener(
 
             }
 
-
             if (closeButton) {
 
                 closeButton.addEventListener(
@@ -9604,14 +9520,12 @@ document.addEventListener(
 
             }
 
-
             setTimeout(
                 removeToast,
                 3500
             );
 
         }
-
 
        /* =====================================================
    REMOVE ORDER CARD
@@ -9623,7 +9537,6 @@ function removeOrderCard(form) {
 
     let orderCard =
         form.closest('.order-card');
-
 
     /*
      * Cancel modal is outside the order card.
@@ -9671,35 +9584,28 @@ function removeOrderCard(form) {
         }
     }
 
-
     if (!orderCard) {
         return;
     }
-
 
     const ordersGrid =
         orderCard.closest(
             '.orders-grid'
         );
 
-
     orderCard.style.transition =
         'opacity .20s ease, transform .20s ease';
-
 
     orderCard.style.opacity =
         '0';
 
-
     orderCard.style.transform =
         'translateY(-4px)';
-
 
     setTimeout(
         function () {
 
             orderCard.remove();
-
 
             /*
              * Show empty state if there are
@@ -9723,7 +9629,6 @@ function removeOrderCard(form) {
                             class="bi bi-inbox fs-1 d-block mb-2"
                         ></i>
 
-
                         <div>
                             No orders found in this category.
                         </div>
@@ -9740,7 +9645,6 @@ function removeOrderCard(form) {
 
 }
 
-
         /* =====================================================
            HIDE CANCELLATION MODAL
         ===================================================== */
@@ -9754,11 +9658,9 @@ function removeOrderCard(form) {
                     '.modal'
                 );
 
-
             if (!modal) {
                 return;
             }
-
 
             if (
                 window.bootstrap
@@ -9775,13 +9677,11 @@ function removeOrderCard(form) {
                         modal
                     );
 
-
                 instance.hide();
 
             }
 
         }
-
 
         /* =====================================================
            AJAX ORDER STATUS PROCESSING
@@ -9793,7 +9693,6 @@ function removeOrderCard(form) {
                 'form[data-localitea-ajax-order-action="1"]:has(button[name="update_status"])'
             );
 
-
         statusForms.forEach(
             function (form) {
 
@@ -9803,30 +9702,24 @@ function removeOrderCard(form) {
 
                         event.preventDefault();
 
-
                         const submitButton =
                             form.querySelector(
                                 'button[name="update_status"]'
                             );
 
-
                         if (!submitButton) {
                             return;
                         }
-
 
                         if (submitButton.disabled) {
                             return;
                         }
 
-
                         const originalButtonHTML =
                             submitButton.innerHTML;
 
-
                         submitButton.disabled =
                             true;
-
 
                         submitButton.innerHTML = `
 
@@ -9839,24 +9732,20 @@ function removeOrderCard(form) {
 
                         `;
 
-
                         const formData =
                             new FormData(
                                 form
                             );
-
 
                         formData.set(
                             'update_status',
                             '1'
                         );
 
-
                         formData.set(
                             'ajax',
                             '1'
                         );
-
 
                         try {
 
@@ -9876,7 +9765,6 @@ function removeOrderCard(form) {
                                     }
                                 );
 
-
                             if (!response.ok) {
 
                                 throw new Error(
@@ -9886,10 +9774,8 @@ function removeOrderCard(form) {
 
                             }
 
-
                             const data =
                                 await response.json();
-
 
                             if (!data.success) {
 
@@ -9901,28 +9787,23 @@ function removeOrderCard(form) {
 
                             }
 
-
                             updateWorkflowCount(
                                 data.previous_status,
                                 -1
                             );
-
 
                             updateWorkflowCount(
                                 data.new_status,
                                 1
                             );
 
-
                             removeOrderCard(
                                 form
                             );
 
-
                             showAjaxOrderToast(
                                 data.message
                             );
-
 
                         } catch (error) {
 
@@ -9931,17 +9812,14 @@ function removeOrderCard(form) {
                                 error
                             );
 
-
                             alert(
                                 error.message
                                 ||
                                 'Unable to update the order.'
                             );
 
-
                             submitButton.disabled =
                                 false;
-
 
                             submitButton.innerHTML =
                                 originalButtonHTML;
@@ -9954,7 +9832,6 @@ function removeOrderCard(form) {
             }
         );
 
-
         /* =====================================================
            AJAX CANCEL ORDER
            Cancel order without refreshing the page
@@ -9965,7 +9842,6 @@ function removeOrderCard(form) {
                 'form[data-localitea-ajax-order-action="1"]:has(input[name="cancel_order"])'
             );
 
-
         cancelForms.forEach(
             function (form) {
 
@@ -9975,26 +9851,21 @@ function removeOrderCard(form) {
 
                         event.preventDefault();
 
-
                         const submitButton =
                             form.querySelector(
                                 'button[type="submit"]'
                             );
 
-
                         if (!submitButton) {
                             return;
                         }
-
 
                         if (submitButton.disabled) {
                             return;
                         }
 
-
                         const originalButtonHTML =
                             submitButton.innerHTML;
-
 
                         /* -----------------------------------------
                            SHOW LOADING INDICATOR
@@ -10002,7 +9873,6 @@ function removeOrderCard(form) {
 
                         submitButton.disabled =
                             true;
-
 
                         submitButton.innerHTML = `
 
@@ -10015,12 +9885,10 @@ function removeOrderCard(form) {
 
                         `;
 
-
                         const formData =
                             new FormData(
                                 form
                             );
-
 
                         /* Form contains cancel_order as hidden input,
                            but set it explicitly for reliability. */
@@ -10029,12 +9897,10 @@ function removeOrderCard(form) {
                             '1'
                         );
 
-
                         formData.set(
                             'ajax',
                             '1'
                         );
-
 
                         try {
 
@@ -10054,7 +9920,6 @@ function removeOrderCard(form) {
                                     }
                                 );
 
-
                             if (!response.ok) {
 
                                 throw new Error(
@@ -10064,10 +9929,8 @@ function removeOrderCard(form) {
 
                             }
 
-
                             const data =
                                 await response.json();
-
 
                             if (!data.success) {
 
@@ -10079,7 +9942,6 @@ function removeOrderCard(form) {
 
                             }
 
-
                             /* -------------------------------------
                                CLOSE MODAL FIRST
                             ------------------------------------- */
@@ -10087,7 +9949,6 @@ function removeOrderCard(form) {
                             hideCancellationModal(
                                 form
                             );
-
 
                             /* -------------------------------------
                                UPDATE WORKFLOW COUNTER
@@ -10109,7 +9970,6 @@ function removeOrderCard(form) {
                                 }
                             }
 
-
                             /* -------------------------------------
                                REMOVE ORDER CARD
                             ------------------------------------- */
@@ -10117,7 +9977,6 @@ function removeOrderCard(form) {
                             removeOrderCard(
                                 form
                             );
-
 
                             /* -------------------------------------
                                SUCCESS TOAST
@@ -10129,7 +9988,6 @@ function removeOrderCard(form) {
                                 'Order cancelled successfully.'
                             );
 
-
                         } catch (error) {
 
                             console.error(
@@ -10137,17 +9995,14 @@ function removeOrderCard(form) {
                                 error
                             );
 
-
                             alert(
                                 error.message
                                 ||
                                 'Unable to cancel the order.'
                             );
 
-
                             submitButton.disabled =
                                 false;
-
 
                             submitButton.innerHTML =
                                 originalButtonHTML;
@@ -10184,7 +10039,6 @@ document.addEventListener(
         if (!adminOrdersContent) {
             return;
         }
-
 
         /* =====================================================
            SYNC WORKFLOW CARDS
@@ -10257,7 +10111,6 @@ document.addEventListener(
 
         }
 
-
         /* =====================================================
            SYNC SEARCH FORM
         ===================================================== */
@@ -10283,7 +10136,6 @@ document.addEventListener(
                 return;
             }
 
-
             const currentSearch =
                 currentForm.querySelector(
                     'input[name="q"]'
@@ -10304,7 +10156,6 @@ document.addEventListener(
 
             }
 
-
             const currentStatus =
                 currentForm.querySelector(
                     'input[name="status"]'
@@ -10324,7 +10175,6 @@ document.addEventListener(
                     newStatus.value;
 
             }
-
 
             const currentActions =
                 currentForm.querySelector(
@@ -10347,7 +10197,6 @@ document.addEventListener(
             }
 
         }
-
 
         /* =====================================================
            BOOTSTRAP MODAL / BACKDROP CLEANUP
@@ -10415,7 +10264,6 @@ document.addEventListener(
 
         }
 
-
         /* =====================================================
            LOAD ONLY ACTIVE ORDERS
            The Admin page itself does NOT reload.
@@ -10435,20 +10283,17 @@ document.addEventListener(
                 return;
             }
 
-
             const requestedUrl =
                 new URL(
                     targetUrl,
                     window.location.href
                 );
 
-
             const selectedStatus =
                 requestedUrl.searchParams.get(
                     'status'
                 ) ||
                 'order_queue';
-
 
             const searchValue =
                 (
@@ -10458,14 +10303,11 @@ document.addEventListener(
                     ''
                 ).trim();
 
-
             const hasSearch =
                 searchValue !== '';
 
-
             const previousHTML =
                 activeSection.innerHTML;
-
 
             /* Subtle loading state */
 
@@ -10479,7 +10321,6 @@ document.addEventListener(
 
             activeSection.style.pointerEvents =
                 'none';
-
 
             try {
 
@@ -10501,7 +10342,6 @@ document.addEventListener(
                         }
                     );
 
-
                 if (!response.ok) {
 
                     throw new Error(
@@ -10511,14 +10351,11 @@ document.addEventListener(
 
                 }
 
-
                 const html =
                     await response.text();
 
-
                 const parser =
                     new DOMParser();
-
 
                 const parsedDocument =
                     parser.parseFromString(
@@ -10526,12 +10363,10 @@ document.addEventListener(
                         'text/html'
                     );
 
-
                 const newActiveSection =
                     parsedDocument.querySelector(
                         '.active-orders-section'
                     );
-
 
                 if (!newActiveSection) {
 
@@ -10541,7 +10376,6 @@ document.addEventListener(
 
                 }
 
-
                 /*
                  * Close/clean any Bootstrap modal BEFORE replacing the
                  * live Active Orders DOM. Otherwise its backdrop can
@@ -10549,20 +10383,17 @@ document.addEventListener(
                  */
                 cleanupAdminBootstrapModalState();
 
-
                 /* Replace only Active Orders */
 
                 activeSection.replaceWith(
                     newActiveSection
                 );
 
-
                 /*
                  * Clean again after replacement in case Bootstrap
                  * queued backdrop cleanup from the modal hide call.
                  */
                 cleanupAdminBootstrapModalState();
-
 
                 /*
                  * If this request came from View Order, focus the
@@ -10619,7 +10450,6 @@ document.addEventListener(
                     }
                 }
 
-
                 /* Update workflow counts */
 
                 syncWorkflowCards(
@@ -10628,13 +10458,11 @@ document.addEventListener(
                     hasSearch
                 );
 
-
                 /* Update search form */
 
                 syncSearchForm(
                     parsedDocument
                 );
-
 
                 /* Update URL */
 
@@ -10666,7 +10494,6 @@ document.addEventListener(
 
                 }
 
-
             } catch (error) {
 
                 console.error(
@@ -10674,10 +10501,8 @@ document.addEventListener(
                     error
                 );
 
-
                 activeSection.innerHTML =
                     previousHTML;
-
 
                 alert(
                     'Unable to load orders. Please try again.'
@@ -10685,12 +10510,10 @@ document.addEventListener(
 
             }
 
-
             const restoredSection =
                 document.querySelector(
                     '.active-orders-section'
                 );
-
 
             if (restoredSection) {
 
@@ -10714,7 +10537,6 @@ document.addEventListener(
 
         }
 
-
         /* =====================================================
            WORKFLOW TABS
         ===================================================== */
@@ -10728,11 +10550,9 @@ document.addEventListener(
                         '.workflow-card[data-status]'
                     );
 
-
                 if (!workflowLink) {
                     return;
                 }
-
 
                 if (
                     event.ctrlKey ||
@@ -10744,9 +10564,7 @@ document.addEventListener(
                     return;
                 }
 
-
                 event.preventDefault();
-
 
                 loadAdminActiveOrders(
                     workflowLink.href,
@@ -10755,7 +10573,6 @@ document.addEventListener(
 
             }
         );
-
 
         /* =====================================================
            ACTIVE ORDER PAGINATION
@@ -10771,17 +10588,14 @@ document.addEventListener(
                         '.active-orders-section .pagination a.page-link[href]'
                     );
 
-
                 if (!paginationLink) {
                     return;
                 }
-
 
                 const pageItem =
                     paginationLink.closest(
                         '.page-item'
                     );
-
 
                 if (
                     pageItem &&
@@ -10796,7 +10610,6 @@ document.addEventListener(
 
                 }
 
-
                 if (
                     event.ctrlKey ||
                     event.metaKey ||
@@ -10807,9 +10620,7 @@ document.addEventListener(
                     return;
                 }
 
-
                 event.preventDefault();
-
 
                 loadAdminActiveOrders(
                     paginationLink.href,
@@ -10818,7 +10629,6 @@ document.addEventListener(
 
             }
         );
-
 
         /* =====================================================
            ACTIVE ORDER SEARCH
@@ -10833,26 +10643,21 @@ document.addEventListener(
                         '.order-search-form'
                     );
 
-
                 if (!form) {
                     return;
                 }
 
-
                 event.preventDefault();
-
 
                 const formData =
                     new FormData(
                         form
                     );
 
-
                 const currentUrl =
                     new URL(
                         window.location.href
                     );
-
 
                 currentUrl.searchParams.set(
                     'status',
@@ -10862,13 +10667,11 @@ document.addEventListener(
                     )
                 );
 
-
                 const searchValue =
                     String(
                         formData.get('q') ||
                         ''
                     ).trim();
-
 
                 if (searchValue !== '') {
 
@@ -10885,12 +10688,10 @@ document.addEventListener(
 
                 }
 
-
                 currentUrl.searchParams.set(
                     'page',
                     '1'
                 );
-
 
                 loadAdminActiveOrders(
                     currentUrl.toString(),
@@ -10899,7 +10700,6 @@ document.addEventListener(
 
             }
         );
-
 
         /* =====================================================
            BROWSER BACK / FORWARD
@@ -10917,7 +10717,6 @@ document.addEventListener(
             }
         );
 
-
         /* =====================================================
            AJAX ORDER ACTIONS
            Capture phase prevents the older submit handlers
@@ -10933,23 +10732,19 @@ document.addEventListener(
                         'form'
                     );
 
-
                 if (!form) {
                     return;
                 }
-
 
                 const statusButton =
                     form.querySelector(
                         'button[name="update_status"]'
                     );
 
-
                 const cancelInput =
                     form.querySelector(
                         'input[name="cancel_order"]'
                     );
-
 
                 /*
                  * Active Orders is refreshed through AJAX, so this delegated
@@ -10970,7 +10765,6 @@ document.addEventListener(
 
                 }
 
-
                 if (cancelInput) {
 
                     event.preventDefault();
@@ -10986,7 +10780,6 @@ document.addEventListener(
             true
         );
 
-
         /* =====================================================
            AJAX STATUS UPDATE
         ===================================================== */
@@ -11000,7 +10793,6 @@ document.addEventListener(
                     'button[name="update_status"]'
                 );
 
-
             if (
                 !button ||
                 button.disabled
@@ -11008,16 +10800,13 @@ document.addEventListener(
                 return;
             }
 
-
             const originalHTML =
                 button.innerHTML;
-
 
             const orderCard =
                 form.closest(
                     '.order-card'
                 );
-
 
             let processingOverlay =
                 null;
@@ -11034,7 +10823,6 @@ document.addEventListener(
             const isPreparing =
                 requestedStatus === 'preparing';
 
-
             /* Card-level processing overlay */
 
             if (orderCard) {
@@ -11043,16 +10831,13 @@ document.addEventListener(
                     'processing-order'
                 );
 
-
                 processingOverlay =
                     document.createElement(
                         'div'
                     );
 
-
                 processingOverlay.className =
                     'order-processing-overlay';
-
 
                 processingOverlay.innerHTML = `
                     <div class="order-processing-box">
@@ -11073,13 +10858,11 @@ document.addEventListener(
                     </div>
                 `;
 
-
                 orderCard.appendChild(
                     processingOverlay
                 );
 
             }
-
 
             /* Preparing also sends the customer's email in the same AJAX
              * request, so give the Admin a clear page-level wait state. */
@@ -11126,10 +10909,8 @@ document.addEventListener(
 
             }
 
-
             button.disabled =
                 true;
-
 
             button.innerHTML = `
                 <span
@@ -11139,24 +10920,20 @@ document.addEventListener(
                 Processing...
             `;
 
-
             const formData =
                 new FormData(
                     form
                 );
-
 
             formData.set(
                 'update_status',
                 '1'
             );
 
-
             formData.set(
                 'ajax',
                 '1'
             );
-
 
             try {
 
@@ -11179,7 +10956,6 @@ document.addEventListener(
                         }
                     );
 
-
                 if (!response.ok) {
 
                     throw new Error(
@@ -11189,10 +10965,8 @@ document.addEventListener(
 
                 }
 
-
                 const data =
                     await response.json();
-
 
                 if (!data.success) {
 
@@ -11203,7 +10977,6 @@ document.addEventListener(
 
                 }
 
-
                 /*
                  * Refresh only the active order section.
                  */
@@ -11212,14 +10985,12 @@ document.addEventListener(
                     false
                 );
 
-
                 if (screenProcessingOverlay) {
 
                     screenProcessingOverlay.remove();
                     screenProcessingOverlay = null;
 
                 }
-
 
                 if (processingOverlay) {
 
@@ -11228,7 +10999,6 @@ document.addEventListener(
 
                 }
 
-
                 if (orderCard) {
 
                     orderCard.classList.remove(
@@ -11236,7 +11006,6 @@ document.addEventListener(
                     );
 
                 }
-
 
                 if (
                     typeof showAjaxOrderToast ===
@@ -11250,14 +11019,12 @@ document.addEventListener(
 
                 }
 
-
             } catch (error) {
 
                 console.error(
                     'AJAX Admin order status update failed:',
                     error
                 );
-
 
                 if (processingOverlay) {
 
@@ -11266,14 +11033,12 @@ document.addEventListener(
 
                 }
 
-
                 if (screenProcessingOverlay) {
 
                     screenProcessingOverlay.remove();
                     screenProcessingOverlay = null;
 
                 }
-
 
                 if (orderCard) {
 
@@ -11283,14 +11048,11 @@ document.addEventListener(
 
                 }
 
-
                 button.disabled =
                     false;
 
-
                 button.innerHTML =
                     originalHTML;
-
 
                 alert(
                     error.message ||
@@ -11300,7 +11062,6 @@ document.addEventListener(
             }
 
         }
-
 
         /* =====================================================
            AJAX CANCEL ORDER
@@ -11315,12 +11076,10 @@ document.addEventListener(
                     'select[name="cancellation_reason"]'
                 );
 
-
             const otherWrap =
                 form.querySelector(
                     '[data-other-reason]'
                 );
-
 
             const textarea =
                 otherWrap
@@ -11328,7 +11087,6 @@ document.addEventListener(
                         'textarea[name="other_cancellation_reason"]'
                     )
                     : null;
-
 
             /* Convert Other into a submitted option */
 
@@ -11342,7 +11100,6 @@ document.addEventListener(
                         ? textarea.value.trim()
                         : '';
 
-
                 if (reason === '') {
 
                     if (textarea) {
@@ -11352,7 +11109,6 @@ document.addEventListener(
                     return;
 
                 }
-
 
                 let customOption =
                     Array.from(
@@ -11368,7 +11124,6 @@ document.addEventListener(
                         }
                     );
 
-
                 if (!customOption) {
 
                     customOption =
@@ -11376,18 +11131,14 @@ document.addEventListener(
                             'option'
                         );
 
-
                     customOption.value =
                         reason;
-
 
                     customOption.textContent =
                         reason;
 
-
                     customOption.selected =
                         true;
-
 
                     select.appendChild(
                         customOption
@@ -11395,18 +11146,15 @@ document.addEventListener(
 
                 }
 
-
                 select.value =
                     reason;
 
             }
 
-
             const button =
                 form.querySelector(
                     'button[type="submit"]'
                 );
-
 
             if (
                 !button ||
@@ -11415,14 +11163,11 @@ document.addEventListener(
                 return;
             }
 
-
             const originalHTML =
                 button.innerHTML;
 
-
             button.disabled =
                 true;
-
 
             button.innerHTML = `
                 <span
@@ -11432,24 +11177,20 @@ document.addEventListener(
                 Cancelling...
             `;
 
-
             const formData =
                 new FormData(
                     form
                 );
-
 
             formData.set(
                 'cancel_order',
                 '1'
             );
 
-
             formData.set(
                 'ajax',
                 '1'
             );
-
 
             try {
 
@@ -11472,7 +11213,6 @@ document.addEventListener(
                         }
                     );
 
-
                 if (!response.ok) {
 
                     throw new Error(
@@ -11482,10 +11222,8 @@ document.addEventListener(
 
                 }
 
-
                 const data =
                     await response.json();
-
 
                 if (!data.success) {
 
@@ -11496,14 +11234,12 @@ document.addEventListener(
 
                 }
 
-
                 /* Close cancellation modal */
 
                 const modal =
                     form.closest(
                         '.modal'
                     );
-
 
                 if (modal) {
 
@@ -11515,11 +11251,9 @@ document.addEventListener(
                             modal
                         );
 
-
                     modalInstance.hide();
 
                 }
-
 
                 /* Refresh only Active Orders */
 
@@ -11527,7 +11261,6 @@ document.addEventListener(
                     window.location.href,
                     false
                 );
-
 
                 if (
                     typeof showAjaxOrderToast ===
@@ -11541,7 +11274,6 @@ document.addEventListener(
 
                 }
 
-
             } catch (error) {
 
                 console.error(
@@ -11549,14 +11281,11 @@ document.addEventListener(
                     error
                 );
 
-
                 button.disabled =
                     false;
 
-
                 button.innerHTML =
                     originalHTML;
-
 
                 alert(
                     error.message ||
@@ -12223,7 +11952,6 @@ document.addEventListener('DOMContentLoaded', function () {
 });
 </script>
 
-
 <script>
 /* =========================================================
    VIEW ORDER TARGET
@@ -12248,7 +11976,6 @@ document.addEventListener('DOMContentLoaded', function () {
             : 0;
     }
 
-
     function clearViewOrderTargetFromUrl() {
 
         const url =
@@ -12272,7 +11999,6 @@ document.addEventListener('DOMContentLoaded', function () {
             url.hash
         );
     }
-
 
     window.LocaliteaFocusViewOrderTarget =
         function (targetId, removeUrlTarget = false) {
@@ -12351,7 +12077,6 @@ document.addEventListener('DOMContentLoaded', function () {
             return true;
         };
 
-
     function initializeViewOrderTarget() {
 
         const targetId =
@@ -12372,7 +12097,6 @@ document.addEventListener('DOMContentLoaded', function () {
             clearViewOrderTargetFromUrl();
         }
     }
-
 
     if (document.readyState === 'loading') {
 
@@ -12758,8 +12482,6 @@ document.addEventListener('DOMContentLoaded', function () {
 
 });
 </script>
-
-
 
 <style id="admin-order-action-hover-fix">
 /* =========================================================

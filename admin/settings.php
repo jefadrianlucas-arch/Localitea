@@ -50,7 +50,6 @@ if (!in_array($selectedTab, ['products', 'promotions', 'user_accounts'], true)) 
     $selectedTab = 'products';
 }
 
-
 /* =========================================================
    USER ACCOUNT SETTINGS
 ========================================================= */
@@ -1182,7 +1181,6 @@ $filteredUserAccounts = array_values(
     )
 );
 
-
 function renderUserAccountFilterFragment(
     array $userAccountCounts,
     string $userAccountFilter,
@@ -1598,7 +1596,6 @@ function renderUserAccountFilterFragment(
                                                     </button>
                                                 </form>
 
-
                                             <?php else: ?>
 
                                                 <?php if (!empty($account['is_pending_verification']) && in_array($account['source'], ['users', 'admins'], true)): ?>
@@ -1725,7 +1722,6 @@ function renderUserAccountFilterFragment(
 <?php
 }
 
-
 /* =========================================================
    USER ACCOUNT FILTER AJAX
    Return only the filter/list area so changing
@@ -1752,7 +1748,6 @@ if (
     exit;
 }
 
-
 /* =========================================================
    PROMOTION MANAGEMENT
 ========================================================= */
@@ -1760,7 +1755,6 @@ if (
 $promotionRuleTypes = [
     'bogo' => 'Buy 1 Take 1',
     'buy_x_get_y' => 'Buy X Get Y Free',
-    'bundle' => 'Bundle / Combo',
     'percentage' => 'Percentage Discount',
     'fixed' => 'Fixed Amount Discount'
 ];
@@ -1978,66 +1972,6 @@ function settingsPromotionRuleInput(PDO $pdo, string $ruleType): array
                 ['product_id' => $buyProduct, 'role' => 'buy', 'quantity' => $buyQuantity, 'size' => $buySize],
                 ['product_id' => $getProduct, 'role' => 'get', 'quantity' => $getQuantity, 'size' => $getSize]
             ]
-        ], []];
-    }
-
-    if ($ruleType === 'bundle') {
-        $bundleProducts = $_POST['bundle_product_ids'] ?? [];
-        $bundleSizes = $_POST['bundle_product_sizes'] ?? [];
-
-        if (!is_array($bundleProducts)) {
-            $bundleProducts = [];
-        }
-        if (!is_array($bundleSizes)) {
-            $bundleSizes = [];
-        }
-
-        $bundleProducts = array_values(array_unique(array_filter(
-            array_map('intval', $bundleProducts),
-            static fn($id) => $id > 0
-        )));
-
-        if (count($bundleProducts) < 2) {
-            return [null, ['A bundle must contain at least 2 products.']];
-        }
-
-        if (count($bundleProducts) > 6) {
-            return [null, ['A bundle can contain up to 6 products.']];
-        }
-
-        $valid = settingsPromotionProductIds($pdo, $bundleProducts);
-        if (count($valid) !== count($bundleProducts)) {
-            return [null, ['One or more selected bundle products are invalid.']];
-        }
-
-        $bundleItems = [];
-        foreach ($valid as $productId) {
-            $size = settingsPromotionNormalizeSize($bundleSizes[(string)$productId] ?? ($bundleSizes[$productId] ?? null));
-
-            if (!settingsPromotionProductSupportsSize($pdo, $productId, $size)) {
-                return [null, ['Select a valid size for every selected bundle product.']];
-            }
-
-            $bundleItems[] = [
-                'product_id' => $productId,
-                'role' => 'bundle',
-                'quantity' => 1,
-                'size' => $size
-            ];
-        }
-
-        $bundlePrice = (float)($_POST['bundle_price'] ?? 0);
-        if ($bundlePrice <= 0) {
-            return [null, ['Bundle price must be greater than 0.']];
-        }
-
-        return [[
-            'rule_type' => 'bundle',
-            'buy_quantity' => 1,
-            'get_quantity' => 1,
-            'discount_value' => null,
-            'bundle_price' => $bundlePrice,
-            'items' => $bundleItems
         ], []];
     }
 
@@ -2475,7 +2409,6 @@ if (
     }
 }
 
-
 /* ---------------------------------------------------------
    EDIT ADD-ON
 --------------------------------------------------------- */
@@ -2545,7 +2478,6 @@ if (
     }
 }
 
-
 /* ---------------------------------------------------------
    TOGGLE ADD-ON AVAILABILITY
 --------------------------------------------------------- */
@@ -2574,7 +2506,6 @@ if (
     );
     exit;
 }
-
 
 /* ---------------------------------------------------------
    ARCHIVE ADD-ON
@@ -2605,7 +2536,6 @@ if (
     );
     exit;
 }
-
 
 /* ---------------------------------------------------------
    SAVE PRODUCT ADD-ONS
@@ -2697,7 +2627,6 @@ if (
         }
     }
 }
-
 
 /* =========================================================
    EDIT PRODUCT
@@ -2814,7 +2743,6 @@ if (
 
                     $imageName = $currentProduct['image'];
 
-
                     /* ---------------------------------------------
                        HANDLE NEW IMAGE
                     --------------------------------------------- */
@@ -2894,7 +2822,6 @@ if (
                         }
                     }
 
-
                     /* ---------------------------------------------
                        UPDATE PRODUCT
                     --------------------------------------------- */
@@ -2944,103 +2871,53 @@ if (
                             $counter++;
                         }
 
-
                         $primaryPrice = $regularPrice ?? $grandePrice;
-
-
-
 
                         $updateStmt = $pdo->prepare("
 
-
-
                             UPDATE products
-
-
 
                             SET
 
-
-
                                 category_id = ?,
-
-
 
                                 name = ?,
 
-
-
                                 slug = ?,
-
-
 
                                 price = ?,
 
-
-
                                 regular_price = ?,
-
-
 
                                 grande_price = ?,
 
-
-
                                 image = ?,
-
-
 
                                 updated_at = NOW()
 
-
-
                             WHERE id = ?
-
-
 
                         ");
 
-
-
-
                         $updateStmt->execute([
-
-
 
                             $category['id'],
 
-
-
                             $productName,
-
-
 
                             $slug,
 
-
-
                             $primaryPrice,
-
-
 
                             $regularPrice,
 
-
-
                             $grandePrice,
-
-
 
                             $imageName,
 
-
-
                             $productId
 
-
-
                         ]);
-
 
                         /*
                          * Remove old image only after
@@ -3067,7 +2944,6 @@ if (
                             }
                         }
 
-
                         if ($returnCategory === '') {
                             $returnCategory = 'All Products';
                         }
@@ -3089,7 +2965,6 @@ if (
     }
 }
 
-
 /* =========================================================
    ADD PRODUCT
 ========================================================= */
@@ -3106,7 +2981,6 @@ if (
     $regularPrice = $hasRegular ? (float)($_POST['regular_price'] ?? 0) : null;
     $grandePrice = $hasGrande ? (float)($_POST['grande_price'] ?? 0) : null;
     $returnCategory = trim($_POST['return_category'] ?? 'All Products');
-
 
     /* ---------------------------------------------------------
        VALIDATION
@@ -3137,7 +3011,6 @@ if (
     if ($productType !== 'Bundle' && $hasRegular && $hasGrande && $regularPrice >= $grandePrice) {
         $errors[] = "Regular price must be lower than Grande price.";
     }
-
 
     /* ---------------------------------------------------------
        IMAGE
@@ -3210,7 +3083,6 @@ if (
         }
     }
 
-
     /* ---------------------------------------------------------
        SAVE PRODUCT
     --------------------------------------------------------- */
@@ -3220,7 +3092,6 @@ if (
         try {
 
             $pdo->beginTransaction();
-
 
             /* -------------------------------------------------
                FIND CATEGORY
@@ -3239,7 +3110,6 @@ if (
 
             $category =
                 $categoryStmt->fetch(PDO::FETCH_ASSOC);
-
 
             /* -------------------------------------------------
                CREATE CATEGORY IF NOT FOUND
@@ -3292,7 +3162,6 @@ if (
                     $category['id'];
             }
 
-
             /* -------------------------------------------------
                PRODUCT SLUG
             ------------------------------------------------- */
@@ -3334,7 +3203,6 @@ if (
 
                 $counter++;
             }
-
 
             /* -------------------------------------------------
                INSERT PRODUCT
@@ -3379,7 +3247,6 @@ if (
 
             $pdo->commit();
 
-
             if ($returnCategory === '') {
                 $returnCategory = 'All Products';
             }
@@ -3415,7 +3282,6 @@ if (
         }
     }
 }
-
 
 /* =========================================================
    TOGGLE AVAILABILITY
@@ -3459,7 +3325,6 @@ if (
 
     $stmt->execute([$id]);
 
-
     $returnCategory =
         $_GET['category'] ??
         'All Products';
@@ -3471,7 +3336,6 @@ if (
 
     exit;
 }
-
 
 /* =========================================================
    TOGGLE BEST SELLER
@@ -3567,7 +3431,6 @@ if (
     exit;
 }
 
-
 /* =========================================================
    DELETE PRODUCT
    ---------------------------------------------------------
@@ -3620,7 +3483,6 @@ if (
 
     exit;
 }
-
 
 /* =========================================================
    GET PRODUCTS FOR PROMOTION BUILDER
@@ -3722,7 +3584,6 @@ if ($selectedCategory === 'All Products') {
 $products =
     $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-
 /* =========================================================
    GET ACTIVE ADD-ONS
 ========================================================= */
@@ -3742,7 +3603,6 @@ $addonStmt = $pdo->query("
 
 $addons =
     $addonStmt->fetchAll(PDO::FETCH_ASSOC);
-
 
 /* =========================================================
    GET PRODUCT ADD-ON ASSIGNMENTS
@@ -3769,7 +3629,6 @@ foreach ($productAddonStmt->fetchAll(PDO::FETCH_ASSOC) as $link) {
     $productAddonMap[$productId][] = $addonId;
 }
 
-
 require_once '../includes/header.php';
 ?>
 
@@ -3788,7 +3647,6 @@ body {
     min-width: 0;
     box-sizing: border-box;
 }
-
 
 .settings-content {
     padding: 24px;
@@ -3826,7 +3684,6 @@ body {
     border-color: #352419;
     color: #fff;
 }
-
 
 /* =========================================================
    PRODUCT TABLE
@@ -3871,7 +3728,6 @@ body {
     background: #FCFAF8;
 }
 
-
 /* =========================================================
    PRODUCT IMAGE
 ========================================================= */
@@ -3901,7 +3757,6 @@ body {
     color: #4A3525;
 }
 
-
 /* =========================================================
    AVAILABILITY
 ========================================================= */
@@ -3929,7 +3784,6 @@ body {
     padding: 5px 10px;
     border-radius: 6px;
 }
-
 
 /* =========================================================
    THREE DOT ACTION BUTTON
@@ -3965,7 +3819,6 @@ body {
 .dropdown-item:hover {
     background: #F7F2EC;
 }
-
 
 .user-account-verification-badge {
     display: inline-flex;
@@ -4052,9 +3905,10 @@ body {
 }
 
 #promotionModal .modal-dialog {
-    width: 100%;
+    width: calc(100% - 1.5rem);
     max-width: 900px;
     margin: 0.75rem auto;
+    min-height: calc(100% - 1.5rem);
 }
 
 #promotionModal .modal-content {
@@ -4090,9 +3944,18 @@ body {
 }
 
 .promotion-delete-modal .modal-dialog {
-    width: 100%;
+    /* Fixed gutters + auto side margins keep the dialog centered on
+       phones and tablets (width:100% plus a margin pushed it off-center). */
+    width: calc(100% - 2rem);
     max-width: 430px;
     margin: 1rem auto;
+    min-height: calc(100% - 2rem);
+    display: flex;
+    align-items: center;
+}
+
+.promotion-delete-modal .modal-content {
+    width: 100%;
 }
 
 .promotion-delete-modal .modal-content {
@@ -4188,8 +4051,10 @@ body {
 
 @media (max-width: 480px) {
     .promotion-delete-modal .modal-dialog {
-        max-width: none;
-        margin: .75rem;
+        width: calc(100% - 1.5rem);
+        max-width: 430px;
+        margin: .75rem auto;
+        min-height: calc(100% - 1.5rem);
     }
 
     .promotion-delete-modal .modal-body {
@@ -4230,7 +4095,6 @@ body {
     border-top: 1px solid #E8DED2;
 }
 
-
 /* =========================================================
    FORMS
 ========================================================= */
@@ -4266,7 +4130,6 @@ body {
     border-radius: 10px;
     border: 1px solid #E2DAD1;
 }
-
 
 /* =========================================================
    ADD-ON MANAGEMENT
@@ -5011,7 +4874,6 @@ body {
     transition: opacity .15s ease;
 }
 
-
 .user-account-management-heading {
     align-items: center;
 }
@@ -5445,7 +5307,6 @@ body {
 ========================================================= */
 
 @media (max-width: 768px) {
-
 
     .settings-content {
         padding: 15px;
@@ -5910,7 +5771,6 @@ body {
     }
 }
 
-
 /* =========================================================
    PRODUCT MANAGEMENT ACCESSIBILITY + TOGGLE POLISH
 ========================================================= */
@@ -6098,7 +5958,6 @@ body {
 .addon-checkbox-item {
     border-color: #8B6A55;
 }
-
 
 /* =========================================================
    HIGH-CONTRAST BORDERS FOR LIGHT UI
@@ -6317,7 +6176,6 @@ body {
     .settings-toast-wrap { top: 76px; right: 16px; width: calc(100vw - 32px); }
     .settings-toast-message { font-size: .88rem; }
 }
-
 
 /* =========================================================
    MOBILE LAYOUT (phones)
@@ -6606,7 +6464,6 @@ document.addEventListener('DOMContentLoaded', function () {
 });
 </script>
 
-
 <div class="settings-page">
 
     <?php require_once 'sidebar.php'; ?>
@@ -6618,7 +6475,6 @@ document.addEventListener('DOMContentLoaded', function () {
     ====================================================== -->
 
     <main class="admin-main settings-content">
-
 
         <?php
         /*
@@ -6701,7 +6557,6 @@ document.addEventListener('DOMContentLoaded', function () {
             </div>
         <?php endif; ?>
 
-
         <!-- =====================================================
              FORM ERRORS
         ====================================================== -->
@@ -6727,7 +6582,6 @@ document.addEventListener('DOMContentLoaded', function () {
             </div>
 
         <?php endif; ?>
-
 
         <!-- =====================================================
              SETTINGS TABS
@@ -6768,7 +6622,6 @@ document.addEventListener('DOMContentLoaded', function () {
 
         </div>
 
-
 <?php if ($selectedTab === 'products'): ?>
 
         <!-- =====================================================
@@ -6795,7 +6648,6 @@ document.addEventListener('DOMContentLoaded', function () {
 
                 </div>
 
-
                 <div class="product-toolbar">
 
                     <!-- CATEGORY FILTER -->
@@ -6819,7 +6671,6 @@ document.addEventListener('DOMContentLoaded', function () {
                                 All Products
                             </option>
 
-
                             <?php foreach ($productTypes as $type): ?>
 
                                 <option
@@ -6837,7 +6688,6 @@ document.addEventListener('DOMContentLoaded', function () {
 
                     </form>
 
-
                     <!-- MANAGE ADD-ONS -->
 
                     <button
@@ -6849,7 +6699,6 @@ document.addEventListener('DOMContentLoaded', function () {
                         <i class="bi bi-patch-plus me-1"></i>
                         Manage Add-ons
                     </button>
-
 
                     <!-- ADD PRODUCT -->
 
@@ -6869,7 +6718,6 @@ document.addEventListener('DOMContentLoaded', function () {
                 </div>
 
             </div>
-
 
             <!-- =================================================
                  PRODUCT TABLE
@@ -6918,7 +6766,6 @@ document.addEventListener('DOMContentLoaded', function () {
                             </tr>
 
                         </thead>
-
 
                         <tbody>
 
@@ -6996,7 +6843,6 @@ document.addEventListener('DOMContentLoaded', function () {
 
                                     </td>
 
-
                                     <!-- SIZE & PRICING -->
 
                                     <td data-label="Size &amp; Pricing">
@@ -7030,7 +6876,6 @@ document.addEventListener('DOMContentLoaded', function () {
                                         <?php endif; ?>
 
                                     </td>
-
 
                                     <!-- ADD-ONS -->
 
@@ -7080,7 +6925,6 @@ document.addEventListener('DOMContentLoaded', function () {
 
                                     </td>
 
-
                                     <!-- STATUS -->
 
                                     <td data-label="Status">
@@ -7101,7 +6945,6 @@ document.addEventListener('DOMContentLoaded', function () {
 
                                     </td>
 
-
                                     <!-- ACTION -->
 
                                     <td data-label="Action">
@@ -7118,7 +6961,6 @@ document.addEventListener('DOMContentLoaded', function () {
                                                 <?= $product['is_available'] ? 'Set Unavailable' : 'Set Available' ?>
                                             </a>
 
-
                                             <!-- THREE DOT MENU -->
 
                                             <div class="dropdown">
@@ -7134,7 +6976,6 @@ document.addEventListener('DOMContentLoaded', function () {
                                                     <i class="bi bi-three-dots-vertical"></i>
 
                                                 </button>
-
 
                                                 <ul class="dropdown-menu dropdown-menu-end">
 
@@ -7180,7 +7021,6 @@ document.addEventListener('DOMContentLoaded', function () {
 
                                                     </li>
 
-
                                                     <!-- BEST SELLER -->
 
                                                     <li>
@@ -7196,7 +7036,6 @@ document.addEventListener('DOMContentLoaded', function () {
                                                         </a>
 
                                                     </li>
-
 
                                                     <!-- DELETE / ARCHIVE -->
 
@@ -7607,10 +7446,9 @@ document.addEventListener('DOMContentLoaded', function () {
                                         required
                                     >
                                         <option value="staff" selected>Staff</option>
-                                        
+
                                     </select>
                                 </div>
-
 
                             </div>
 
@@ -8085,7 +7923,6 @@ const addModalForm =
 
 </div>
 
-
 <!-- =========================================================
      PROMOTION DELETE CONFIRMATION MODAL
 ========================================================= -->
@@ -8119,7 +7956,6 @@ const addModalForm =
         </div>
     </div>
 </div>
-
 
 <!-- =========================================================
      PROMOTION MODAL
@@ -8289,65 +8125,6 @@ const addModalForm =
                                         </div>
 
                                         <div class="price-note mt-2">The Get product and Get size are free. The customer only customizes and orders the Buy side.</div>
-                                    </div>
-                                </div>
-
-                                <div id="ruleBundle" class="promotion-rule-grid d-none">
-                                    <div class="col-12" style="grid-column:1 / -1;">
-                                        <label class="form-label" for="bundleProductType">Bundle Products</label>
-
-                                        <select class="form-select" id="bundleProductType">
-                                            <option value="">Select product type</option>
-                                            <?php foreach ($promotionProductCategories as $categoryName): ?>
-                                                <option value="<?= htmlspecialchars($categoryName, ENT_QUOTES) ?>">
-                                                    <?= htmlspecialchars($categoryName) ?>
-                                                </option>
-                                            <?php endforeach; ?>
-                                            <option value="__all__">All Product Types</option>
-                                        </select>
-
-                                        <div class="price-note mt-1" id="bundleProductFilterHint">
-                                            Select a product type to display its products.
-                                        </div>
-
-                                        <div class="bundle-selected-summary d-none" id="bundleSelectedSummary">
-                                            <div class="bundle-selected-summary-title">Selected Products</div>
-                                            <div class="bundle-selected-summary-list" id="bundleSelectedSummaryList"></div>
-                                        </div>
-
-                                        <div class="bundle-products-list d-none" id="bundleProductsList">
-                                            <?php foreach ($promotionProducts as $product): ?>
-                                                <div
-                                                    class="bundle-product-option"
-                                                    data-category="<?= htmlspecialchars((string)($product['category_name'] ?? ''), ENT_QUOTES) ?>"
-                                                    data-product-name="<?= htmlspecialchars((string)$product['name'], ENT_QUOTES) ?>"
-                                                >
-                                                    <label class="bundle-product-check-label">
-                                                        <input type="checkbox" name="bundle_product_ids[]" value="<?= (int)$product['id'] ?>" class="bundle-product-checkbox">
-                                                        <span><?= htmlspecialchars($product['name']) ?></span>
-                                                    </label>
-                                                    <select
-                                                        class="form-select bundle-product-size"
-                                                        name="bundle_product_sizes[<?= (int)$product['id'] ?>]"
-                                                        data-product-id="<?= (int)$product['id'] ?>"
-                                                        data-has-regular="<?= ((float)($product['regular_price'] ?? 0) > 0) ? '1' : '0' ?>"
-                                                        data-has-grande="<?= ((float)($product['grande_price'] ?? 0) > 0) ? '1' : '0' ?>"
-                                                        disabled
-                                                    >
-                                                        <option value="">Select size</option>
-                                                    </select>
-                                                </div>
-                                            <?php endforeach; ?>
-                                        </div>
-
-                                        <div class="price-note mt-1">Select at least 2 products.</div>
-                                    </div>
-                                    <div>
-                                        <label class="form-label">Bundle Price</label>
-                                        <div class="input-group">
-                                            <span class="input-group-text">₱</span>
-                                            <input type="number" class="form-control" name="bundle_price" id="bundlePrice" min="0.01" step="0.01" placeholder="119.00">
-                                        </div>
                                     </div>
                                 </div>
 
@@ -8546,7 +8323,6 @@ const addModalForm =
 
 </div>
 
-
 <!-- =========================================================
      ADD ADD-ON MODAL
 ========================================================= -->
@@ -8643,7 +8419,6 @@ const addModalForm =
     </div>
 
 </div>
-
 
 <!-- =========================================================
      EDIT ADD-ON MODAL
@@ -8743,7 +8518,6 @@ const addModalForm =
     </div>
 
 </div>
-
 
 <!-- =========================================================
      PRODUCT ADD-ONS MODAL
@@ -8855,7 +8629,6 @@ const addModalForm =
 
 </div>
 
-
 <!-- =========================================================
      EDIT PRODUCT MODAL
 ========================================================= -->
@@ -8889,7 +8662,6 @@ const addModalForm =
 
             </div>
 
-
             <form
                 id="editProductForm"
                 method="POST"
@@ -8908,11 +8680,9 @@ const addModalForm =
                     value="<?= htmlspecialchars($selectedCategory) ?>"
                 >
 
-
                 <div class="modal-body">
 
                     <div class="row g-3">
-
 
                         <!-- PRODUCT TYPE -->
 
@@ -8950,7 +8720,6 @@ const addModalForm =
 
                         </div>
 
-
                         <!-- PRODUCT NAME -->
 
                         <div class="col-md-6">
@@ -8968,7 +8737,6 @@ const addModalForm =
                             >
 
                         </div>
-
 
                         <!-- AVAILABLE SIZES + PRICING -->
 
@@ -9048,7 +8816,6 @@ const addModalForm =
 
                         </div>
 
-
                         <!-- CURRENT IMAGE -->
 
                         <div class="col-md-4">
@@ -9073,7 +8840,6 @@ const addModalForm =
                             </div>
 
                         </div>
-
 
                         <!-- NEW IMAGE -->
 
@@ -9102,7 +8868,6 @@ const addModalForm =
                     </div>
 
                 </div>
-
 
                 <div class="modal-footer">
 
@@ -9135,7 +8900,6 @@ const addModalForm =
     </div>
 
 </div>
-
 
 <!-- =========================================================
      ADD PRODUCT MODAL
@@ -9170,7 +8934,6 @@ const addModalForm =
 
             </div>
 
-
             <form
                 id="addProductForm"
                 method="POST"
@@ -9183,11 +8946,9 @@ const addModalForm =
                     value="<?= htmlspecialchars($selectedCategory) ?>"
                 >
 
-
                 <div class="modal-body">
 
                     <div class="row g-3">
-
 
                         <!-- PRODUCT TYPE -->
 
@@ -9226,7 +8987,6 @@ const addModalForm =
 
                         </div>
 
-
                         <!-- PRODUCT NAME -->
 
                         <div class="col-md-6">
@@ -9244,7 +9004,6 @@ const addModalForm =
                             >
 
                         </div>
-
 
                         <!-- AVAILABLE SIZES + PRICING -->
 
@@ -9328,7 +9087,6 @@ const addModalForm =
 
                         </div>
 
-
                         <!-- IMAGE -->
 
                         <div class="col-12">
@@ -9359,7 +9117,6 @@ const addModalForm =
                     </div>
 
                 </div>
-
 
                 <div class="modal-footer">
 
@@ -9392,7 +9149,6 @@ const addModalForm =
     </div>
 
 </div>
-
 
 <!-- =========================================================
      EDIT PRODUCT MODAL SCRIPT
@@ -9429,7 +9185,6 @@ document.addEventListener('DOMContentLoaded', function () {
                 button.getAttribute('data-addon-price') || '';
         });
     }
-
 
     /* =========================================================
        PRODUCT ADD-ON ASSIGNMENT MODAL
@@ -9527,21 +9282,17 @@ document.addEventListener('DOMContentLoaded', function () {
             const image =
                 button.getAttribute('data-image');
 
-
             document.getElementById(
                 'editProductId'
             ).value = productId;
-
 
             document.getElementById(
                 'editProductName'
             ).value = productName;
 
-
             document.getElementById(
                 'editRegularPrice'
             ).value = regularPrice;
-
 
             document.getElementById(
                 'editGrandePrice'
@@ -9563,7 +9314,6 @@ document.addEventListener('DOMContentLoaded', function () {
                 editSizePriceError.classList.remove('show');
             }
 
-
             const productType =
                 document.getElementById(
                     'editProductType'
@@ -9571,7 +9321,6 @@ document.addEventListener('DOMContentLoaded', function () {
 
             productType.value =
                 productCategory;
-
 
             /*
              * If the existing category is not one
@@ -9582,13 +9331,11 @@ document.addEventListener('DOMContentLoaded', function () {
                 productType.value = '';
             }
 
-
             document.getElementById(
                 'editCurrentImage'
             ).src =
                 '../assets/uploads/products/' +
                 image;
-
 
             /*
              * Clear previously selected file.
@@ -9603,7 +9350,6 @@ document.addEventListener('DOMContentLoaded', function () {
 });
 
 </script>
-
 
 <script>
 /* =========================================================
@@ -10214,7 +9960,6 @@ document.addEventListener('DOMContentLoaded', function () {
 });
 </script>
 
-
 <script>
 /* =========================================================
    ACTION TOAST BEHAVIOR
@@ -10349,7 +10094,6 @@ document.addEventListener('DOMContentLoaded', function () {
     const panels = {
         bogo: document.getElementById('ruleBogo'),
         buy_x_get_y: document.getElementById('ruleBuyGet'),
-        bundle: document.getElementById('ruleBundle'),
         percentage: document.getElementById('ruleDiscount'),
         fixed: document.getElementById('ruleDiscount')
     };
