@@ -58,7 +58,15 @@ class LocaliteaEmailMessage
     private function sendViaResend(string $apiKey): bool
     {
         $payload = [
-            'from' => 'Localitea <onboarding@resend.dev>',
+            /*
+             * onboarding@resend.dev is Resend's sandbox sender and can only
+             * deliver to the Resend account owner's own email. Set RESEND_FROM
+             * to an address on a domain verified in Resend, for example:
+             * Localitea <orders@yourdomain.com>
+             */
+            'from' => (trim((string) getenv('RESEND_FROM')) !== '')
+                ? trim((string) getenv('RESEND_FROM'))
+                : 'Localitea <onboarding@resend.dev>',
             'to' => [$this->recipientEmail],
             'subject' => $this->Subject,
             'html' => $this->Body,

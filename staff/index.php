@@ -1201,6 +1201,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_status'])) {
                     ]
                 ];
 
+                $emailSent = null;
+                $emailError = null;
+
                 if (isset($notificationMap[$new_status])) {
 
                     $notification = $notificationMap[$new_status];
@@ -1316,25 +1319,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_status'])) {
                                                     $customerData =
                                                         $customerStmt->fetch(PDO::FETCH_ASSOC);
 
-                                                    if (
-                                                        $customerData &&
-                                                        !empty($customerData['email'])
-                                                    ) {
-
-                                                        sendOrderPreparingEmail(
-                                                            $customerData['email'],
-                                                            $customerData['full_name'] ?? 'Customer',
-                                                            $orderIdentifier,
-                                                            $orderData['claim_number'] ?? ''
+                                                    if (!$customerData) {
+                                                        throw new RuntimeException(
+                                                            'No customer found for id '
+                                                            . $orderData['customer_id']
                                                         );
                                                     }
+
+                                                    if (empty($customerData['email'])) {
+                                                        throw new RuntimeException(
+                                                            'Customer has no email address.'
+                                                        );
+                                                    }
+
+                                                    sendOrderPreparingEmail(
+                                                        $customerData['email'],
+                                                        $customerData['full_name'] ?? 'Customer',
+                                                        $orderIdentifier,
+                                                        $orderData['claim_number'] ?? ''
+                                                    );
+
+                                                    $emailSent = true;
 
                                                 } catch (Throwable $e) {
 
                                                     /*
                                                      * Do not fail the order-status update
-                                                     * if the email server is unavailable.
+                                                     * if the email server is unavailable,
+                                                     * but report the failure to the Staff.
                                                      */
+                                                    $emailSent = false;
+                                                    $emailError = $e->getMessage();
+
                                                     error_log(
                                                         'Localitea preparing email failed: '
                                                         . $e->getMessage()
@@ -1350,7 +1366,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_status'])) {
                     'order_id' => $order_id,
                     'previous_status' => $current_status,
                     'new_status' => $new_status,
-                    'message' => $notification['message']
+                    'message' => $notification['message'],
+                    'email_sent' => $emailSent,
+                    'email_error' => $emailError
                     ];
                 }
             } else {
@@ -11324,6 +11342,13 @@ document.addEventListener(
                 );
 
 
+                const emailFailureMessage =
+                    data.email_sent === false
+                        ? 'Order updated, but the customer email was NOT sent: ' +
+                          (data.email_error || 'unknown error')
+                        : '';
+
+
                 if (screenProcessingOverlay) {
 
                     screenProcessingOverlay.remove();
@@ -11358,6 +11383,18 @@ document.addEventListener(
                         data.message ||
                         'Order status updated successfully.'
                     );
+
+                }
+
+
+                if (emailFailureMessage) {
+
+                    console.error(
+                        'Preparing email failed:',
+                        data.email_error
+                    );
+
+                    alert(emailFailureMessage);
 
                 }
 
