@@ -9885,22 +9885,6 @@ document.addEventListener('DOMContentLoaded', function () {
                     document.getElementById('discountSize')?.value
                 );
                 if (!valid) alert('Select the product and size for the discount.');
-            } else if (type === 'bundle') {
-                const selected = Array.from(document.querySelectorAll('.bundle-product-checkbox:checked'));
-                valid = selected.length >= 2;
-                if (!valid) {
-                    alert('Select at least 2 bundle products.');
-                } else {
-                    for (const checkbox of selected) {
-                        const option = checkbox.closest('.bundle-product-option');
-                        const sizeSelect = option ? option.querySelector('.bundle-product-size') : null;
-                        if (!sizeSelect || !sizeSelect.value) {
-                            valid = false;
-                            alert('Select a size for every selected bundle product.');
-                            break;
-                        }
-                    }
-                }
             }
 
             if (!valid) return;
@@ -10069,11 +10053,6 @@ document.addEventListener('DOMContentLoaded', function () {
     const hint = document.getElementById('promotionRuleHint');
     const currentImageWrap = document.getElementById('promotionCurrentImageWrap');
     const currentImage = document.getElementById('promotionCurrentImage');
-    const bundleProductType = document.getElementById('bundleProductType');
-    const bundleProductsList = document.getElementById('bundleProductsList');
-    const bundleProductFilterHint = document.getElementById('bundleProductFilterHint');
-    const bundleSelectedSummary = document.getElementById('bundleSelectedSummary');
-    const bundleSelectedSummaryList = document.getElementById('bundleSelectedSummaryList');
     const allProducts = window.PROMOTION_PRODUCTS || [];
 
     if (!modal || !form || !typeSelect) return;
@@ -10285,113 +10264,9 @@ document.addEventListener('DOMContentLoaded', function () {
             hint.textContent = 'Customer buys 1 of the selected product size and gets 1 more of the same size free.';
         } else if (selected === 'buy_x_get_y') {
             hint.textContent = 'Customer buys the required quantity of the selected Buy product and Buy size, then receives the selected Get product and Get size free.';
-        } else if (selected === 'bundle') {
-            hint.textContent = 'Customers receive all selected products and their selected sizes for the fixed bundle price.';
         } else {
             hint.textContent = 'Select a promotion type to configure the rule.';
         }
-    }
-
-    function syncBundleSizeControl(option) {
-        const checkbox = option.querySelector('.bundle-product-checkbox');
-        const sizeSelect = option.querySelector('.bundle-product-size');
-        if (!checkbox || !sizeSelect) return;
-
-        const product = findProduct(checkbox.value);
-        if (!product) return;
-
-        sizeSelect.innerHTML = '';
-        const sizes = [];
-        if (product.has_regular) {
-            sizes.push({
-                value: 'regular',
-                label: 'Regular',
-                price: Number(product.regular_price || 0)
-            });
-        }
-        if (product.has_grande) {
-            sizes.push({
-                value: 'grande',
-                label: 'Grande',
-                price: Number(product.grande_price || 0)
-            });
-        }
-
-        const placeholder = document.createElement('option');
-        placeholder.value = '';
-        placeholder.textContent = sizes.length > 1 ? 'Select size' : 'Size';
-        sizeSelect.appendChild(placeholder);
-
-        sizes.forEach(function (size) {
-            const item = document.createElement('option');
-            item.value = size.value;
-            item.textContent = size.price > 0
-                ? size.label + ' (₱' + size.price.toFixed(2) + ')'
-                : size.label;
-            sizeSelect.appendChild(item);
-        });
-
-        if (sizes.length === 1) {
-            sizeSelect.value = sizes[0].value;
-            sizeSelect.disabled = !checkbox.checked;
-        } else {
-            sizeSelect.value = sizeSelect.dataset.selectedSize || '';
-            sizeSelect.disabled = !checkbox.checked;
-        }
-
-        sizeSelect.required = checkbox.checked;
-    }
-
-    function refreshBundleSelectedSummary() {
-        if (!bundleSelectedSummary || !bundleSelectedSummaryList) return;
-
-        const selected = Array.from(document.querySelectorAll('.bundle-product-checkbox:checked'));
-        bundleSelectedSummaryList.innerHTML = '';
-
-        selected.forEach(function (checkbox) {
-            const option = checkbox.closest('.bundle-product-option');
-            const name = option ? (option.getAttribute('data-product-name') || 'Selected product') : 'Selected product';
-            const sizeSelect = option ? option.querySelector('.bundle-product-size') : null;
-            const sizeLabel = sizeSelect && sizeSelect.value
-                ? (sizeSelect.options[sizeSelect.selectedIndex]?.textContent || '')
-                : 'Size not selected';
-
-            const chip = document.createElement('span');
-            chip.className = 'bundle-selected-summary-item';
-            chip.textContent = name + ' (' + sizeLabel + ')';
-            bundleSelectedSummaryList.appendChild(chip);
-        });
-
-        bundleSelectedSummary.classList.toggle('d-none', selected.length === 0);
-    }
-
-    function filterBundleProducts() {
-        if (!bundleProductType || !bundleProductsList) return;
-
-        const selectedType = bundleProductType.value;
-        const options = document.querySelectorAll('.bundle-product-option');
-        const showAll = selectedType === '__all__';
-        let visibleCount = 0;
-
-        options.forEach(function (option) {
-            const checkbox = option.querySelector('.bundle-product-checkbox');
-            const matches = showAll || (selectedType !== '' && option.getAttribute('data-category') === selectedType);
-            option.style.display = matches ? 'flex' : 'none';
-            if (matches) visibleCount++;
-            if (checkbox) syncBundleSizeControl(option);
-        });
-
-        bundleProductsList.classList.toggle('d-none', selectedType === '');
-
-        if (selectedType === '') {
-            bundleProductFilterHint.textContent = 'Select a product type to display its products.';
-        } else if (showAll) {
-            bundleProductFilterHint.textContent = 'Showing products from all product types.';
-        } else {
-            bundleProductFilterHint.textContent = visibleCount + (visibleCount === 1 ? ' product' : ' products') + ' available in this product type.';
-        }
-
-        refreshBundleSelectedSummary();
     }
 
     function clearRuleInputs() {
@@ -10408,28 +10283,11 @@ document.addEventListener('DOMContentLoaded', function () {
         const buyQuantity = document.getElementById('buyQuantity');
         const getQuantity = document.getElementById('getQuantity');
         const discountValue = document.getElementById('discountValue');
-        const bundlePrice = document.getElementById('bundlePrice');
 
         if (buyQuantity) buyQuantity.value = '1';
         if (getQuantity) getQuantity.value = '1';
         if (discountValue) discountValue.value = '';
-        if (bundlePrice) bundlePrice.value = '';
 
-        document.querySelectorAll('.bundle-product-checkbox').forEach(function (checkbox) {
-            checkbox.checked = false;
-        });
-        document.querySelectorAll('.bundle-product-size').forEach(function (sizeSelect) {
-            sizeSelect.dataset.selectedSize = '';
-            sizeSelect.value = '';
-            sizeSelect.disabled = true;
-            sizeSelect.required = false;
-        });
-
-        if (bundleProductType) bundleProductType.value = '';
-        if (bundleProductsList) bundleProductsList.classList.add('d-none');
-        if (bundleProductFilterHint) bundleProductFilterHint.textContent = 'Select a product type to display its products.';
-        if (bundleSelectedSummary) bundleSelectedSummary.classList.add('d-none');
-        if (bundleSelectedSummaryList) bundleSelectedSummaryList.innerHTML = '';
     }
 
     function resetForm() {
@@ -10466,7 +10324,6 @@ document.addEventListener('DOMContentLoaded', function () {
         document.getElementById('buyQuantity').value = button.getAttribute('data-buy-quantity') || '1';
         document.getElementById('getQuantity').value = button.getAttribute('data-get-quantity') || '1';
         document.getElementById('discountValue').value = button.getAttribute('data-discount-value') || '';
-        document.getElementById('bundlePrice').value = button.getAttribute('data-bundle-price') || '';
 
         let items = [];
         try {
@@ -10496,17 +10353,6 @@ document.addEventListener('DOMContentLoaded', function () {
                 populatePicker(picker, product.category, item.product_id, size);
             }
 
-            if (item.role === 'bundle') {
-                const option = document.querySelector('.bundle-product-checkbox[value="' + item.product_id + '"]')?.closest('.bundle-product-option');
-                if (!option) return;
-
-                const checkbox = option.querySelector('.bundle-product-checkbox');
-                const sizeSelect = option.querySelector('.bundle-product-size');
-                if (checkbox) checkbox.checked = true;
-                if (sizeSelect) sizeSelect.dataset.selectedSize = size;
-                syncBundleSizeControl(option);
-                if (sizeSelect && size) sizeSelect.value = size;
-            }
         });
 
         /* BOGO stores the same size on both buy/get rows; use the Buy row. */
@@ -10517,21 +10363,6 @@ document.addEventListener('DOMContentLoaded', function () {
                 const picker = singleProductPickers.find(function (p) { return p.productId === 'bogoProductId'; });
                 populatePicker(picker, product.category, bogoItem.product_id, getItemSize(bogoItem));
             }
-        }
-
-        if (button.getAttribute('data-type') === 'bundle' && bundleProductType) {
-            const selectedBundleOptions = Array.from(document.querySelectorAll('.bundle-product-checkbox:checked'));
-            const selectedCategories = Array.from(new Set(selectedBundleOptions.map(function (checkbox) {
-                const option = checkbox.closest('.bundle-product-option');
-                return option ? option.getAttribute('data-category') : '';
-            }).filter(Boolean)));
-
-            if (selectedCategories.length === 1) {
-                bundleProductType.value = selectedCategories[0];
-            } else if (selectedCategories.length > 1) {
-                bundleProductType.value = '__all__';
-            }
-            filterBundleProducts();
         }
 
         const image = button.getAttribute('data-image') || '';
@@ -10546,31 +10377,6 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 
     typeSelect.addEventListener('change', setPanelVisibility);
-
-    if (bundleProductType) {
-        bundleProductType.addEventListener('change', filterBundleProducts);
-    }
-
-    document.querySelectorAll('.bundle-product-option').forEach(function (option) {
-        syncBundleSizeControl(option);
-
-        const checkbox = option.querySelector('.bundle-product-checkbox');
-        const sizeSelect = option.querySelector('.bundle-product-size');
-
-        if (checkbox) {
-            checkbox.addEventListener('change', function () {
-                syncBundleSizeControl(option);
-                refreshBundleSelectedSummary();
-            });
-        }
-
-        if (sizeSelect) {
-            sizeSelect.addEventListener('change', function () {
-                sizeSelect.dataset.selectedSize = sizeSelect.value;
-                refreshBundleSelectedSummary();
-            });
-        }
-    });
 
     form.addEventListener('submit', function (event) {
         const type = typeSelect.value;
@@ -10607,24 +10413,6 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         }
 
-        if (type === 'bundle') {
-            const selected = Array.from(document.querySelectorAll('.bundle-product-checkbox:checked'));
-            if (selected.length < 2) {
-                event.preventDefault();
-                alert('Select at least 2 bundle products.');
-                return;
-            }
-
-            for (const checkbox of selected) {
-                const option = checkbox.closest('.bundle-product-option');
-                const sizeSelect = option ? option.querySelector('.bundle-product-size') : null;
-                if (!sizeSelect || !sizeSelect.value) {
-                    event.preventDefault();
-                    alert('Select a size for every selected bundle product.');
-                    return;
-                }
-            }
-        }
     });
 
     /* Initial setup */
@@ -10637,6 +10425,5 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 
     setPanelVisibility();
-    filterBundleProducts();
 });
 </script>
