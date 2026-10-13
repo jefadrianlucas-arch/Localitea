@@ -735,30 +735,6 @@ if ($menuBundleConfig) {
         text-align: center;
     }
 
-    /* PWD / Senior ID fields */
-    .pv-discount-details {
-        margin-top: 12px;
-        padding: 14px;
-        border: 1px dashed #D8C9BD;
-        border-radius: 12px;
-        background: #FDF8F2;
-        display: grid;
-        gap: 10px;
-        grid-template-columns: 1fr 1fr;
-    }
-    .pv-discount-details[hidden] { display: none; }
-    .pv-discount-field label {
-        display: block;
-        color: #6A5546;
-        font-size: .78rem;
-        font-weight: 600;
-        margin-bottom: 4px;
-    }
-    .pv-discount-field .form-control { border-color: #D8C9BD; border-radius: 10px; font-size: .88rem; }
-    .pv-discount-field .form-control.is-invalid { border-color: #B3402F; }
-    @media (max-width: 575.98px) {
-        .pv-discount-details { grid-template-columns: 1fr; }
-    }
 
     .pv-choice-meta {
         color: #8A7A6C;
@@ -1172,16 +1148,11 @@ if ($menuBundleConfig) {
                         <?php endif; ?>
                     </div>
                     <?php if ($canShowSpecialDiscount): ?>
-                    <div class="pv-discount-details" id="pvDiscountDetails" hidden>
-                        <div class="pv-discount-field">
-                            <label for="pvDiscountIdName">Name on ID</label>
-                            <input type="text" class="form-control" name="discount_id_name" id="pvDiscountIdName" maxlength="100" placeholder="Full name as shown on the ID" autocomplete="off">
-                        </div>
-                        <div class="pv-discount-field">
-                            <label for="pvDiscountIdNumber">ID Number</label>
-                            <input type="text" class="form-control" name="discount_id_number" id="pvDiscountIdNumber" maxlength="30" placeholder="PWD / Senior Citizen ID number" autocomplete="off">
-                        </div>
-                    </div>
+                    <?php /* ID details were verified at sign-up, so no fields are shown here. */ ?>
+                    <input type="hidden" name="discount_id_name" id="pvDiscountIdName" value=""
+                           data-value="<?= htmlspecialchars((string)$approvedCustomerDiscount['discount_id_name']) ?>">
+                    <input type="hidden" name="discount_id_number" id="pvDiscountIdNumber" value=""
+                           data-value="<?= htmlspecialchars((string)$approvedCustomerDiscount['discount_id_number']) ?>">
                     <?php elseif ($discountAlreadyUsed && $approvedCustomerDiscount !== null && $promotion === null): ?>
                     <div class="pv-note">Your approved PWD/Senior Citizen discount has already been used.</div>
                     <?php elseif ($promotion !== null): ?>
@@ -1590,8 +1561,9 @@ document.addEventListener('DOMContentLoaded', function () {
         return;
     }
 
-    /* ---------- PWD / Senior ID fields ---------- */
-    const discountDetails  = document.getElementById('pvDiscountDetails');
+    /* ---------- PWD / Senior discount ----------
+       ID details come from the verified sign-up record, so no fields are
+       shown. The saved values are only sent while a discount is selected. */
     const discountIdName   = document.getElementById('pvDiscountIdName');
     const discountIdNumber = document.getElementById('pvDiscountIdNumber');
 
@@ -1599,52 +1571,16 @@ document.addEventListener('DOMContentLoaded', function () {
         const checked = addToCartForm.querySelector('input[name="discount_type"]:checked');
         const type = checked ? checked.value : 'none';
         const needsId = type === 'pwd' || type === 'senior';
-        const wasHidden = discountDetails.hidden;
 
-        discountDetails.hidden = !needsId;
-        discountIdName.required = needsId;
-        discountIdNumber.required = needsId;
-
-        if (!needsId) {
-            discountIdName.value = '';
-            discountIdNumber.value = '';
-            discountIdName.classList.remove('is-invalid');
-            discountIdNumber.classList.remove('is-invalid');
-        } else if (wasHidden) {
-            discountIdName.focus();
-        }
+        discountIdName.value   = needsId ? (discountIdName.dataset.value || '') : '';
+        discountIdNumber.value = needsId ? (discountIdNumber.dataset.value || '') : '';
     }
 
-    if (discountDetails && discountIdName && discountIdNumber) {
+    if (discountIdName && discountIdNumber) {
         addToCartForm.querySelectorAll('input[name="discount_type"]').forEach(function (radio) {
             radio.addEventListener('change', syncDiscountFields);
         });
         syncDiscountFields();
-
-        /* Registered before the add-to-cart handler below, so it can stop an incomplete submit. */
-        addToCartForm.addEventListener('submit', function (event) {
-            if (discountDetails.hidden) {
-                return;
-            }
-
-            const nameOk = discountIdName.value.trim() !== '';
-            const idOk = /^[A-Za-z0-9][A-Za-z0-9\-\/ ]{2,29}$/.test(discountIdNumber.value.trim());
-
-            discountIdName.classList.toggle('is-invalid', !nameOk);
-            discountIdNumber.classList.toggle('is-invalid', !idOk);
-
-            if (!nameOk || !idOk) {
-                event.preventDefault();
-                event.stopImmediatePropagation();
-                (nameOk ? discountIdNumber : discountIdName).focus();
-                showLocaliteaToast(
-                    !nameOk
-                        ? 'Please enter the name on your ID.'
-                        : 'Please enter a valid ID number (letters, numbers and dashes only).',
-                    'error'
-                );
-            }
-        }, true);
     }
 
     let addingToCart = false;

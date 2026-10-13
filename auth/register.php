@@ -94,6 +94,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $discount_id_name = trim(preg_replace('/\s+/', ' ', (string)($_POST['discount_id_name'] ?? '')));
     $discount_id_number = strtoupper(trim((string)($_POST['discount_id_number'] ?? '')));
 
+    /* PWD ID numbers are stored as digits only (dashes / spaces removed). */
+    if ($discount_type === 'pwd') {
+        $discount_id_number = preg_replace('/[\s\-]/', '', $discount_id_number);
+    }
+
     if ($name === '' || $email === '' || $mobile === '' || $password === '') {
 
         $error = "Please fill in all required fields.";
@@ -122,7 +127,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $error = "Please enter the name shown on your ID.";
 
-    } elseif ($wantsDiscount && !preg_match('/^[A-Z0-9][A-Z0-9\-\/ ]{2,29}$/', $discount_id_number)) {
+    } elseif ($wantsDiscount && $discount_type === 'pwd' && !preg_match('/^\d{16}$/', $discount_id_number)) {
+
+        $error = "PWD ID number must be 16 digits.";
+
+    } elseif ($wantsDiscount && $discount_type !== 'pwd' && !preg_match('/^[A-Z0-9][A-Z0-9\-\/ ]{2,29}$/', $discount_id_number)) {
 
         $error = "Please enter a valid ID number (letters, numbers and dashes only).";
 
@@ -1270,6 +1279,10 @@ body {
                                     autocomplete="off"
                                     value="<?= htmlspecialchars($discount_id_number, ENT_QUOTES, 'UTF-8') ?>"
                                 >
+
+                                <div class="register-discount-hint" id="registerDiscountNumberHint" aria-live="polite">
+                                    Choose a discount type first.
+                                </div>
                             </div>
 
                             <div class="mb-3">
@@ -1436,6 +1449,45 @@ body {
         </div>
     <?php endif; ?>
 </div>
+
+<script>
+/*
+ * Page scroll lock for the modals.
+ * Hiding the body scrollbar makes the page jump (the content gets wider by the
+ * scrollbar width), which looked like the UI "compressing". The scrollbar space
+ * is now kept reserved, so nothing moves when a modal opens or closes.
+ */
+function lockPageScroll() {
+    var gap = window.innerWidth - document.documentElement.clientWidth;
+
+    document.body.dataset.scrollLocks = String((parseInt(document.body.dataset.scrollLocks || '0', 10)) + 1);
+
+    if (gap > 0 && !document.body.dataset.prevPadding) {
+        document.body.dataset.prevPadding = document.body.style.paddingRight || '0px';
+        document.body.style.paddingRight = gap + 'px';
+    }
+
+    document.body.style.overflow = 'hidden';
+}
+
+function unlockPageScroll() {
+    var locks = Math.max(0, parseInt(document.body.dataset.scrollLocks || '0', 10) - 1);
+
+    document.body.dataset.scrollLocks = String(locks);
+
+    if (locks > 0) {
+        return;
+    }
+
+    document.body.style.overflow = '';
+
+    if (document.body.dataset.prevPadding) {
+        document.body.style.paddingRight =
+            document.body.dataset.prevPadding === '0px' ? '' : document.body.dataset.prevPadding;
+        delete document.body.dataset.prevPadding;
+    }
+}
+</script>
 
 <script>
 document.addEventListener('DOMContentLoaded', function () {
@@ -1858,7 +1910,12 @@ document.addEventListener('DOMContentLoaded', function () {
             message = message || 'Please enter the name shown on your ID.';
         }
 
-        if (!/^[A-Za-z0-9][A-Za-z0-9\-\/ ]{2,29}$/.test(dNumber.value.trim())) {
+        if (dType.value === 'pwd') {
+            if (!/^\d{16}$/.test(dNumber.value.replace(/[\s-]/g, ''))) {
+                markFieldError(dNumber);
+                message = message || 'PWD ID number must be 16 digits.';
+            }
+        } else if (!/^[A-Za-z0-9][A-Za-z0-9\-\/ ]{2,29}$/.test(dNumber.value.trim())) {
             markFieldError(dNumber);
             message = message || 'Please enter a valid ID number (letters, numbers and dashes only).';
         }
@@ -1877,6 +1934,50 @@ document.addEventListener('DOMContentLoaded', function () {
         setDiscountError(message);
 
         return message;
+    }
+
+    /* Hint under the ID number: PWD IDs must be exactly 16 digits. */
+    function updateNumberHint() {
+
+        const hint = document.getElementById('registerDiscountNumberHint');
+
+        if (!hint) {
+            return;
+        }
+
+        hint.classList.remove('is-ok');
+
+        if (dType.value === 'pwd') {
+
+            const count = dNumber.value.replace(/[\s-]/g, '').length;
+
+            hint.textContent = 'PWD ID number must be 16 digits (' + count + '/16). Dashes are allowed.';
+            hint.classList.toggle('is-ok', count === 16 && /^\d{16}$/.test(dNumber.value.replace(/[\s-]/g, '')));
+
+        } else if (dType.value === 'senior') {
+
+            hint.textContent = 'Enter the number shown on your Senior Citizen ID.';
+
+        } else {
+
+            hint.textContent = 'Choose a discount type first.';
+        }
+    }
+
+    if (dType && dNumber) {
+
+        dType.addEventListener('change', function () {
+            dType.classList.remove('field-error');
+            dNumber.classList.remove('field-error');
+            updateNumberHint();
+        });
+
+        dNumber.addEventListener('input', function () {
+            dNumber.classList.remove('field-error');
+            updateNumberHint();
+        });
+
+        updateNumberHint();
     }
 
     function updateDiscountSummary() {
@@ -1910,11 +2011,11 @@ document.addEventListener('DOMContentLoaded', function () {
 
         discountModal.classList.add('is-open');
         discountModal.setAttribute('aria-hidden', 'false');
-        document.body.style.overflow = 'hidden';
+        lockPageScroll();
 
         const firstError = discountModal.querySelector('.field-error');
 
-        (firstError || dType).focus();
+        (firstError || dType).focus({ preventScroll: true });
     }
 
     function closeDiscountModal() {
@@ -1925,7 +2026,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
         discountModal.classList.remove('is-open');
         discountModal.setAttribute('aria-hidden', 'true');
-        document.body.style.overflow = '';
+        unlockPageScroll();
     }
 
     function resetDiscount() {
@@ -1939,6 +2040,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
         setDiscountError('');
         clearDiscountFieldErrors();
+        updateNumberHint();
         updateDiscountSummary();
     }
 
@@ -2225,6 +2327,57 @@ document.addEventListener('DOMContentLoaded', function () {
 </script>
 
 
+
+<style>
+    /* Keep the page width stable whether or not a modal locks scrolling. */
+    html {
+        scrollbar-gutter: stable;
+    }
+
+    /* The PWD / Senior modal sits inside the form panel, so it was inheriting the
+       page's compact spacing. Give it its own steady spacing. */
+    .register-discount-body {
+        padding: 20px 22px 6px;
+    }
+
+    .register-discount-body .mb-3 {
+        margin-bottom: 14px !important;
+    }
+
+    .register-discount-body .register-form-label {
+        margin-bottom: 5px;
+    }
+
+    .register-discount-body .register-input {
+        min-height: 42px;
+    }
+
+    .register-discount-body .register-input[type="file"] {
+        padding: 9px 10px;
+    }
+
+    .register-discount-body .register-discount-note {
+        margin-top: 4px;
+    }
+
+    .register-discount-hint {
+        margin-top: 5px;
+        color: #756960;
+        font-size: 0.72rem;
+        font-weight: 600;
+        line-height: 1.35;
+    }
+
+    .register-discount-hint.is-ok {
+        color: #2F7D4F;
+    }
+
+    .register-discount-footer .btn-register,
+    .register-discount-footer .btn-register-secondary {
+        min-height: 42px;
+    }
+</style>
+
 <!-- =====================================================
      TERMS & PRIVACY MODALS
 ====================================================== -->
@@ -2482,7 +2635,7 @@ document.addEventListener('DOMContentLoaded', function () {
             modal.classList.remove('is-open');
             modal.setAttribute('aria-hidden', 'true');
         });
-        document.body.style.overflow = '';
+        unlockPageScroll();
     }
 
     function openPolicyModal(type) {
@@ -2493,7 +2646,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
         modal.classList.add('is-open');
         modal.setAttribute('aria-hidden', 'false');
-        document.body.style.overflow = 'hidden';
+        lockPageScroll();
 
         const closeButton = modal.querySelector('[data-close-register-policy]');
         if (closeButton) {

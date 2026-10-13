@@ -180,6 +180,30 @@ foreach ($orderHistory as $historyOrder) {
 
 
 /* =========================================================
+   GET FEEDBACK FOR ORDER HISTORY
+========================================================= */
+
+$feedbackActionUrl = 'submit-feedback.php';
+$orderFeedbackMap = [];
+
+try {
+    $feedbackStmt = $pdo->prepare("
+        SELECT order_id, message, created_at
+        FROM order_feedback
+        WHERE customer_id = ?
+    ");
+    $feedbackStmt->execute([$user_id]);
+
+    foreach ($feedbackStmt->fetchAll(PDO::FETCH_ASSOC) as $feedbackRow) {
+        $orderFeedbackMap[(int)$feedbackRow['order_id']] = $feedbackRow;
+    }
+} catch (Throwable $e) {
+    /* Keep the dashboard working even if the feedback table is missing. */
+    $orderFeedbackMap = [];
+}
+
+
+/* =========================================================
    STATUS HELPERS
 ========================================================= */
 
@@ -1065,6 +1089,612 @@ require_once '../includes/navbar.php';
 }
 </style>
 
+
+<style>
+    /* =====================================================
+       ORDER HISTORY - ENHANCED UI
+    ===================================================== */
+
+    #orderHistory .table-responsive {
+        border: 1px solid #E6DEC9;
+        border-radius: 12px;
+    }
+
+    .history-table {
+        margin-bottom: 0;
+        --bs-table-bg: transparent;
+    }
+
+    .history-table thead th {
+        background: #FBF8F4;
+        padding: 12px 16px;
+        font-size: .68rem;
+        letter-spacing: .5px;
+        border-bottom: 1px solid #E6DEC9;
+    }
+
+    .history-table tbody td {
+        padding: 14px 16px;
+    }
+
+    .history-table tbody tr:last-child td {
+        border-bottom: 0;
+    }
+
+    .history-table tbody tr {
+        transition: background .15s ease;
+    }
+
+    .history-table tbody tr:hover {
+        background: #FCFAF7;
+    }
+
+    .history-pay {
+        display: inline-block;
+        padding: 3px 10px;
+        border-radius: 999px;
+        border: 1px solid #E6DEC9;
+        background: #FBF8F4;
+        color: #6f4e37;
+        font-size: .72rem;
+        font-weight: 700;
+    }
+
+    .history-pay-gcash {
+        background: #E7F1FF;
+        border-color: #BBD3F0;
+        color: #285B9A;
+    }
+
+    .history-pay-cash {
+        background: #EAF5EC;
+        border-color: #C5DFCB;
+        color: #3F7A4D;
+    }
+
+    .history-table .status-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .history-table .status-badge::before {
+        content: "";
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: currentColor;
+    }
+
+    .history-view-btn {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        padding: 7px 13px;
+        border: 1px solid #6f4e37;
+        border-radius: 9px;
+        background: #ffffff;
+        color: #6f4e37;
+        font-size: .78rem;
+        font-weight: 700;
+        transition: all .15s ease;
+    }
+
+    .history-view-btn:hover {
+        background: #6f4e37;
+        border-color: #6f4e37;
+        color: #ffffff;
+    }
+
+    .history-feedback-dot {
+        position: absolute;
+        top: -4px;
+        right: -4px;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #C7922E;
+        border: 2px solid #ffffff;
+    }
+
+    /* =====================================================
+       ORDER HISTORY - COMPACT DETAILS MODAL
+    ===================================================== */
+
+    .history-modal-dialog {
+        max-width: 520px;
+    }
+
+    .historyOrderModal .modal-content {
+        border: 0;
+        border-radius: 16px;
+        overflow: hidden;
+        box-shadow: 0 18px 50px rgba(74,53,37,.22);
+    }
+
+    .historyOrderModal .modal-header {
+        padding: 14px 20px;
+        background: #FDF8F2;
+        border-bottom: 1px solid #E6DEC9;
+    }
+
+    .historyOrderModal .modal-title {
+        color: #4A3525;
+        font-size: 1rem;
+        font-weight: 750;
+    }
+
+    .historyOrderModal .modal-body {
+        padding: 18px 20px;
+        overflow-x: hidden;
+    }
+
+    .historyOrderModal .modal-body > .d-flex.mb-4 {
+        margin-bottom: .75rem !important;
+    }
+
+    .historyOrderModal .modal-body h5 {
+        font-size: 1rem;
+        margin-bottom: 2px !important;
+    }
+
+    .historyOrderModal .modal-footer {
+        padding: 10px 20px;
+        border-top: 1px solid #E6DEC9;
+        background: #FDF8F2;
+    }
+
+    /* Timeline stays horizontal and small, even on phones */
+    .historyOrderModal .order-timeline {
+        padding: 10px 0 4px;
+    }
+
+    .historyOrderModal .timeline-title {
+        display: none;
+    }
+
+    .historyOrderModal .timeline {
+        display: flex;
+    }
+
+    .historyOrderModal .timeline-step {
+        display: block;
+        min-height: 0;
+        text-align: center;
+    }
+
+    .historyOrderModal .timeline-step:not(:last-child)::after {
+        top: 12px;
+        left: 50%;
+        width: 100%;
+        height: 2px;
+    }
+
+    .historyOrderModal .timeline-circle {
+        width: 26px;
+        height: 26px;
+        margin: 0 auto 6px;
+        font-size: .72rem;
+    }
+
+    .historyOrderModal .timeline-name {
+        font-size: .62rem;
+    }
+
+    /* Order info as a tidy 2x2 grid */
+    .historyOrderModal hr {
+        display: none;
+    }
+
+    .historyOrderModal .row.g-3 {
+        margin: 12px 0 0;
+        padding: 12px;
+        background: #FBF8F4;
+        border: 1px solid #E6DEC9;
+        border-radius: 12px;
+        --bs-gutter-x: .5rem;
+        --bs-gutter-y: .6rem;
+    }
+
+    .historyOrderModal .row.g-3 > .col-md-3 {
+        width: 50%;
+        flex: 0 0 auto;
+    }
+
+    .historyOrderModal .info-label {
+        font-size: .64rem;
+    }
+
+    .historyOrderModal .info-value {
+        font-size: .84rem;
+    }
+
+    .historyOrderModal .alert-danger {
+        margin-top: 12px !important;
+        padding: 9px 12px;
+        font-size: .8rem;
+        border-radius: 10px;
+    }
+
+    .history-section-title {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        margin: 18px 0 8px;
+        color: #4A3525;
+        font-size: .82rem;
+        font-weight: 750;
+    }
+
+    .history-section-title i {
+        color: #6f4e37;
+    }
+
+    .historyOrderModal .order-items-table {
+        min-width: 0;
+    }
+
+    .historyOrderModal .table-responsive {
+        border: 1px solid #E6DEC9;
+        border-radius: 12px;
+        margin: 0;
+    }
+
+    .historyOrderModal .order-items-table th {
+        padding: 8px 10px;
+        background: #FBF8F4;
+        font-size: .64rem;
+    }
+
+    .historyOrderModal .order-items-table td {
+        padding: 9px 10px;
+        font-size: .78rem;
+    }
+
+    .historyOrderModal .order-items-table tbody tr:last-child td {
+        border-bottom: 0;
+    }
+
+    /* Feedback inside the modal */
+    .history-feedback-box {
+        margin-top: 4px;
+        padding: 0;
+        border: 0 !important;
+    }
+
+    .history-feedback-box .history-section-title {
+        margin-top: 16px;
+    }
+
+    .history-feedback-box textarea {
+        border-color: #D8C9BD;
+        border-radius: 10px;
+        font-size: .84rem;
+        resize: none;
+    }
+
+    .history-feedback-box textarea:focus {
+        border-color: #6f4e37;
+        box-shadow: 0 0 0 3px rgba(111,78,55,.12);
+    }
+
+    .history-feedback-box .alert-success {
+        padding: 10px 12px;
+        font-size: .82rem;
+        border-radius: 10px;
+    }
+
+    @media (max-width: 768px) {
+        .history-modal-dialog {
+            margin: 10px auto;
+            max-width: calc(100% - 20px);
+        }
+
+        .historyOrderModal .modal-body {
+            padding: 14px 16px;
+        }
+
+        .historyOrderModal .modal-footer .btn {
+            flex: 0 0 auto;
+        }
+
+        .history-table .history-view-btn {
+            width: 100%;
+        }
+    }
+</style>
+
+
+<style>
+    /* =====================================================
+       ACTIVE ORDERS - ENHANCED UI
+    ===================================================== */
+
+    .active-order-card {
+        border: 1px solid #E0D3C4;
+        border-radius: 16px;
+        overflow: hidden;
+        box-shadow: 0 6px 22px rgba(74,53,37,.07);
+        transition: box-shadow .2s ease, transform .2s ease;
+    }
+
+    .active-order-card:hover {
+        box-shadow: 0 10px 28px rgba(74,53,37,.11);
+    }
+
+    .active-order-card .current-order-header {
+        padding: 16px 22px;
+        background: linear-gradient(135deg, #FDF8F2 0%, #F6EBDD 100%);
+        border-bottom: 1px solid #E6DEC9;
+    }
+
+    .active-order-card .current-order-header h5 {
+        font-size: 1.08rem;
+        letter-spacing: -.01em;
+    }
+
+    .active-order-card .claim-history-number {
+        display: inline-block;
+        margin-top: 4px;
+        padding: 3px 10px;
+        border-radius: 999px;
+        background: #ffffff;
+        border: 1px solid #E0D3C4;
+        font-size: .72rem;
+    }
+
+    .active-order-card .current-order-header .status-badge {
+        padding: 7px 14px;
+        font-size: .76rem;
+        box-shadow: 0 1px 2px rgba(0,0,0,.05);
+    }
+
+    .active-order-card > .p-4 {
+        padding: 20px 22px !important;
+    }
+
+    /* Current status */
+    .active-order-card .current-status-box {
+        position: relative;
+        padding: 16px 18px 16px 22px;
+        margin-bottom: 14px !important;
+        border: 1px solid #E0D3C4;
+        border-radius: 14px;
+        background: linear-gradient(135deg, #FBF6EE 0%, #F5EBDD 100%);
+        overflow: hidden;
+    }
+
+    .active-order-card .current-status-box::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 5px;
+        background: #6f4e37;
+    }
+
+    .active-order-card .current-status-label {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        font-size: .68rem;
+    }
+
+    .live-dot {
+        position: relative;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #3F8A55;
+    }
+
+    .live-dot::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: 50%;
+        background: #3F8A55;
+        animation: livePulse 1.8s ease-out infinite;
+    }
+
+    @keyframes livePulse {
+        0%   { transform: scale(1);   opacity: .6; }
+        100% { transform: scale(3);   opacity: 0;  }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .live-dot::after { animation: none; }
+        .active-order-card { transition: none; }
+    }
+
+    .active-order-card .current-status {
+        font-size: 1.25rem;
+    }
+
+    .active-order-card .status-description {
+        font-size: .82rem;
+    }
+
+    /* Timeline */
+    .active-order-card hr {
+        display: none;
+    }
+
+    .active-order-card .order-timeline {
+        padding: 14px 6px 8px;
+    }
+
+    .active-order-card .timeline-title {
+        margin-bottom: 18px;
+        font-size: .74rem;
+        font-weight: 750;
+        text-transform: uppercase;
+        letter-spacing: .6px;
+        color: #8a7f75;
+    }
+
+    @media (min-width: 769px) {
+        .active-order-card .timeline-step:not(:last-child)::after {
+            height: 4px;
+            top: 14px;
+            border-radius: 4px;
+        }
+    }
+
+    .active-order-card .timeline-circle {
+        width: 32px;
+        height: 32px;
+        border-width: 2px;
+        transition: all .2s ease;
+    }
+
+    .active-order-card .timeline-step.current .timeline-circle {
+        box-shadow: 0 0 0 6px rgba(111,78,55,.14);
+        transform: scale(1.08);
+    }
+
+    .active-order-card .timeline-step.current .timeline-name {
+        font-weight: 800;
+    }
+
+    /* Info tiles */
+    .active-order-card .row.g-4 {
+        --bs-gutter-x: .75rem;
+        --bs-gutter-y: .75rem;
+        margin-top: 8px;
+        margin-bottom: 18px !important;
+    }
+
+    .active-order-card .row.g-4 > .col-md-3 {
+        width: 25%;
+    }
+
+    .active-order-card .row.g-4 > .col-md-3 > div:first-child,
+    .active-order-card .row.g-4 > .col-md-3 {
+        min-width: 0;
+    }
+
+    .active-order-card .row.g-4 > .col-md-3 {
+        position: relative;
+    }
+
+    .active-order-card .row.g-4 > .col-md-3::before {
+        content: "";
+        position: absolute;
+        inset: 0 calc(var(--bs-gutter-x) * .5);
+        background: #FBF8F4;
+        border: 1px solid #E6DEC9;
+        border-radius: 12px;
+        z-index: 0;
+    }
+
+    .active-order-card .row.g-4 > .col-md-3 > * {
+        position: relative;
+        z-index: 1;
+        padding-left: 14px;
+        padding-right: 8px;
+    }
+
+    .active-order-card .row.g-4 > .col-md-3 > .info-label {
+        padding-top: 11px;
+    }
+
+    .active-order-card .row.g-4 > .col-md-3 > .info-value {
+        padding-bottom: 11px;
+        font-size: .92rem;
+    }
+
+    /* Items */
+    .active-order-card h6.fw-bold {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        margin-bottom: 10px !important;
+        font-size: .82rem;
+        text-transform: uppercase;
+        letter-spacing: .5px;
+        color: #8a7f75 !important;
+    }
+
+    .active-order-card .table-responsive {
+        border: 1px solid #E6DEC9;
+        border-radius: 12px;
+        margin-bottom: 16px !important;
+    }
+
+    .active-order-card .order-items-table th {
+        padding: 9px 14px;
+        background: #FBF8F4;
+        font-size: .66rem;
+    }
+
+    .active-order-card .order-items-table td {
+        padding: 11px 14px;
+    }
+
+    .active-order-card .order-items-table tbody tr:last-child td {
+        border-bottom: 0;
+    }
+
+    /* Footer: total + cancel */
+    .active-order-card > .p-4 > .d-flex:last-child {
+        padding-top: 14px;
+        border-top: 1px dashed #D8C9BD;
+    }
+
+    .active-order-card > .p-4 > .d-flex:last-child > div:first-child {
+        font-size: 1.1rem;
+        font-weight: 800;
+        color: #4A3525;
+    }
+
+    .active-order-card > .p-4 > .d-flex:last-child > div:first-child strong {
+        font-size: .8rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: .4px;
+        color: #8a7f75 !important;
+        margin-right: 4px;
+    }
+
+    .active-order-card .btn-outline-danger {
+        padding: 8px 16px;
+        border-radius: 10px;
+        font-size: .82rem;
+        font-weight: 700;
+    }
+
+    /* Cancel modals */
+    .modal .modal-content {
+        border-radius: 14px;
+    }
+
+    @media (max-width: 768px) {
+        .active-order-card .current-order-header {
+            padding: 14px 16px;
+        }
+
+        .active-order-card > .p-4 {
+            padding: 16px !important;
+        }
+
+        .active-order-card .row.g-4 > .col-md-3 {
+            width: 50%;
+        }
+
+        .active-order-card .order-items-table {
+            min-width: 440px;
+        }
+
+        .active-order-card > .p-4 > .d-flex:last-child .btn {
+            width: 100%;
+        }
+    }
+</style>
+
 <div class="dashboard-page">
     <div class="container py-5">
 
@@ -1160,7 +1790,7 @@ require_once '../includes/navbar.php';
             }
             ?>
 
-            <div class="card-custom mb-4">
+            <div class="card-custom active-order-card mb-4">
 
                 <div class="current-order-header">
 
@@ -1201,6 +1831,7 @@ require_once '../includes/navbar.php';
                     <div class="current-status-box mb-4">
 
                         <div class="current-status-label">
+                            <span class="live-dot"></span>
                             Current Order Status
                         </div>
 
@@ -1818,11 +2449,13 @@ require_once '../includes/navbar.php';
             </td>
 
             <td>
-                <?= htmlspecialchars(
-                    ucfirst(
-                        $ord['payment_method']
-                    )
-                ) ?>
+                <span class="history-pay <?= strtolower((string)$ord['payment_method']) === 'gcash' ? 'history-pay-gcash' : 'history-pay-cash' ?>">
+                    <?= htmlspecialchars(
+                        ucfirst(
+                            $ord['payment_method']
+                        )
+                    ) ?>
+                </span>
             </td>
 
             <td>
@@ -1844,11 +2477,23 @@ require_once '../includes/navbar.php';
 
                 <button
                     type="button"
-                    class="btn btn-sm btn-outline-dark"
+                    class="btn btn-sm history-view-btn"
                     data-bs-toggle="modal"
                     data-bs-target="#historyOrderModal<?= (int)$ord['id'] ?>"
                 >
+                    <i class="bi bi-eye"></i>
                     View Details
+
+                    <?php if (
+                        ($ord['status'] ?? '') === 'completed'
+                        && !isset($orderFeedbackMap[(int)$ord['id']])
+                    ): ?>
+                        <span
+                            class="history-feedback-dot"
+                            data-feedback-btn="<?= (int)$ord['id'] ?>"
+                            title="Feedback pending"
+                        ></span>
+                    <?php endif; ?>
                 </button>
 
             </td>
@@ -2054,7 +2699,7 @@ require_once '../includes/navbar.php';
                 aria-hidden="true"
             >
 
-                <div class="modal-dialog modal-dialog-centered modal-lg">
+                <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable history-modal-dialog">
 
                     <div class="modal-content">
 
@@ -2407,9 +3052,6 @@ require_once '../includes/navbar.php';
                             </div>
 
 
-                        </div>
-
-
                         <!-- =================================================
                              ORDER DETAILS
                         ================================================== -->
@@ -2419,14 +3061,9 @@ require_once '../includes/navbar.php';
                             $historyOrderItems[$ord['id']] ?? [];
                         ?>
 
-                        <hr>
-
-                        <h6
-                            class="fw-bold mb-3"
-                            style="color:#4A3525;"
-                        >
-                            Order Details
-                        </h6>
+                        <div class="history-section-title">
+                            <i class="bi bi-bag"></i> Items Ordered
+                        </div>
 
                         <?php if ($historyItems): ?>
 
@@ -2581,6 +3218,51 @@ require_once '../includes/navbar.php';
 
                         <?php endif; ?>
 
+                        <?php if (($ord['status'] ?? '') === 'completed'): ?>
+                            <?php $ordFeedback = $orderFeedbackMap[(int)$ord['id']] ?? null; ?>
+
+    <div class="order-feedback-box history-feedback-box" data-feedback-box>
+        <div class="history-section-title">
+            <i class="bi bi-chat-left-heart"></i> Your Feedback
+        </div>
+
+        <div data-feedback-sent class="<?= $ordFeedback ? '' : 'd-none' ?>">
+            <div class="alert alert-success border-0 mb-0">
+                <div class="small fw-semibold mb-1">Thank you for your feedback!</div>
+                <div data-feedback-text style="white-space:pre-line;"><?= $ordFeedback ? htmlspecialchars((string)$ordFeedback['message']) : '' ?></div>
+                <div class="small text-muted mt-1" data-feedback-date><?= $ordFeedback ? htmlspecialchars(date('M j, Y g:i A', strtotime((string)$ordFeedback['created_at']))) : '' ?></div>
+            </div>
+        </div>
+
+        <form
+            class="order-feedback-form <?= $ordFeedback ? 'd-none' : '' ?>"
+            method="POST"
+            action="<?= htmlspecialchars($feedbackActionUrl) ?>"
+            novalidate
+        >
+            <input type="hidden" name="order_id" value="<?= (int)$ord['id'] ?>">
+            <label class="form-label small text-muted mb-1">
+                How was your order? Tell us what you liked or what we can improve.
+            </label>
+            <textarea
+                name="message"
+                class="form-control"
+                rows="3"
+                maxlength="500"
+                placeholder="Write your feedback here..."
+                required
+            ></textarea>
+            <div class="d-flex justify-content-between align-items-center mt-2">
+                <small class="text-muted"><span data-feedback-count>0</span>/500</small>
+                <button type="submit" class="btn btn-sm text-white" style="background:#4A3525;">Send Feedback</button>
+            </div>
+            <div class="small text-danger mt-2 d-none" data-feedback-error></div>
+        </form>
+    </div>
+                        <?php endif; ?>
+
+                        </div><!-- /.modal-body -->
+
 
                         <!-- MODAL FOOTER -->
 
@@ -2588,12 +3270,10 @@ require_once '../includes/navbar.php';
 
                             <button
                                 type="button"
-                                class="btn btn-danger"
+                                class="btn btn-brown"
                                 data-bs-dismiss="modal"
                             >
-
                                 Close
-
                             </button>
 
                         </div>
@@ -2875,6 +3555,86 @@ if ($isHistoryAjax) {
         const url = new URL(window.location.href);
         if (url.searchParams.get('view') !== 'history') return;
         loadHistory(url.toString(), false);
+    });
+})();
+</script>
+
+<script>
+/* Order feedback: works for dynamically loaded modals too (event delegation). */
+(function () {
+    document.addEventListener('input', function (event) {
+        var textarea = event.target.closest ? event.target.closest('.order-feedback-form textarea') : null;
+        if (!textarea) return;
+
+        var counter = textarea.form.querySelector('[data-feedback-count]');
+        if (counter) counter.textContent = textarea.value.length;
+    });
+
+    document.addEventListener('submit', function (event) {
+        var form = event.target.closest ? event.target.closest('.order-feedback-form') : null;
+        if (!form) return;
+
+        event.preventDefault();
+        if (form.dataset.sending === '1') return;
+
+        var box = form.closest('[data-feedback-box]');
+        var sent = box.querySelector('[data-feedback-sent]');
+        var errorBox = form.querySelector('[data-feedback-error]');
+        var button = form.querySelector('button[type="submit"]');
+        var textarea = form.querySelector('textarea[name="message"]');
+        var oldLabel = button.textContent;
+
+        function showError(message) {
+            errorBox.textContent = message;
+            errorBox.classList.remove('d-none');
+        }
+
+        errorBox.classList.add('d-none');
+
+        if (!textarea.value.trim()) {
+            showError('Please write your feedback first.');
+            return;
+        }
+
+        form.dataset.sending = '1';
+        button.disabled = true;
+        button.textContent = 'Sending...';
+
+        fetch(form.getAttribute('action'), {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Accept': 'application/json' },
+            body: new FormData(form)
+        })
+        .then(function (response) {
+            return response.json().catch(function () {
+                return { success: false, message: 'Unexpected response from the server.' };
+            });
+        })
+        .then(function (data) {
+            if (data.success && data.feedback) {
+                sent.querySelector('[data-feedback-text]').textContent = data.feedback.message;
+                sent.querySelector('[data-feedback-date]').textContent = data.feedback.created_at;
+                sent.classList.remove('d-none');
+                form.classList.add('d-none');
+
+                /* Hide any "Give Feedback" shortcut buttons for this order. */
+                var orderId = form.querySelector('input[name="order_id"]').value;
+                document.querySelectorAll('[data-feedback-btn="' + orderId + '"]').forEach(function (btn) {
+                    btn.remove();
+                });
+            } else {
+                showError(data.message || 'Could not send your feedback. Please try again.');
+            }
+        })
+        .catch(function () {
+            showError('Network error. Please try again.');
+        })
+        .then(function () {
+            form.dataset.sending = '0';
+            button.disabled = false;
+            button.textContent = oldLabel;
+        });
     });
 })();
 </script>

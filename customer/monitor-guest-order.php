@@ -157,6 +157,23 @@ if ($claimNumber !== '') {
 
         $itemStmt->execute([(int)$order['id']]);
         $items = $itemStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        /* Existing feedback for this order (if the guest already sent one). */
+        $existingFeedback = null;
+
+        try {
+            $feedbackStmt = $pdo->prepare("
+                SELECT message, created_at
+                FROM order_feedback
+                WHERE order_id = ?
+                LIMIT 1
+            ");
+            $feedbackStmt->execute([(int)$order['id']]);
+            $existingFeedback = $feedbackStmt->fetch(PDO::FETCH_ASSOC) ?: null;
+        } catch (Throwable $e) {
+            /* Keep the status page working even if the feedback table is missing. */
+            $existingFeedback = null;
+        }
     } else {
         $error = 'We could not find a guest order with that Claim Number.';
     }
@@ -523,6 +540,46 @@ require_once '../includes/navbar.php';
                 <div class="last-checked" id="lastChecked">
                     Status shown as of <?= htmlspecialchars(date('h:i A')) ?>
                 </div>
+
+                <?php $feedbackActionUrl = 'submit-feedback.php'; ?>
+
+    <div class="order-feedback-box mt-4 pt-3 border-top <?= $currentStatus === 'completed' ? '' : 'd-none' ?>" data-feedback-box id="guestFeedbackSection">
+        <h6 class="fw-bold mb-2" style="color:#4A3525;">Your Feedback</h6>
+
+        <div data-feedback-sent class="<?= $existingFeedback ? '' : 'd-none' ?>">
+            <div class="alert alert-success border-0 mb-0">
+                <div class="small fw-semibold mb-1">Thank you for your feedback!</div>
+                <div data-feedback-text style="white-space:pre-line;"><?= $existingFeedback ? htmlspecialchars((string)$existingFeedback['message']) : '' ?></div>
+                <div class="small text-muted mt-1" data-feedback-date><?= $existingFeedback ? htmlspecialchars(date('M j, Y g:i A', strtotime((string)$existingFeedback['created_at']))) : '' ?></div>
+            </div>
+        </div>
+
+        <form
+            class="order-feedback-form <?= $existingFeedback ? 'd-none' : '' ?>"
+            method="POST"
+            action="<?= htmlspecialchars($feedbackActionUrl) ?>"
+            novalidate
+        >
+            <input type="hidden" name="order_id" value="<?= (int)$order['id'] ?>">
+            <input type="hidden" name="claim_number" value="<?= htmlspecialchars($order['claim_number']) ?>">
+            <label class="form-label small text-muted mb-1">
+                How was your order? Tell us what you liked or what we can improve.
+            </label>
+            <textarea
+                name="message"
+                class="form-control"
+                rows="3"
+                maxlength="500"
+                placeholder="Write your feedback here..."
+                required
+            ></textarea>
+            <div class="d-flex justify-content-between align-items-center mt-2">
+                <small class="text-muted"><span data-feedback-count>0</span>/500</small>
+                <button type="submit" class="btn btn-sm text-white" style="background:#4A3525;">Send Feedback</button>
+            </div>
+            <div class="small text-danger mt-2 d-none" data-feedback-error></div>
+        </form>
+    </div>
             </div>
 
             <?php if (in_array($currentStatus, $workflowStatuses, true)): ?>
@@ -640,6 +697,11 @@ require_once '../includes/navbar.php';
                             updateStatusMessageStyle(currentStatus);
                             renderTimeline(currentStatus);
 
+                            if (currentStatus === 'completed') {
+                                var feedbackSection = document.getElementById('guestFeedbackSection');
+                                if (feedbackSection) feedbackSection.classList.remove('d-none');
+                            }
+
                             lastChecked.textContent =
                                 'Status updated at ' +
                                 new Date().toLocaleTimeString([], {
@@ -662,5 +724,85 @@ require_once '../includes/navbar.php';
         <?php endif; ?>
     </section>
 </main>
+
+<script>
+/* Order feedback: works for dynamically loaded modals too (event delegation). */
+(function () {
+    document.addEventListener('input', function (event) {
+        var textarea = event.target.closest ? event.target.closest('.order-feedback-form textarea') : null;
+        if (!textarea) return;
+
+        var counter = textarea.form.querySelector('[data-feedback-count]');
+        if (counter) counter.textContent = textarea.value.length;
+    });
+
+    document.addEventListener('submit', function (event) {
+        var form = event.target.closest ? event.target.closest('.order-feedback-form') : null;
+        if (!form) return;
+
+        event.preventDefault();
+        if (form.dataset.sending === '1') return;
+
+        var box = form.closest('[data-feedback-box]');
+        var sent = box.querySelector('[data-feedback-sent]');
+        var errorBox = form.querySelector('[data-feedback-error]');
+        var button = form.querySelector('button[type="submit"]');
+        var textarea = form.querySelector('textarea[name="message"]');
+        var oldLabel = button.textContent;
+
+        function showError(message) {
+            errorBox.textContent = message;
+            errorBox.classList.remove('d-none');
+        }
+
+        errorBox.classList.add('d-none');
+
+        if (!textarea.value.trim()) {
+            showError('Please write your feedback first.');
+            return;
+        }
+
+        form.dataset.sending = '1';
+        button.disabled = true;
+        button.textContent = 'Sending...';
+
+        fetch(form.getAttribute('action'), {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Accept': 'application/json' },
+            body: new FormData(form)
+        })
+        .then(function (response) {
+            return response.json().catch(function () {
+                return { success: false, message: 'Unexpected response from the server.' };
+            });
+        })
+        .then(function (data) {
+            if (data.success && data.feedback) {
+                sent.querySelector('[data-feedback-text]').textContent = data.feedback.message;
+                sent.querySelector('[data-feedback-date]').textContent = data.feedback.created_at;
+                sent.classList.remove('d-none');
+                form.classList.add('d-none');
+
+                /* Hide any "Give Feedback" shortcut buttons for this order. */
+                var orderId = form.querySelector('input[name="order_id"]').value;
+                document.querySelectorAll('[data-feedback-btn="' + orderId + '"]').forEach(function (btn) {
+                    btn.remove();
+                });
+            } else {
+                showError(data.message || 'Could not send your feedback. Please try again.');
+            }
+        })
+        .catch(function () {
+            showError('Network error. Please try again.');
+        })
+        .then(function () {
+            form.dataset.sending = '0';
+            button.disabled = false;
+            button.textContent = oldLabel;
+        });
+    });
+})();
+</script>
 
 <?php require_once '../includes/footer.php'; ?>

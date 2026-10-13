@@ -1716,6 +1716,184 @@ $navbarAdminInitial =
 
     ];
 
+    /* =====================================================
+       AUTO-INCLUDE SIDEBAR LINKS IN THE SEARCH
+
+       Every link found in the sidebar (for example Walk-in or
+       ID Verification) becomes searchable automatically, so new
+       sidebar items no longer need to be added to systemPages.
+    ===================================================== */
+    let searchablePagesCache = null;
+
+    function pageKey(url) {
+        try {
+            const parsed = new URL(url, window.location.href);
+            const segments = parsed.pathname.split('/').filter(Boolean);
+
+            return (
+                (segments[segments.length - 1] || '').toLowerCase() +
+                parsed.search.toLowerCase()
+            );
+        } catch (error) {
+            return String(url || '').toLowerCase();
+        }
+    }
+
+    /*
+       "Walk-in Orders" -> "walk in orders", "walkinorders",
+       "walk", "orders" so "walkin", "walk in" and "walk-in"
+       all find the same page.
+    */
+    function keywordVariants(text) {
+        const clean = String(text || '')
+            .toLowerCase()
+            .replace(/\.php$/, '')
+            .replace(/[^a-z0-9]+/g, ' ')
+            .trim();
+
+        if (!clean) {
+            return [];
+        }
+
+        const variants = [clean, clean.replace(/\s+/g, '')];
+
+        clean.split(' ').forEach(function (word) {
+            if (word.length > 2) {
+                variants.push(word);
+            }
+        });
+
+        return variants;
+    }
+
+    function collectSidebarPages() {
+        const navbarElement = searchWrapper
+            ? searchWrapper.closest('.localitea-admin-navbar')
+            : document.querySelector('.localitea-admin-navbar');
+
+        const containers = Array.from(
+            document.querySelectorAll(
+                'aside, [class*="sidebar"], [id*="sidebar"]'
+            )
+        ).filter(function (element) {
+            return (
+                element !== document.body &&
+                element !== document.documentElement &&
+                !(
+                    navbarElement &&
+                    (
+                        element.contains(navbarElement) ||
+                        navbarElement.contains(element)
+                    )
+                )
+            );
+        });
+
+        const found = [];
+        const seen = new Set();
+
+        containers.forEach(function (container) {
+            container.querySelectorAll('a[href]').forEach(function (anchor) {
+                if (seen.has(anchor)) {
+                    return;
+                }
+
+                seen.add(anchor);
+
+                const href = (anchor.getAttribute('href') || '').trim();
+
+                if (
+                    !href ||
+                    href.charAt(0) === '#' ||
+                    /^(javascript:|mailto:|tel:)/i.test(href) ||
+                    /logout/i.test(href) ||
+                    /logout/i.test(anchor.className) ||
+                    anchor.hasAttribute('data-bs-toggle') ||
+                    anchor.closest('main, .admin-main, .admin-content')
+                ) {
+                    return;
+                }
+
+                /* Read the label without icons or count badges. */
+                const clone = anchor.cloneNode(true);
+
+                clone
+                    .querySelectorAll(
+                        '[class*="badge"], .count, .notification-count, i, svg'
+                    )
+                    .forEach(function (element) {
+                        element.remove();
+                    });
+
+                const title = (clone.textContent || '')
+                    .replace(/\s+/g, ' ')
+                    .trim();
+
+                if (!title) {
+                    return;
+                }
+
+                const iconElement = anchor.querySelector('[class*="bi-"]');
+                const iconMatch = iconElement
+                    ? (iconElement.getAttribute('class') || '').match(/bi-[\w-]+/)
+                    : null;
+
+                found.push({
+                    title: title,
+                    url: href,
+                    icon: iconMatch
+                        ? iconMatch[0]
+                        : 'bi-arrow-right-circle-fill'
+                });
+            });
+        });
+
+        return found;
+    }
+
+    function getSearchablePages() {
+        if (searchablePagesCache) {
+            return searchablePagesCache;
+        }
+
+        const pages = systemPages.slice();
+        const byKey = {};
+
+        pages.forEach(function (page) {
+            byKey[pageKey(page.url)] = page;
+        });
+
+        collectSidebarPages().forEach(function (item) {
+            const key = pageKey(item.url);
+
+            const extraKeywords = keywordVariants(item.title).concat(
+                keywordVariants(key.split('?')[0])
+            );
+
+            /* Already in the list: just add the sidebar's wording. */
+            if (byKey[key]) {
+                byKey[key].keywords =
+                    byKey[key].keywords.concat(extraKeywords);
+                return;
+            }
+
+            const page = {
+                title: item.title,
+                description: 'Open ' + item.title,
+                keywords: extraKeywords,
+                url: item.url,
+                icon: item.icon
+            };
+
+            byKey[key] = page;
+            pages.push(page);
+        });
+
+        searchablePagesCache = pages;
+
+        return pages;
+    }
+
     let activeResultIndex = -1;
 
     function normalize(value) {
@@ -1751,7 +1929,7 @@ $navbarAdminInitial =
                 .split(/\s+/)
                 .filter(Boolean);
 
-        return systemPages
+        return getSearchablePages()
             .map(function (page) {
 
                 const searchableText =

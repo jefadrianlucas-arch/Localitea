@@ -1071,7 +1071,7 @@ require_once '../includes/header.php';
                             <div class="dv-actions">
 
                                 <div class="dv-btn-row">
-                                    <form method="POST" data-dv-confirm="Approve this ID for <?= dvE($row['full_name']) ?>?">
+                                    <form method="POST">
                                         <input type="hidden" name="csrf" value="<?= dvE($csrf) ?>">
                                         <input type="hidden" name="customer_id" value="<?= $rowId ?>">
                                         <input type="hidden" name="decision" value="approve">
@@ -1222,7 +1222,6 @@ require_once '../includes/header.php';
                                                 <form
                                                     method="POST"
                                                     class="dv-row-form"
-                                                    data-dv-confirm="Archive this record? <?= dvE($row['full_name']) ?> keeps the discount."
                                                 >
                                                     <input type="hidden" name="csrf" value="<?= dvE($csrf) ?>">
                                                     <input type="hidden" name="customer_id" value="<?= (int)$row['id'] ?>">
@@ -1278,15 +1277,6 @@ document.addEventListener('DOMContentLoaded', function () {
     document.querySelectorAll('.dv-photo img').forEach(function (img) {
         img.addEventListener('error', function () {
             img.closest('.dv-photo').classList.add('is-broken');
-        });
-    });
-
-    /* ---------- Approve confirmation ---------- */
-    document.querySelectorAll('form[data-dv-confirm]').forEach(function (form) {
-        form.addEventListener('submit', function (event) {
-            if (!window.confirm(form.getAttribute('data-dv-confirm'))) {
-                event.preventDefault();
-            }
         });
     });
 
