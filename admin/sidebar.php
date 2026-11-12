@@ -122,6 +122,25 @@ $adminShowBrandText = $adminShowBrandText ?? ($adminLogoUrl === null);
     border-bottom: 1px solid #6F4E37;
 }
 
+.sidebar-brand .sidebar-brand-link {
+    display: block;
+    color: inherit;
+    text-decoration: none;
+    border-radius: 12px;
+    cursor: pointer;
+}
+
+.sidebar-brand .sidebar-brand-link:hover,
+.sidebar-brand .sidebar-brand-link:focus {
+    color: inherit;
+    text-decoration: none;
+}
+
+.sidebar-brand .sidebar-brand-link:focus-visible {
+    outline: 2px solid #6F4E37;
+    outline-offset: 4px;
+}
+
 .sidebar-brand .logo-circle {
     width: 56px;
     height: 56px;
@@ -504,6 +523,12 @@ $adminShowBrandText = $adminShowBrandText ?? ($adminLogoUrl === null);
 <div class="d-flex flex-column sidebar-admin" id="adminSidebar" aria-label="Admin navigation">
 
     <div class="sidebar-brand">
+        <a
+            href="./dashboard.php"
+            class="sidebar-brand-link"
+            aria-label="Go to Dashboard"
+            title="Go to Dashboard"
+        >
         <?php if ($adminLogoUrl !== null): ?>
             <img
                 src="<?= htmlspecialchars($adminLogoUrl, ENT_QUOTES, 'UTF-8') ?>"
@@ -519,6 +544,7 @@ $adminShowBrandText = $adminShowBrandText ?? ($adminLogoUrl === null);
         <?php if ($adminShowBrandText): ?>
             <span>LOCAL</span>
         <?php endif; ?>
+        </a>
     </div>
 
     <ul class="nav flex-column sidebar-nav flex-grow-1">

@@ -1,29 +1,356 @@
 <?php
 session_start();
+date_default_timezone_set('Asia/Manila');
 
 require_once '../includes/db.php';
 require_once '../includes/mailer.php';
 
-
-$current_role = (string)($_SESSION['user_role'] ?? '');
-
-if (
-    !isset($_SESSION['user_id']) ||
-    !in_array($current_role, ['admin', 'staff'], true)
-) {
+/* =========================================================
+   STAFF ACCESS ONLY
+   This page is reserved for authenticated Staff accounts.
+   Admin order and refund management remains in ../admin/orders.php.
+========================================================= */
+if (!isset($_SESSION['user_id'])) {
     header('Location: ../auth/login.php');
     exit;
 }
 
-$current_user_id = (int)($_SESSION['user_id'] ?? 0);
-$admin_id = $current_user_id;
-$admin_role = $current_role;
-$orders_page = $current_role === 'staff' ? 'index.php' : 'orders.php';
+if (($_SESSION['user_role'] ?? '') !== 'staff') {
+    if (($_SESSION['user_role'] ?? '') === 'admin') {
+        header('Location: ../admin/orders.php');
+    } else {
+        header('Location: ../auth/login.php');
+    }
+    exit;
+}
+
+/* Sign out Staff accounts that were archived while logged in. */
+$activeStaffStmt = $pdo->prepare("
+    SELECT id
+    FROM users
+    WHERE id = ?
+      AND role = 'staff'
+      AND is_archived = 0
+    LIMIT 1
+");
+$activeStaffStmt->execute([(int)$_SESSION['user_id']]);
+
+if (!$activeStaffStmt->fetch()) {
+    $_SESSION = [];
+    session_destroy();
+    header('Location: ../auth/login.php');
+    exit;
+}
+
+$staff_id = (int)$_SESSION['user_id'];
+$staff_role = 'staff';
+
+/* =========================================================
+   WALK-IN CONFIRMATION (set by walk-in-order.php, shown once)
+========================================================= */
+$walkinPlaced = null;
+
+if (
+    $_SERVER['REQUEST_METHOD'] === 'GET'
+    && strtolower($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') !== 'xmlhttprequest'
+    && !empty($_SESSION['walkin_success'])
+    && is_array($_SESSION['walkin_success'])
+) {
+    $walkinPlaced = $_SESSION['walkin_success'];
+    unset($_SESSION['walkin_success']);
+}
+
+/* =========================================================
+   CSRF PROTECTION
+   Every POST must carry the session token, either in the
+   csrf_token form field or in the X-CSRF-Token header.
+========================================================= */
+if (empty($_SESSION['staff_csrf_token'])) {
+    $_SESSION['staff_csrf_token'] = bin2hex(random_bytes(32));
+}
+
+$staff_csrf_token = $_SESSION['staff_csrf_token'];
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $postedCsrfToken = (string)($_POST['csrf_token'] ?? '');
+
+    if ($postedCsrfToken === '') {
+        $postedCsrfToken = (string)($_SERVER['HTTP_X_CSRF_TOKEN'] ?? '');
+    }
+
+    if (!hash_equals($staff_csrf_token, $postedCsrfToken)) {
+        $isAjaxCsrfRequest =
+            ($_POST['ajax'] ?? '') === '1'
+            || strtolower($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'xmlhttprequest';
+
+        if ($isAjaxCsrfRequest) {
+            /* HTTP 200 so the page shows this message in its usual error toast. */
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode([
+                'success' => false,
+                'message' => 'Your session has expired. Please refresh the page and try again.'
+            ]);
+            exit;
+        }
+
+        http_response_code(403);
+        echo '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">'
+            . '<meta name="viewport" content="width=device-width, initial-scale=1">'
+            . '<title>Session expired</title></head>'
+            . '<body style="font-family:sans-serif;padding:24px;">'
+            . '<p>Your session has expired. Nothing was changed.</p>'
+            . '<p><a href="index.php">Go back to Orders</a></p>'
+            . '</body></html>';
+        exit;
+    }
+}
+
+/*
+ * No-show timing policy:
+ * - The order must be in Ready status (checked separately).
+ * - The requested pickup date/time must have passed.
+ * - The order must also have been Ready for at least 30 minutes.
+ * The grace period starts from whichever is later: scheduled pickup time
+ * or ready_at. Both are interpreted as Manila-local datetimes.
+ */
+const STAFF_NO_SHOW_GRACE_MINUTES = 30;
+
+function staffGetNoShowTiming(array $order): array
+{
+    $pickupDate = trim((string)($order['pickup_date'] ?? ''));
+    $pickupTime = trim((string)($order['pickup_time'] ?? ''));
+    $readyAt = trim((string)($order['ready_at'] ?? ''));
+
+    if ($pickupDate === '' || $pickupTime === '') {
+        return ['eligible' => false, 'eligible_at' => 0];
+    }
+
+    try {
+        $manilaTimezone = new DateTimeZone('Asia/Manila');
+
+        if (preg_match('/^\d{2}:\d{2}$/', $pickupTime)) {
+            $pickupTime .= ':00';
+        }
+
+        $pickupAtText = $pickupDate . ' ' . $pickupTime;
+        $pickupAt = DateTimeImmutable::createFromFormat(
+            '!Y-m-d H:i:s',
+            $pickupAtText,
+            $manilaTimezone
+        );
+
+        if (!$pickupAt || $pickupAt->format('Y-m-d H:i:s') !== $pickupAtText) {
+            return ['eligible' => false, 'eligible_at' => 0];
+        }
+
+        if ($readyAt !== '') {
+            /* ready_at is explicitly stored in Manila local time. */
+            $readyAtText = substr($readyAt, 0, 19);
+            $readyAtDateTime = DateTimeImmutable::createFromFormat(
+                '!Y-m-d H:i:s',
+                $readyAtText,
+                $manilaTimezone
+            );
+
+            if (!$readyAtDateTime || $readyAtDateTime->format('Y-m-d H:i:s') !== $readyAtText) {
+                return ['eligible' => false, 'eligible_at' => 0];
+            }
+
+            $readyAtUnix = $readyAtDateTime->getTimestamp();
+        } else {
+            /* updated_at is TIMESTAMP in the current schema, so its Unix value
+               is timezone-safe and supports Staff transitions until staff/index.php
+               also starts saving ready_at explicitly. */
+            $readyAtUnix = (int)($order['updated_at_unix'] ?? 0);
+        }
+
+        if ($readyAtUnix <= 0) {
+            return ['eligible' => false, 'eligible_at' => 0];
+        }
+
+        $eligibleAt = max(
+            $pickupAt->getTimestamp(),
+            $readyAtUnix
+        ) + (STAFF_NO_SHOW_GRACE_MINUTES * 60);
+
+        $now = new DateTimeImmutable('now', $manilaTimezone);
+
+        return [
+            'eligible' => $now->getTimestamp() >= $eligibleAt,
+            'eligible_at' => $eligibleAt,
+        ];
+    } catch (Throwable $e) {
+        error_log('Staff no-show timing calculation failed: ' . $e->getMessage());
+        return ['eligible' => false, 'eligible_at' => 0];
+    }
+}
 
 $isAjaxRequest =
     $_SERVER['REQUEST_METHOD'] === 'POST'
     && ($_POST['ajax'] ?? '') === '1';
 
+/* =========================================================
+   PAYMENT VERIFICATION BEFORE ORDER TRANSITIONS
+========================================================= */
+function staffVerifyPaymentForStatusTransition(
+    PDO $pdo,
+    array $orderData,
+    string $currentStatus,
+    string $newStatus,
+    int $staffId
+): void {
+
+    $verifyGcash = (
+        $currentStatus === 'pending_verification'
+        && $newStatus === 'order_queue'
+    );
+
+    $verifyAtCompletion = (
+        $currentStatus === 'ready'
+        && $newStatus === 'completed'
+    );
+
+    if (!$verifyGcash && !$verifyAtCompletion) {
+        return;
+    }
+
+    $orderMethod = strtolower(trim(
+        (string)($orderData['payment_method'] ?? '')
+    ));
+
+    if (!in_array($orderMethod, ['cash', 'gcash'], true)) {
+        throw new RuntimeException('The order has an invalid payment method.');
+    }
+
+    if ($verifyGcash) {
+
+        if ($orderMethod !== 'gcash') {
+            throw new RuntimeException(
+                'Only GCash orders can be reviewed from Pending Verification.'
+            );
+        }
+
+        /* The review UI is not treated as proof. The checks below validate the payment record and uploaded proof. */
+    }
+
+    $paymentStmt = $pdo->prepare("
+        SELECT
+            id,
+            payment_method,
+            amount,
+            proof_image,
+            is_verified
+        FROM payments
+        WHERE order_id = ?
+        LIMIT 1
+        FOR UPDATE
+    ");
+
+    $paymentStmt->execute([(int)$orderData['id']]);
+    $paymentData = $paymentStmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$paymentData) {
+        throw new RuntimeException(
+            'Payment record not found. This order cannot be processed until its payment record is corrected.'
+        );
+    }
+
+    $recordMethod = strtolower(trim(
+        (string)$paymentData['payment_method']
+    ));
+
+    if ($recordMethod !== $orderMethod) {
+        throw new RuntimeException(
+            'The payment method in the payment record does not match the order.'
+        );
+    }
+
+    if (
+        round((float)$paymentData['amount'], 2)
+        !== round((float)$orderData['total_amount'], 2)
+    ) {
+        throw new RuntimeException(
+            'The payment amount does not match the order total.'
+        );
+    }
+
+    $isVerified = (int)($paymentData['is_verified'] ?? 0);
+    $paymentId = (int)$paymentData['id'];
+
+    if ($verifyGcash) {
+
+        $orderProof = trim(
+            (string)($orderData['payment_screenshot'] ?? '')
+        );
+
+        $paymentProof = trim(
+            (string)($paymentData['proof_image'] ?? '')
+        );
+
+        if (
+            $orderProof === ''
+            || $paymentProof === ''
+            || !hash_equals($orderProof, $paymentProof)
+        ) {
+            throw new RuntimeException(
+                'The GCash proof is missing or does not match the payment record. The order cannot be moved to the queue.'
+            );
+        }
+
+        if ($isVerified !== 1) {
+            $verifyStmt = $pdo->prepare("
+                UPDATE payments
+                SET
+                    is_verified = 1,
+                    verified_at = NOW(),
+                    verified_by_staff_id = ?
+                WHERE id = ?
+                  AND (is_verified = 0 OR is_verified IS NULL)
+            ");
+
+            $verifyStmt->execute([$staffId, $paymentId]);
+
+            if ($verifyStmt->rowCount() !== 1) {
+                throw new RuntimeException(
+                    'GCash payment verification failed. Please refresh and review the payment again.'
+                );
+            }
+        }
+    }
+
+    if ($verifyAtCompletion) {
+
+        if ($orderMethod === 'gcash' && $isVerified !== 1) {
+            throw new RuntimeException(
+                'This GCash payment has not been verified. The order cannot be completed.'
+            );
+        }
+
+        if ($orderMethod === 'cash' && $isVerified !== 1) {
+            $verifyStmt = $pdo->prepare("
+                UPDATE payments
+                SET
+                    is_verified = 1,
+                    verified_at = NOW(),
+                    verified_by_staff_id = ?
+                WHERE id = ?
+                  AND (is_verified = 0 OR is_verified IS NULL)
+            ");
+
+            $verifyStmt->execute([$staffId, $paymentId]);
+
+            if ($verifyStmt->rowCount() !== 1) {
+                throw new RuntimeException(
+                    'Cash payment verification failed. The order was not completed.'
+                );
+            }
+        }
+    }
+}
+
+/* =========================================================
+   FILTERS + PAGINATION
+========================================================= */
 $valid_filters = [
     'pending_verification',
     'order_queue',
@@ -46,6 +373,11 @@ if (mb_strlen($search) > 100) {
     $search = mb_substr($search, 0, 100);
 }
 
+/* =========================================================
+   CANCELLED ORDER FILTERS
+   Cancelled records are a separate historical section below
+   the active workflow.
+========================================================= */
 $cancelled_search = trim((string)($_GET['cancelled_q'] ?? ''));
 
 if (mb_strlen($cancelled_search) > 100) {
@@ -88,70 +420,34 @@ if (
 $per_page = 10;
 $page = max(1, (int)($_GET['page'] ?? 1));
 
-$cancelled_per_page = 10;
+$cancelled_per_page = 5;
 $cancelled_page = max(
     1,
     (int)($_GET['cancelled_page'] ?? 1)
 );
 
+/* Order History status filter: all finished orders, or only one kind. */
+$history_status = strtolower(trim((string)($_GET['history_status'] ?? 'all')));
 
+if (!in_array($history_status, ['all', 'completed', 'cancelled'], true)) {
+    $history_status = 'all';
+}
+
+/* Tracks whether the Cancelled Orders section should render expanded.
+   This is set explicitly (not inferred from page number) so that
+   paging back to page 1 does not cause the section to collapse. */
 $cancelled_open = ($_GET['cancelled_open'] ?? '') === '1' ? '1' : '';
 
-$refund_search = trim((string)($_GET['refund_q'] ?? ''));
-
-if (mb_strlen($refund_search) > 100) {
-    $refund_search = mb_substr($refund_search, 0, 100);
-}
-
-$refund_status_filter = strtolower(
-    trim((string)($_GET['refund_status'] ?? 'pending'))
-);
-
-$valid_refund_status_filters = [
-    'pending',
-    'refunded',
-    'rejected'
-];
-
-if (!in_array($refund_status_filter, $valid_refund_status_filters, true)) {
-    $refund_status_filter = 'pending';
-}
-
-$refund_period = strtolower(
-    trim((string)($_GET['refund_period'] ?? 'today'))
-);
-
-$valid_refund_periods = [
-    'today',
-    'last_week',
-    'last_month',
-    'specific_date'
-];
-
-if (!in_array($refund_period, $valid_refund_periods, true)) {
-    $refund_period = 'today';
-}
-
-$refund_date = trim(
-    (string)($_GET['refund_date'] ?? date('Y-m-d'))
-);
-
-$refundDateObject = DateTime::createFromFormat(
-    '!Y-m-d',
-    $refund_date
-);
-
-if (
-    $refundDateObject === false
-    || $refundDateObject->format('Y-m-d') !== $refund_date
-) {
-    $refund_date = date('Y-m-d');
-} elseif ($refund_date > date('Y-m-d')) {
-    $refund_date = date('Y-m-d');
-}
-
-$refund_open = ($_GET['refund_open'] ?? '') === '1' ? '1' : '';
-
+/* =========================================================
+   VIEW ORDER TARGET
+   When the Staff clicks View Order from notifications.php,
+   the exact order ID + notification ID are passed here.
+   The target order determines:
+   - the correct workflow tab,
+   - the correct pagination page,
+   - notification read state,
+   - and the exact order card that will be highlighted/scrolled to.
+========================================================= */
 $target_order_id =
     max(0, (int)($_GET['order_id'] ?? 0));
 
@@ -183,6 +479,11 @@ if ($target_order_id > 0) {
         $targetOrder =
             $targetOrderStmt->fetch(PDO::FETCH_ASSOC) ?: null;
 
+        /*
+         * A View Order target is valid only while the order is still
+         * inside the active Staff workflow. Once the order is completed
+         * or cancelled, the old target must never highlight another card.
+         */
         $target_is_active =
             $targetOrder
             && in_array(
@@ -191,6 +492,9 @@ if ($target_order_id > 0) {
                 true
             );
 
+        /*
+         * Mark the exact notification as read.
+         */
         if ($target_notification_id > 0) {
 
             $markTargetNotificationStmt =
@@ -198,31 +502,36 @@ if ($target_order_id > 0) {
                     UPDATE notifications
                     SET is_read = 1
                     WHERE id = ?
-                      AND recipient_role = ?
+                      AND recipient_role = 'staff'
                       AND is_read = 0
                 ");
 
             $markTargetNotificationStmt->execute([
-                $target_notification_id,
-                $current_role
+                $target_notification_id
             ]);
         }
 
+        /*
+         * Mark all unread staff notifications related to the
+         * same order as read. One order may create multiple
+         * staff notifications.
+         */
         $markTargetOrderNotificationsStmt =
             $pdo->prepare("
                 UPDATE notifications
                 SET is_read = 1
-                WHERE recipient_role = ?
+                WHERE recipient_role = 'staff'
                   AND reference_id = ?
                   AND is_read = 0
             ");
 
         $markTargetOrderNotificationsStmt->execute([
-            $current_role,
             $target_order_id
         ]);
 
-
+        /*
+         * Only active orders are valid View Order targets.
+         */
         if ($target_is_active) {
 
             $selected_status =
@@ -235,14 +544,16 @@ if ($target_order_id > 0) {
     } catch (Throwable $e) {
 
         error_log(
-            'Admin target order lookup failed: '
+            'Staff target order lookup failed: '
             . $e->getMessage()
         );
     }
 }
 
-
-function adminOrdersRedirect(
+/* =========================================================
+   REDIRECT HELPER
+========================================================= */
+function staffOrdersRedirect(
     string $status,
     string $search,
     int $page,
@@ -276,42 +587,26 @@ function adminOrdersRedirect(
         $params['cancelled_page'] = (int)$GLOBALS['cancelled_page'];
     }
 
+    if (($GLOBALS['history_status'] ?? 'all') !== 'all') {
+        $params['history_status'] = $GLOBALS['history_status'];
+    }
+
     if (($GLOBALS['cancelled_open'] ?? '') === '1') {
         $params['cancelled_open'] = '1';
-    }
-
-    if (($GLOBALS['refund_search'] ?? '') !== '') {
-        $params['refund_q'] = $GLOBALS['refund_search'];
-    }
-
-    if (($GLOBALS['refund_period'] ?? '') !== '') {
-        $params['refund_period'] = $GLOBALS['refund_period'];
-    }
-
-    if (($GLOBALS['refund_period'] ?? '') === 'specific_date'
-        && ($GLOBALS['refund_date'] ?? '') !== '') {
-        $params['refund_date'] = $GLOBALS['refund_date'];
-    }
-
-    if (($GLOBALS['refund_open'] ?? '') === '1') {
-        $params['refund_open'] = '1';
     }
 
     if ($action !== null && $action !== '') {
         $params['action'] = $action;
 
-        if (in_array($action, ['refunded', 'refund_rejected'], true)) {
-            $params['refund_open'] = '1';
-        }
     }
 
-    header('Location: ' . ($GLOBALS['orders_page'] ?? 'index.php') . '?' . http_build_query($params));
+    header('Location: index.php?' . http_build_query($params));
     exit;
 }
 
 /* =========================================================
    CANCEL ORDER
-   Admin-only cancellation.
+   Staff-only cancellation.
    Supports normal POST fallback and AJAX.
 ========================================================= */
 
@@ -335,7 +630,7 @@ if (
 
     /*
      * The cancellation dropdown uses __other__ for a custom reason.
-     * Replace that marker with the text entered by the Admin.
+     * Replace that marker with the text entered by the Staff.
      */
     if ($cancellation_reason === '__other__') {
         $other_cancellation_reason = trim(
@@ -351,6 +646,10 @@ if (
     if (mb_strlen($cancellation_reason) > 255) {
         $cancellation_reason = mb_substr($cancellation_reason, 0, 255);
     }
+
+    /* This exact value is reserved for a Ready order that was not collected. */
+    $noShowCancellationReason = 'Customer did not collect order (No-show)';
+    $isNoShowCancellation = ($cancellation_reason === $noShowCancellationReason);
 
     $posted_status =
         trim(
@@ -371,7 +670,6 @@ if (
             (int)($_POST['page'] ?? 1)
         );
 
-
     if (!in_array(
         $posted_status,
         $valid_filters,
@@ -382,7 +680,6 @@ if (
             'pending_verification';
     }
 
-
     if (
         $order_id > 0
         && $cancellation_reason !== ''
@@ -391,7 +688,6 @@ if (
         try {
 
             $pdo->beginTransaction();
-
 
             /* ---------------------------------------------
                GET ORDER
@@ -405,10 +701,16 @@ if (
                     claim_number,
                     status,
                     payment_method,
-                    payment_screenshot
+                    payment_screenshot,
+                    order_source,
+                    pickup_date,
+                    pickup_time,
+                    ready_at,
+                    UNIX_TIMESTAMP(updated_at) AS updated_at_unix
                 FROM orders
                 WHERE id = ?
                 LIMIT 1
+                FOR UPDATE
             ");
 
             $orderStmt->execute([
@@ -420,7 +722,6 @@ if (
                     PDO::FETCH_ASSOC
                 );
 
-
             if (!$orderData) {
 
                 throw new RuntimeException(
@@ -428,59 +729,127 @@ if (
                 );
             }
 
-
             /* ---------------------------------------------
                ALLOWED CANCELLATION STATUSES
+
+               Normal cancellations remain limited to orders that have
+               not entered preparation. A Ready order may only be closed
+               through the dedicated No-show action after the 30-minute grace period.
             --------------------------------------------- */
 
             $allowed_to_cancel = [
-                'order_queue',
                 'pending_verification',
-                            'confirmed',
-                'preparing',
-                'ready'
+                'order_queue',
+                'confirmed'
             ];
 
+            $previous_status = (string)$orderData['status'];
+            $orderPaymentMethod = strtolower(trim((string)($orderData['payment_method'] ?? '')));
 
-            if (!in_array(
-                $orderData['status'],
-                $allowed_to_cancel,
-                true
-            )) {
+            $noShowTiming = staffGetNoShowTiming($orderData);
+            $isEligibleReadyNoShow = (
+                $isNoShowCancellation
+                && $previous_status === 'ready'
+                && in_array($orderPaymentMethod, ['cash', 'gcash'], true)
+                && $noShowTiming['eligible']
+            );
+
+            $isEligibleNormalCancellation = (
+                !$isNoShowCancellation
+                && in_array($previous_status, $allowed_to_cancel, true)
+            );
+
+            if (!$isEligibleReadyNoShow && !$isEligibleNormalCancellation) {
+                if (
+                    $isNoShowCancellation
+                    && $previous_status === 'ready'
+                    && in_array($orderPaymentMethod, ['cash', 'gcash'], true)
+                    && !$noShowTiming['eligible']
+                ) {
+                    $availableAtText = $noShowTiming['eligible_at'] > 0
+                        ? (new DateTimeImmutable('@' . $noShowTiming['eligible_at']))
+                            ->setTimezone(new DateTimeZone('Asia/Manila'))
+                            ->format('g:i A, M j, Y')
+                        : 'after the pickup and Ready timestamps can be verified';
+
+                    throw new RuntimeException(
+                        'This order cannot be marked as No-show yet. The later of the scheduled pickup time and Ready time must pass, followed by '
+                        . STAFF_NO_SHOW_GRACE_MINUTES
+                        . ' minutes. No-show becomes available at '
+                        . $availableAtText
+                        . '.'
+                    );
+                }
+
+                if ($previous_status === 'ready' && !$isNoShowCancellation) {
+                    throw new RuntimeException(
+                        'Ready orders can only be closed using the dedicated No-show action.'
+                    );
+                }
+
+                if ($isNoShowCancellation && $previous_status !== 'ready') {
+                    throw new RuntimeException(
+                        'The No-show reason can only be used after an order is marked Ready for pick-up.'
+                    );
+                }
+
+                if (
+                    $isNoShowCancellation
+                    && !in_array($orderPaymentMethod, ['cash', 'gcash'], true)
+                ) {
+                    throw new RuntimeException(
+                        'The No-show reason requires a valid Cash or GCash payment method.'
+                    );
+                }
 
                 throw new RuntimeException(
                     'This order can no longer be cancelled.'
                 );
             }
 
-
-            $previous_status =
-                (string)$orderData['status'];
-
             $refund_status = 'none';
             $refund_requested_at = null;
 
             /*
-             * Cancelled GCash orders with uploaded payment proof are
-             * placed into Pending Refunds, except when the cancellation
-             * reason is "Payment could not be verified".
+             * Pending Refunds is also the Staff review queue for cancelled
+             * GCash orders with submitted payment proof. Include every
+             * cancellation reason, including "Payment could not be verified".
              *
-             * A payment-verification failure means the proof was not
-             * accepted as a valid payment, so it must not become a refund.
+             * This does NOT authorize a payout. The Process Refund handler
+             * separately requires a verified payment record whose method,
+             * amount, and proof match the order. Unverified/mismatched proof
+             * remains reviewable here but cannot be marked as refunded.
              */
-            $normalizedCancellationReason = strtolower(
-                trim((string)$cancellation_reason)
-            );
+            /* Walk-in GCash payments have no screenshot; their proof is the
+               13-digit GCash reference number saved in payments. */
+            $hasWalkinGcashReference = false;
 
             if (
-                strtolower(trim((string)$orderData['payment_method'])) === 'gcash'
-                && trim((string)$orderData['payment_screenshot']) !== ''
-                && $normalizedCancellationReason !== 'payment could not be verified'
+                $orderPaymentMethod === 'gcash'
+                && ($orderData['order_source'] ?? '') === 'walk_in'
+            ) {
+                $walkinRefStmt = $pdo->prepare("
+                    SELECT gcash_reference
+                    FROM payments
+                    WHERE order_id = ?
+                    LIMIT 1
+                ");
+                $walkinRefStmt->execute([$order_id]);
+                $hasWalkinGcashReference =
+                    trim((string)$walkinRefStmt->fetchColumn()) !== '';
+            }
+
+            if (
+                !$isNoShowCancellation
+                && $orderPaymentMethod === 'gcash'
+                && (
+                    trim((string)$orderData['payment_screenshot']) !== ''
+                    || $hasWalkinGcashReference
+                )
             ) {
                 $refund_status = 'pending';
                 $refund_requested_at = date('Y-m-d H:i:s');
             }
-
 
             /* ---------------------------------------------
                CANCEL ORDER
@@ -495,15 +864,22 @@ if (
                     refund_status = ?,
                     refund_requested_at = ?
                 WHERE id = ?
+                  AND status = ?
             ");
 
             $stmt->execute([
                 $cancellation_reason,
                 $refund_status,
                 $refund_requested_at,
-                $order_id
+                $order_id,
+                $previous_status
             ]);
 
+            if ($stmt->rowCount() !== 1) {
+                throw new RuntimeException(
+                    'The order status changed before cancellation. Refresh the page and try again.'
+                );
+            }
 
             /* ---------------------------------------------
                SAVE STATUS HISTORY
@@ -525,7 +901,7 @@ if (
                     ?,
                     ?,
                     'cancelled',
-                    ?,
+                    'staff',
                     ?,
                     ?,
                     NOW()
@@ -535,11 +911,9 @@ if (
             $historyStmt->execute([
                 $order_id,
                 $previous_status,
-                $current_role,
-                $current_user_id,
+                $staff_id,
                 $cancellation_reason
             ]);
-
 
             /* ---------------------------------------------
                CUSTOMER NOTIFICATION
@@ -552,40 +926,39 @@ if (
                     ?: 'Order'
                 );
 
-
             $customerMessage =
                 "Your order {$orderIdentifier} has been cancelled. "
                 . "Reason: {$cancellation_reason}.";
 
+            /* Guest orders have no customer account to notify. */
+            if (!empty($orderData['customer_id'])) {
+                $notificationStmt = $pdo->prepare("
+                    INSERT INTO notifications
+                    (
+                        recipient_role,
+                        recipient_id,
+                        type,
+                        message,
+                        reference_id
+                    )
+                    VALUES
+                    (
+                        'customer',
+                        ?,
+                        'order_cancelled',
+                        ?,
+                        ?
+                    )
+                ");
 
-            $notificationStmt = $pdo->prepare("
-                INSERT INTO notifications
-                (
-                    recipient_role,
-                    recipient_id,
-                    type,
-                    message,
-                    reference_id
-                )
-                VALUES
-                (
-                    'customer',
-                    ?,
-                    'order_cancelled',
-                    ?,
-                    ?
-                )
-            ");
-
-            $notificationStmt->execute([
-                $orderData['customer_id'],
-                $customerMessage,
-                $order_id
-            ]);
-
+                $notificationStmt->execute([
+                    $orderData['customer_id'],
+                    $customerMessage,
+                    $order_id
+                ]);
+            }
 
             $pdo->commit();
-
 
             /* ---------------------------------------------
                AJAX RESPONSE
@@ -601,7 +974,6 @@ if (
                     "Order {$orderIdentifier} cancelled successfully."
             ];
 
-
         } catch (Throwable $e) {
 
             if (
@@ -611,7 +983,7 @@ if (
             }
 
             error_log(
-                'Admin order cancellation failed: '
+                'Staff order cancellation failed: '
                 . $e->getMessage()
             );
 
@@ -633,7 +1005,6 @@ if (
         ];
     }
 
-
     /* ---------------------------------------------
        AJAX RESPONSE
     --------------------------------------------- */
@@ -652,12 +1023,11 @@ if (
         exit;
     }
 
-
     /* ---------------------------------------------
        NORMAL POST FALLBACK
     --------------------------------------------- */
 
-    adminOrdersRedirect(
+    staffOrdersRedirect(
         $posted_status,
         $posted_search,
         $posted_page,
@@ -668,417 +1038,25 @@ if (
 }
 
 /* =========================================================
-   PROCESS REFUND
-   Marks a pending GCash refund as refunded only after the Admin
-   uploads proof of the actual refund transaction.
-========================================================= */
-
-if (
-    $current_role === 'admin'
-    && $_SERVER['REQUEST_METHOD'] === 'POST'
-    && isset($_POST['process_refund'])
-) {
-
-    $ajaxResponse = [
-        'success' => false,
-        'message' => 'The refund could not be processed.'
-    ];
-
-    $order_id = (int)($_POST['order_id'] ?? 0);
-    $posted_search = trim((string)($_POST['q'] ?? ''));
-    $posted_page = max(1, (int)($_POST['page'] ?? 1));
-    $posted_status = trim((string)($_POST['status_filter'] ?? 'pending_verification'));
-
-    if (!in_array($posted_status, $valid_filters, true)) {
-        $posted_status = 'pending_verification';
-    }
-
-    if ($order_id > 0) {
-
-        $uploadedRefundProof = null;
-
-        try {
-            $pdo->beginTransaction();
-
-            $orderStmt = $pdo->prepare("
-                SELECT
-                    id,
-                    customer_id,
-                    order_number,
-                    status,
-                    refund_status,
-                    payment_method,
-                    payment_screenshot
-                FROM orders
-                WHERE id = ?
-                LIMIT 1
-            ");
-
-            $orderStmt->execute([$order_id]);
-            $orderData = $orderStmt->fetch(PDO::FETCH_ASSOC);
-
-            if (!$orderData) {
-                throw new RuntimeException('Order not found.');
-            }
-
-            if (
-                $orderData['status'] !== 'cancelled'
-                || $orderData['refund_status'] !== 'pending'
-                || strtolower(trim((string)$orderData['payment_method'])) !== 'gcash'
-                || trim((string)$orderData['payment_screenshot']) === ''
-            ) {
-                throw new RuntimeException(
-                    'This order is not eligible for refund processing.'
-                );
-            }
-
-            if (
-                !isset($_FILES['refund_proof_image'])
-                || $_FILES['refund_proof_image']['error'] !== UPLOAD_ERR_OK
-            ) {
-                throw new RuntimeException(
-                    'Please upload a picture proving that the refund was sent.'
-                );
-            }
-
-            $refundProofFile = $_FILES['refund_proof_image'];
-            $maxRefundProofSize = 5 * 1024 * 1024;
-
-            if ((int)$refundProofFile['size'] > $maxRefundProofSize) {
-                throw new RuntimeException(
-                    'The refund proof must not exceed 5MB.'
-                );
-            }
-
-            $refundProofFinfo = new finfo(FILEINFO_MIME_TYPE);
-            $refundProofMime = $refundProofFinfo->file(
-                $refundProofFile['tmp_name']
-            );
-
-            $allowedRefundProofTypes = [
-                'image/jpeg' => 'jpg',
-                'image/png' => 'png'
-            ];
-
-            if (!isset($allowedRefundProofTypes[$refundProofMime])) {
-                throw new RuntimeException(
-                    'Invalid refund proof. Only JPG, JPEG, or PNG files are allowed.'
-                );
-            }
-
-            $refundUploadDirectory =
-                dirname(__DIR__) .
-                '/assets/uploads/refunds/';
-
-            if (!is_dir($refundUploadDirectory)) {
-                if (!mkdir($refundUploadDirectory, 0755, true)) {
-                    throw new RuntimeException(
-                        'Unable to create the refund proof upload directory.'
-                    );
-                }
-            }
-
-            $refundFilename =
-                'refund_' .
-                date('Ymd_His') .
-                '_' .
-                bin2hex(random_bytes(6)) .
-                '.' .
-                $allowedRefundProofTypes[$refundProofMime];
-
-            $refundDestination =
-                $refundUploadDirectory .
-                $refundFilename;
-
-            if (!move_uploaded_file(
-                $refundProofFile['tmp_name'],
-                $refundDestination
-            )) {
-                throw new RuntimeException(
-                    'Failed to upload the refund proof.'
-                );
-            }
-
-            $uploadedRefundProof =
-                'assets/uploads/refunds/' .
-                $refundFilename;
-
-            $stmt = $pdo->prepare("
-                UPDATE orders
-                SET
-                    refund_status = 'refunded',
-                    refund_proof_image = ?,
-                    refund_processed_at = NOW(),
-                    refund_processed_by = ?
-                WHERE id = ?
-                  AND status = 'cancelled'
-                  AND refund_status = 'pending'
-            ");
-
-            $stmt->execute([
-                $uploadedRefundProof,
-                $admin_id,
-                $order_id
-            ]);
-
-            if ($stmt->rowCount() !== 1) {
-                throw new RuntimeException(
-                    'The refund status could not be updated.'
-                );
-            }
-
-            $orderIdentifier = $orderData['order_number'] ?: 'Order';
-
-            if (!empty($orderData['customer_id']) && $notification['type'] !== null) {
-                $customerMessage =
-                    "Your refund for order {$orderIdentifier} has been processed. "
-                    . "The refund proof is available in your Order History.";
-
-                $notificationStmt = $pdo->prepare("
-                    INSERT INTO notifications
-                    (recipient_role, recipient_id, type, message, reference_id)
-                    VALUES ('customer', ?, 'refund_processed', ?, ?)
-                ");
-
-                $notificationStmt->execute([
-                    $orderData['customer_id'],
-                    $customerMessage,
-                    $order_id
-                ]);
-            }
-
-            $pdo->commit();
-
-            $ajaxResponse = [
-                'success' => true,
-                'order_id' => $order_id,
-                'new_refund_status' => 'refunded',
-                'refund_proof_image' => $uploadedRefundProof,
-                'message' =>
-                    "Refund for {$orderIdentifier} was marked as refunded."
-            ];
-
-        } catch (Throwable $e) {
-            if ($pdo->inTransaction()) {
-                $pdo->rollBack();
-            }
-
-            if ($uploadedRefundProof !== null) {
-                $orphanRefundProof =
-                    dirname(__DIR__) .
-                    '/' .
-                    $uploadedRefundProof;
-
-                if (is_file($orphanRefundProof)) {
-                    @unlink($orphanRefundProof);
-                }
-            }
-
-            error_log(
-                'Admin refund processing failed: ' . $e->getMessage()
-            );
-
-            $ajaxResponse = [
-                'success' => false,
-                'message' => $e->getMessage()
-            ];
-        }
-
-    } else {
-        $ajaxResponse = [
-            'success' => false,
-            'message' => 'Invalid order.'
-        ];
-    }
-
-    if ($isAjaxRequest) {
-        header('Content-Type: application/json; charset=utf-8');
-        echo json_encode($ajaxResponse, JSON_UNESCAPED_UNICODE);
-        exit;
-    }
-
-    adminOrdersRedirect(
-        $posted_status,
-        $posted_search,
-        $posted_page,
-        $ajaxResponse['success'] ? 'refunded' : null
-    );
-}
-
-/* =========================================================
-   REJECT REFUND
-   Marks a pending GCash refund as rejected.
-========================================================= */
-
-if (
-    $current_role === 'admin'
-    && $_SERVER['REQUEST_METHOD'] === 'POST'
-    && isset($_POST['reject_refund'])
-) {
-
-    $ajaxResponse = [
-        'success' => false,
-        'message' => 'The refund could not be rejected.'
-    ];
-
-    $order_id = (int)($_POST['order_id'] ?? 0);
-    $posted_search = trim((string)($_POST['q'] ?? ''));
-    $posted_page = max(1, (int)($_POST['page'] ?? 1));
-    $posted_status = trim((string)($_POST['status_filter'] ?? 'pending_verification'));
-
-    if (!in_array($posted_status, $valid_filters, true)) {
-        $posted_status = 'pending_verification';
-    }
-
-    if ($order_id > 0) {
-
-        try {
-            $pdo->beginTransaction();
-
-            $orderStmt = $pdo->prepare("
-                SELECT
-                    id,
-                    customer_id,
-                    order_number,
-                    status,
-                    refund_status,
-                    payment_method,
-                    payment_screenshot
-                FROM orders
-                WHERE id = ?
-                LIMIT 1
-            ");
-
-            $orderStmt->execute([$order_id]);
-            $orderData = $orderStmt->fetch(PDO::FETCH_ASSOC);
-
-            if (!$orderData) {
-                throw new RuntimeException('Order not found.');
-            }
-
-            if (
-                $orderData['status'] !== 'cancelled'
-                || $orderData['refund_status'] !== 'pending'
-                || strtolower(trim((string)$orderData['payment_method'])) !== 'gcash'
-                || trim((string)$orderData['payment_screenshot']) === ''
-            ) {
-                throw new RuntimeException(
-                    'This order is not eligible for refund rejection.'
-                );
-            }
-
-            $rejection_reason = trim(
-                (string)($_POST['refund_rejection_reason'] ?? '')
-            );
-
-            if ($rejection_reason === '') {
-                $rejection_reason = 'Refund rejected by admin.';
-            }
-
-            if (mb_strlen($rejection_reason) > 255) {
-                $rejection_reason = mb_substr($rejection_reason, 0, 255);
-            }
-
-            $stmt = $pdo->prepare("
-                UPDATE orders
-                SET
-                    refund_status = 'rejected',
-                    refund_rejection_reason = ?,
-                    refund_processed_at = NOW(),
-                    refund_processed_by = ?
-                WHERE id = ?
-                  AND status = 'cancelled'
-                  AND refund_status = 'pending'
-            ");
-
-            $stmt->execute([
-                $rejection_reason,
-                $admin_id,
-                $order_id
-            ]);
-
-            $orderIdentifier = $orderData['order_number'] ?: 'Order';
-
-            if (!empty($orderData['customer_id']) && $notification['type'] !== null) {
-                $customerMessage =
-                    "The refund for order {$orderIdentifier} was rejected. "
-                    . "Reason: {$rejection_reason}";
-
-                $notificationStmt = $pdo->prepare("
-                    INSERT INTO notifications
-                    (recipient_role, recipient_id, type, message, reference_id)
-                    VALUES ('customer', ?, 'refund_rejected', ?, ?)
-                ");
-
-                $notificationStmt->execute([
-                    $orderData['customer_id'],
-                    $customerMessage,
-                    $order_id
-                ]);
-            }
-
-            $pdo->commit();
-
-            $ajaxResponse = [
-                'success' => true,
-                'order_id' => $order_id,
-                'new_refund_status' => 'rejected',
-                'message' =>
-                    "Refund for {$orderIdentifier} was rejected."
-            ];
-
-        } catch (Throwable $e) {
-            if ($pdo->inTransaction()) {
-                $pdo->rollBack();
-            }
-
-            error_log(
-                'Admin refund rejection failed: ' . $e->getMessage()
-            );
-
-            $ajaxResponse = [
-                'success' => false,
-                'message' => $e->getMessage()
-            ];
-        }
-
-    } else {
-        $ajaxResponse = [
-            'success' => false,
-            'message' => 'Invalid order.'
-        ];
-    }
-
-    if ($isAjaxRequest) {
-        header('Content-Type: application/json; charset=utf-8');
-        echo json_encode($ajaxResponse, JSON_UNESCAPED_UNICODE);
-        exit;
-    }
-
-    adminOrdersRedirect(
-        $posted_status,
-        $posted_search,
-        $posted_page,
-        $ajaxResponse['success'] ? 'refund_rejected' : null
-    );
-}
-
-/* =========================================================
    UPDATE ORDER STATUS
-   Admin uses the same order workflow as Staff:
-   Pending -> Confirmed -> Preparing -> Ready -> Completed
+   Payment verification and order updates are transactional.
 ========================================================= */
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_status'])) {
+if (
+    $_SERVER['REQUEST_METHOD'] === 'POST'
+    && isset($_POST['update_status'])
+) {
 
     $ajaxResponse = [
-    'success' => false,
-    'message' => 'The order status could not be updated.'
+        'success' => false,
+        'message' => 'The order status could not be updated.'
     ];
 
     $order_id = (int)($_POST['order_id'] ?? 0);
     $new_status = trim((string)($_POST['status'] ?? ''));
 
-    $posted_status = trim((string)($_POST['status_filter'] ?? 'pending_verification'));
+    $posted_status = trim(
+        (string)($_POST['status_filter'] ?? 'pending_verification')
+    );
     $posted_search = trim((string)($_POST['q'] ?? ''));
     $posted_page = max(1, (int)($_POST['page'] ?? 1));
 
@@ -1094,89 +1072,220 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_status'])) {
         'completed'
     ];
 
+    $emailSent = null;
+    $emailError = null;
+    $orderData = null;
+    $current_status = '';
+    $orderIdentifier = 'Order';
+    $stale_status_transition = false;
+
     if (
-        $order_id > 0 &&
-        in_array($new_status, $allowed_statuses, true)
+        $order_id <= 0
+        || !in_array($new_status, $allowed_statuses, true)
     ) {
+        $ajaxResponse['message'] = 'Invalid order or status.';
+    } else {
+        try {
+            $pdo->beginTransaction();
 
-        $orderStmt = $pdo->prepare("
-            SELECT id, customer_id, order_number, claim_number, status
-            FROM orders
-            WHERE id = ?
-            LIMIT 1
-        ");
-        $orderStmt->execute([$order_id]);
-        $orderData = $orderStmt->fetch(PDO::FETCH_ASSOC);
+            /* Lock the order to prevent two simultaneous status changes. */
+            $orderStmt = $pdo->prepare("
+                SELECT
+                    id,
+                    customer_id,
+                    order_number,
+                    claim_number,
+                    status,
+                    payment_method,
+                    payment_screenshot,
+                    total_amount
+                FROM orders
+                WHERE id = ?
+                LIMIT 1
+                FOR UPDATE
+            ");
 
-        if ($orderData) {
+            $orderStmt->execute([$order_id]);
+            $orderData = $orderStmt->fetch(PDO::FETCH_ASSOC);
 
-            $current_status = trim((string)$orderData['status']);
-            $status_was_already_set = ($current_status === $new_status);
+            if (!$orderData) {
+                throw new RuntimeException('Order not found.');
+            }
 
-            $allowed_transitions = [
-                'pending_verification' => ['order_queue'],
-                'order_queue' => ['confirmed'],
-                'confirmed' => ['preparing'],
-                'preparing' => ['ready'],
-                'ready' => ['completed'],
-                'completed' => [],
-                'cancelled' => []
-            ];
-
-            $next_statuses = $allowed_transitions[$current_status] ?? [];
+            $current_status = (string)$orderData['status'];
+            $orderIdentifier = $orderData['order_number']
+                ?: ($orderData['claim_number'] ?: 'Order');
 
             /*
-             * If another request already moved the order to the requested
-             * status, treat it as successful instead of returning a false
-             * error to the Staff UI. This also prevents double-click/AJAX
-             * race conditions from getting stuck on Processing.
+             * IDEMPOTENT GCASH REVIEW
+             *
+             * If a repeated request arrives after the first request has
+             * already verified this GCash payment and moved the order,
+             * return success for that exact completed state. This prevents
+             * a false failure toast without allowing an unverified payment
+             * or a different status transition.
              */
-            if ($status_was_already_set) {
+            $alreadyProcessedGcashReview = (
+                $current_status === 'order_queue'
+                && $new_status === 'order_queue'
+                && strtolower(trim((string)$orderData['payment_method'])) === 'gcash'
+            );
 
-                $orderIdentifier = $orderData['order_number']
-                    ?: ($orderData['claim_number'] ?: 'Order');
+            if ($alreadyProcessedGcashReview) {
+                $alreadyProcessedPaymentStmt = $pdo->prepare("
+                    SELECT
+                        payment_method,
+                        amount,
+                        proof_image,
+                        is_verified
+                    FROM payments
+                    WHERE order_id = ?
+                    LIMIT 1
+                    FOR UPDATE
+                ");
+                $alreadyProcessedPaymentStmt->execute([$order_id]);
+                $alreadyProcessedPayment = $alreadyProcessedPaymentStmt->fetch(PDO::FETCH_ASSOC);
+
+                $orderProof = trim((string)($orderData['payment_screenshot'] ?? ''));
+                $recordProof = trim((string)($alreadyProcessedPayment['proof_image'] ?? ''));
+
+                $alreadyVerifiedCorrectly = (
+                    $alreadyProcessedPayment
+                    && strtolower(trim((string)$alreadyProcessedPayment['payment_method'])) === 'gcash'
+                    && (int)$alreadyProcessedPayment['is_verified'] === 1
+                    && round((float)$alreadyProcessedPayment['amount'], 2) === round((float)$orderData['total_amount'], 2)
+                    && $orderProof !== ''
+                    && $recordProof !== ''
+                    && hash_equals($orderProof, $recordProof)
+                );
+
+                if (!$alreadyVerifiedCorrectly) {
+                    throw new RuntimeException(
+                        'The order is already in the queue, but its GCash verification record is inconsistent. Please inspect the payment record.'
+                    );
+                }
+
+                $pdo->commit();
 
                 $ajaxResponse = [
                     'success' => true,
+                    'already_processed' => true,
                     'order_id' => $order_id,
-                    'previous_status' => $current_status,
-                    'new_status' => $new_status,
-                    'message' => "Order {$orderIdentifier} is already {$new_status}."
+                    'previous_status' => 'pending_verification',
+                    'new_status' => 'order_queue',
+                    'message' => "GCash payment for order {$orderIdentifier} was already verified and the order is in Order Queue.",
+                    'email_sent' => null,
+                    'email_error' => null
                 ];
 
-            } elseif (in_array($new_status, $next_statuses, true)) {
+            } elseif ($current_status === $new_status) {
+
+                /*
+                 * A duplicate click can arrive after another request has
+                 * already moved this order to the requested status. Treat
+                 * that exact state as an idempotent success: do not create
+                 * duplicate history/notifications and, importantly, let
+                 * the browser refresh the current order list.
+                 */
+                $pdo->commit();
+
+                $currentStatusLabel = ucwords(
+                    str_replace('_', ' ', $current_status)
+                );
+
+                $ajaxResponse = [
+                    'success' => true,
+                    'already_processed' => true,
+                    'order_id' => $order_id,
+                    'previous_status' => $current_status,
+                    'new_status' => $current_status,
+                    'message' => "Order {$orderIdentifier} is already in {$currentStatusLabel} status.",
+                    'email_sent' => null,
+                    'email_error' => null
+                ];
+
+            } else {
+
+                $allowed_transitions = [
+                    'pending_verification' => ['order_queue'],
+                    'order_queue' => ['confirmed'],
+                    'confirmed' => ['preparing'],
+                    'preparing' => ['ready'],
+                    'ready' => ['completed'],
+                    'completed' => [],
+                    'cancelled' => []
+                ];
+
+                $next_statuses = $allowed_transitions[$current_status] ?? [];
+
+                if (!in_array($new_status, $next_statuses, true)) {
+                    $stale_status_transition = true;
+                    throw new RuntimeException(
+                        'This order has already moved to a different status. The order list will be refreshed.'
+                    );
+                }
+
+                /* Payment and order checks are both enforced by PHP. */
+                staffVerifyPaymentForStatusTransition(
+                    $pdo,
+                    $orderData,
+                    $current_status,
+                    $new_status,
+                    $staff_id
+                );
 
                 if ($new_status === 'completed') {
-
                     $stmt = $pdo->prepare("
                         UPDATE orders
-                        SET
-                            status = ?,
-                            closed_at = NOW()
-                        WHERE id = ?
+                        SET status = ?, closed_at = NOW()
+                        WHERE id = ? AND status = ?
                     ");
 
                     $stmt->execute([
                         $new_status,
-                        $order_id
+                        $order_id,
+                        $current_status
                     ]);
+                } elseif ($new_status === 'ready') {
+                    /* Store Ready time explicitly in Manila local time. */
+                    $readyAtForDatabase = (new DateTimeImmutable(
+                        'now',
+                        new DateTimeZone('Asia/Manila')
+                    ))->format('Y-m-d H:i:s');
 
+                    $stmt = $pdo->prepare("
+                        UPDATE orders
+                        SET status = ?, ready_at = ?
+                        WHERE id = ? AND status = ?
+                    ");
+
+                    $stmt->execute([
+                        $new_status,
+                        $readyAtForDatabase,
+                        $order_id,
+                        $current_status
+                    ]);
                 } else {
-
                     $stmt = $pdo->prepare("
                         UPDATE orders
                         SET status = ?
-                        WHERE id = ?
+                        WHERE id = ? AND status = ?
                     ");
 
                     $stmt->execute([
                         $new_status,
-                        $order_id
+                        $order_id,
+                        $current_status
                     ]);
                 }
 
-                $orderIdentifier = $orderData['order_number']
-                    ?: ($orderData['claim_number'] ?: 'Order');
+                if ($stmt->rowCount() !== 1) {
+                    throw new RuntimeException(
+                        'The order status could not be updated. Please refresh and try again.'
+                    );
+                }
+
+                $pdo->commit();
 
                 $notificationMap = [
                     'order_queue' => [
@@ -1201,167 +1310,80 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_status'])) {
                     ]
                 ];
 
-                $emailSent = null;
-                $emailError = null;
-
-                if (isset($notificationMap[$new_status])) {
-
-                    $notification = $notificationMap[$new_status];
-
-                    /*
-                     * Moving Pending -> Order Queue is an internal staff
-                     * action, so it has no customer notification type.
-                     * Do not insert a NULL notification type into the DB.
-                     */
-                    if (
-                        !empty($orderData['customer_id'])
-                        && $notification['type'] !== null
-                    ) {
-
-
-
-
-                                            $notificationStmt = $pdo->prepare("
-
-
-                                                INSERT INTO notifications
-
-
-                                                (
-
-
-                                                    recipient_role,
-
-
-                                                    recipient_id,
-
-
-                                                    type,
-
-
-                                                    message,
-
-
-                                                    reference_id
-
-
-                                                )
-
-
-                                                VALUES
-
-
-                                                (
-
-
-                                                    'customer',
-
-
-                                                    ?,
-
-
-                                                    ?,
-
-
-                                                    ?,
-
-
-                                                    ?
-
-
-                                                )
-
-
-                                            ");
-
-
-
-                                            $notificationStmt->execute([
-
-
-                                                $orderData['customer_id'],
-
-
-                                                $notification['type'],
-
-
-                                                $notification['message'],
-
-
-                                                $order_id
-
-
-                                            ]);
-
-
-
-                                            /* ---------------------------------------------
-                                               CUSTOMER PREPARING EMAIL
-                                               Send an email only when the Admin changes
-                                               the order status to Preparing.
-                                            --------------------------------------------- */
-
-                                            if ($new_status === 'preparing') {
-
-                                                try {
-
-                                                    $customerStmt = $pdo->prepare("
-                                                        SELECT full_name, email
-                                                        FROM customers
-                                                        WHERE id = ?
-                                                        LIMIT 1
-                                                    ");
-
-                                                    $customerStmt->execute([
-                                                        $orderData['customer_id']
-                                                    ]);
-
-                                                    $customerData =
-                                                        $customerStmt->fetch(PDO::FETCH_ASSOC);
-
-                                                    if (!$customerData) {
-                                                        throw new RuntimeException(
-                                                            'No customer found for id '
-                                                            . $orderData['customer_id']
-                                                        );
-                                                    }
-
-                                                    if (empty($customerData['email'])) {
-                                                        throw new RuntimeException(
-                                                            'Customer has no email address.'
-                                                        );
-                                                    }
-
-                                                    sendOrderPreparingEmail(
-                                                        $customerData['email'],
-                                                        $customerData['full_name'] ?? 'Customer',
-                                                        $orderIdentifier,
-                                                        $orderData['claim_number'] ?? ''
-                                                    );
-
-                                                    $emailSent = true;
-
-                                                } catch (Throwable $e) {
-
-                                                    /*
-                                                     * Do not fail the order-status update
-                                                     * if the email server is unavailable,
-                                                     * but report the failure to the Staff.
-                                                     */
-                                                    $emailSent = false;
-                                                    $emailError = $e->getMessage();
-
-                                                    error_log(
-                                                        'Localitea preparing email failed: '
-                                                        . $e->getMessage()
-                                                    );
-                                                }
-                                            }
-
-
-                    } 
-
-                    $ajaxResponse = [
+                $notification = $notificationMap[$new_status];
+
+                if (
+                    !empty($orderData['customer_id'])
+                    && $notification['type'] !== null
+                ) {
+                    try {
+                        $notificationStmt = $pdo->prepare("
+                            INSERT INTO notifications
+                            (
+                                recipient_role,
+                                recipient_id,
+                                type,
+                                message,
+                                reference_id
+                            )
+                            VALUES ('customer', ?, ?, ?, ?)
+                        ");
+
+                        $notificationStmt->execute([
+                            $orderData['customer_id'],
+                            $notification['type'],
+                            $notification['message'],
+                            $order_id
+                        ]);
+                    } catch (Throwable $notificationError) {
+                        error_log(
+                            'Staff order notification failed: '
+                            . $notificationError->getMessage()
+                        );
+                    }
+
+                    /* Send the existing Preparing email without rolling back the order. */
+                    if ($new_status === 'preparing') {
+                        try {
+                            $customerStmt = $pdo->prepare("
+                                SELECT full_name, email
+                                FROM customers
+                                WHERE id = ?
+                                LIMIT 1
+                            ");
+
+                            $customerStmt->execute([$orderData['customer_id']]);
+                            $customerData = $customerStmt->fetch(PDO::FETCH_ASSOC);
+
+                            if (!$customerData) {
+                                throw new RuntimeException('Customer record not found.');
+                            }
+
+                            if (empty($customerData['email'])) {
+                                throw new RuntimeException('Customer has no email address.');
+                            }
+
+                            sendOrderPreparingEmail(
+                                $customerData['email'],
+                                $customerData['full_name'] ?? 'Customer',
+                                $orderIdentifier,
+                                $orderData['claim_number'] ?? ''
+                            );
+
+                            $emailSent = true;
+                        } catch (Throwable $e) {
+                            $emailSent = false;
+                            $emailError = $e->getMessage();
+
+                            error_log(
+                                'Staff preparing email failed: '
+                                . $e->getMessage()
+                            );
+                        }
+                    }
+                }
+
+                $ajaxResponse = [
                     'success' => true,
                     'order_id' => $order_id,
                     'previous_status' => $current_status,
@@ -1369,34 +1391,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_status'])) {
                     'message' => $notification['message'],
                     'email_sent' => $emailSent,
                     'email_error' => $emailError
-                    ];
-                }
-            } else {
-                $ajaxResponse['message'] = 'This order cannot be moved to the selected status from its current status.';
+                ];
             }
-        } else {
-            $ajaxResponse['message'] = 'Order not found.';
+
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+
+            error_log(
+                'Staff order status update failed: '
+                . $e->getMessage()
+            );
+
+            $ajaxResponse = [
+                'success' => false,
+                'stale_status' => $stale_status_transition,
+                'current_status' => $current_status,
+                'message' => $e->getMessage()
+            ];
         }
-    } else {
-        $ajaxResponse['message'] = 'Invalid order status request.';
     }
 
     if ($isAjaxRequest) {
-
         header('Content-Type: application/json; charset=utf-8');
-
-        echo json_encode($ajaxResponse);
-
+        echo json_encode($ajaxResponse, JSON_UNESCAPED_UNICODE);
         exit;
     }
 
-    adminOrdersRedirect(
+    staffOrdersRedirect(
         $posted_status,
         $posted_search,
         $posted_page,
-        in_array($new_status, $allowed_statuses, true)
-            ? $new_status
-            : null
+        $ajaxResponse['success'] ? $new_status : null
     );
 }
 
@@ -1419,58 +1446,27 @@ $countStmt = $pdo->query("
 ");
 
 /* =========================================================
-   PENDING REFUNDS
-
-   Keep "Payment could not be verified" cancellations OUT of
-   Pending Refunds, including older records that may have been
-   marked pending before this rule was added.
-
-   Backfill other existing cancelled GCash orders that already
-   have uploaded payment proof so they appear in the dropdown.
+   PENDING GCash REFUND COUNT
+   Staff can see how many cancelled GCash orders are awaiting Admin review.
+   Refund details, approval, rejection, and payout remain Admin-only.
 ========================================================= */
-
-/* Remove any previously pending refund that was caused by an
- * unsuccessful payment verification. */
-$pdo->exec("
-    UPDATE orders o
-    SET
-        o.refund_status = 'none',
-        o.refund_requested_at = NULL
-    WHERE o.status = 'cancelled'
-      AND LOWER(TRIM(COALESCE(o.cancellation_reason, ''))) =
-          'payment could not be verified'
-      AND o.refund_status = 'pending'
-");
-
-/* Backfill valid cancelled GCash orders with payment proof. */
-$pdo->exec("
-    UPDATE orders o
-    SET
-        o.refund_status = 'pending',
-        o.refund_requested_at = COALESCE(
-            o.refund_requested_at,
-            o.closed_at,
-            NOW()
-        )
-    WHERE o.status = 'cancelled'
-      AND o.refund_status = 'none'
-      AND LOWER(TRIM(COALESCE(o.payment_method, ''))) = 'gcash'
-      AND o.payment_screenshot IS NOT NULL
-      AND TRIM(o.payment_screenshot) <> ''
-      AND LOWER(TRIM(COALESCE(o.cancellation_reason, ''))) <>
-          'payment could not be verified'
-");
-
 $pendingRefundStmt = $pdo->query("
     SELECT COUNT(*)
     FROM orders
     WHERE status = 'cancelled'
       AND refund_status = 'pending'
       AND LOWER(TRIM(COALESCE(payment_method, ''))) = 'gcash'
-      AND payment_screenshot IS NOT NULL
-      AND TRIM(payment_screenshot) <> ''
-      AND LOWER(TRIM(COALESCE(cancellation_reason, ''))) <>
-          'payment could not be verified'
+      AND (
+          (payment_screenshot IS NOT NULL AND TRIM(payment_screenshot) <> '')
+          OR EXISTS (
+              SELECT 1
+              FROM payments p
+              WHERE p.order_id = orders.id
+                AND p.gcash_reference IS NOT NULL
+                AND p.gcash_reference <> ''
+          )
+      )
+      AND COALESCE(cancellation_reason, '') <> 'Customer did not collect order (No-show)'
 ");
 
 $pending_refund_count = (int)$pendingRefundStmt->fetchColumn();
@@ -1531,7 +1527,6 @@ if ($search !== '') {
 
 }
 
-
 /*
  * =========================================================
  * SEARCH CONDITIONS
@@ -1582,13 +1577,17 @@ if ($page > $total_pages) {
 
 $offset = ($page - 1) * $per_page;
 
-/* Active orders are shown newest first: the most recent order
- * appears at the top of the list. created_at is the primary order;
- * id breaks ties when orders share the exact same timestamp. */
-$order_by = 'o.created_at DESC, o.id DESC';
+/* Active orders are shown oldest first so the Staff sees
+ * earlier orders first in the pick-up workflow. */
+/* FIFO: the customer who placed the order first stays at the front.
+ * created_at is the primary queue order; id breaks ties when orders share
+ * the exact same timestamp. */
+$order_by = 'o.created_at ASC, o.id ASC';
 
 $orderSql = "
-    SELECT o.*
+    SELECT
+        o.*,
+        UNIX_TIMESTAMP(o.updated_at) AS updated_at_unix
     FROM orders o
     {$where_sql}
     ORDER BY {$order_by}
@@ -1602,7 +1601,7 @@ $orders = $orderStmt->fetchAll(PDO::FETCH_ASSOC);
 
 /*
  * Put the requested active order on the page where it belongs.
- * Active orders use created_at DESC, id DESC.
+ * Active orders use created_at ASC, id ASC.
  */
 if (
     $target_order_id > 0
@@ -1617,10 +1616,10 @@ if (
         FROM orders o
         WHERE o.status = ?
           AND (
-              o.created_at > ?
+              o.created_at < ?
               OR (
                   o.created_at = ?
-                  AND o.id >= ?
+                  AND o.id <= ?
               )
           )
     ");
@@ -1653,7 +1652,9 @@ if (
      * the old page of orders would still be fetched.
      */
     $orderSql = "
-        SELECT o.*
+        SELECT
+            o.*,
+            UNIX_TIMESTAMP(o.updated_at) AS updated_at_unix
         FROM orders o
         {$where_sql}
         ORDER BY {$order_by}
@@ -1670,7 +1671,13 @@ if (
    Cancelled records are always displayed in a separate
    section below the active workflow, newest cancellation first.
 ========================================================= */
-$cancelled_where = ["o.status = 'cancelled'"];
+$cancelled_where = [
+    $history_status === 'all'
+        ? "o.status IN ('completed', 'cancelled')"
+        : ($history_status === 'completed'
+            ? "o.status = 'completed'"
+            : "o.status = 'cancelled'")
+];
 $cancelled_params = [];
 
 switch ($cancelled_period) {
@@ -1725,6 +1732,26 @@ switch ($cancelled_period) {
         break;
 }
 
+/* GCash reference search: typed with or without spaces/dashes. */
+$historyGcashSearchSql = '';
+$historyGcashSearchDigits = preg_replace('/\D+/', '', $cancelled_search);
+
+if ($cancelled_search !== '' && strlen($historyGcashSearchDigits) >= 4) {
+    try {
+        $pdo->query('SELECT gcash_reference FROM payments LIMIT 0');
+        $historyGcashSearchSql = "
+            OR EXISTS (
+                SELECT 1
+                FROM payments gp
+                WHERE gp.order_id = o.id
+                  AND gp.gcash_reference LIKE ?
+            )
+        ";
+    } catch (Throwable $e) {
+        $historyGcashSearchSql = '';
+    }
+}
+
 if ($cancelled_search !== '') {
     $cancelled_where[] = "
         (
@@ -1733,6 +1760,7 @@ if ($cancelled_search !== '') {
             OR o.customer_name LIKE ?
             OR o.contact_number LIKE ?
             OR CAST(o.id AS CHAR) LIKE ?
+            {$historyGcashSearchSql}
         )
     ";
 
@@ -1743,6 +1771,10 @@ if ($cancelled_search !== '') {
     $cancelled_params[] = $cancelled_search_value;
     $cancelled_params[] = $cancelled_search_value;
     $cancelled_params[] = $cancelled_search_value;
+
+    if ($historyGcashSearchSql !== '') {
+        $cancelled_params[] = '%' . $historyGcashSearchDigits . '%';
+    }
 }
 
 $cancelled_where_sql =
@@ -1788,14 +1820,14 @@ $cancelled_orders =
     $cancelledOrderStmt->fetchAll(PDO::FETCH_ASSOC);
 
 /*
- * Put the requested cancelled order on the correct page.
- * Cancelled orders use closed_at DESC, id DESC.
+ * Put a requested cancelled order on the correct page using the exact same
+ * date/search filters and closed_at DESC, id DESC ordering as the history table.
  */
 if (
     $target_order_id > 0
     && isset($targetOrder)
     && $targetOrder
-    && (string)$targetOrder['status'] === 'cancelled'
+    && in_array((string)$targetOrder['status'], ['completed', 'cancelled'], true)
 ) {
     $targetClosedAt = (string)($targetOrder['closed_at'] ?? '');
 
@@ -1803,194 +1835,44 @@ if (
         $targetCancelledPageStmt = $pdo->prepare("
             SELECT COUNT(*)
             FROM orders o
-            WHERE o.status = 'cancelled'
-              AND o.closed_at >= ?
-              AND o.closed_at <= ?
+            {$cancelled_where_sql}
               AND (
                   o.closed_at > ?
-                  OR (
-                      o.closed_at = ?
-                      AND o.id >= ?
-                  )
+                  OR (o.closed_at = ? AND o.id >= ?)
               )
         ");
 
-        /*
-         * The selected month is already applied to the cancelled
-         * query above. Count only records in that same month that
-         * appear before the target in closed_at DESC, id DESC.
-         */
-        $monthStart = $cancelled_month . '-01 00:00:00';
-        $nextMonthStart = date(
-            'Y-m-d 00:00:00',
-            strtotime($monthStart . ' +1 month')
-        );
+        $targetCancelledPageStmt->execute(array_merge(
+            $cancelled_params,
+            [$targetClosedAt, $targetClosedAt, $target_order_id]
+        ));
 
-        $targetCancelledPageStmt = $pdo->prepare("
-            SELECT COUNT(*)
-            FROM orders o
-            WHERE o.status = 'cancelled'
-              AND o.closed_at >= ?
-              AND o.closed_at < ?
-              AND (
-                  o.closed_at > ?
-                  OR (
-                      o.closed_at = ?
-                      AND o.id >= ?
-                  )
-              )
-        ");
+        $targetCancelledPosition = (int)$targetCancelledPageStmt->fetchColumn();
 
-        $targetCancelledPageStmt->execute([
-            $monthStart,
-            $nextMonthStart,
-            $targetClosedAt,
-            $targetClosedAt,
-            $target_order_id
-        ]);
+        /* Only reposition when the target is included in the selected filters. */
+        if ($targetCancelledPosition > 0) {
+            $cancelled_page = max(
+                1,
+                (int)ceil($targetCancelledPosition / $cancelled_per_page)
+            );
 
-        $targetCancelledPosition = max(
-            1,
-            (int)$targetCancelledPageStmt->fetchColumn()
-        );
+            $cancelled_offset = ($cancelled_page - 1) * $cancelled_per_page;
 
-        $cancelled_page = max(
-            1,
-            (int)ceil(
-                $targetCancelledPosition / $cancelled_per_page
-            )
-        );
-
-        $cancelled_offset =
-            ($cancelled_page - 1) *
-            $cancelled_per_page;
-
-        $cancelledOrderStmt = $pdo->prepare($cancelledOrderSql);
-        $cancelledOrderStmt->execute($cancelled_params);
-
-        $cancelled_orders =
-            $cancelledOrderStmt->fetchAll(PDO::FETCH_ASSOC);
-    }
-}
-
-/* =========================================================
-   PENDING REFUNDS QUERY
-   Pending = current pending refunds.
-   Refunded / Rejected = refund history.
-   Search is optional and narrows whichever refund status is selected.
-========================================================= */
-$refund_history_mode =
-    $refund_status_filter !== 'pending'
-    || $refund_search !== '';
-
-$pending_refund_where = [
-    "o.status = 'cancelled'",
-    "LOWER(TRIM(COALESCE(o.payment_method, ''))) = 'gcash'",
-    "o.payment_screenshot IS NOT NULL",
-    "TRIM(o.payment_screenshot) <> ''",
-    "LOWER(TRIM(COALESCE(o.cancellation_reason, ''))) <> 'payment could not be verified'"
-];
-
-$pending_refund_params = [];
-
-/*
- * Always filter by the selected refund status.
- *
- * Pending:
- *   Shows all current pending refunds without a date restriction.
- *
- * Refunded / Rejected:
- *   Shows refund history using the selected history date filter.
- *
- * Search:
- *   Optional additional narrowing by order/customer details.
- */
-$pending_refund_where[] = 'o.refund_status = ?';
-$pending_refund_params[] = $refund_status_filter;
-
-if ($refund_history_mode) {
-
-    $refund_date_expression =
-        'COALESCE(o.refund_processed_at, o.refund_requested_at, o.closed_at)';
-
-    switch ($refund_period) {
-
-        case 'today':
-            $pending_refund_where[] =
-                "DATE({$refund_date_expression}) = CURDATE()";
-            break;
-
-        case 'last_week':
-            $pending_refund_where[] = "
-                DATE({$refund_date_expression}) BETWEEN
-                    DATE_SUB(CURDATE(), INTERVAL (WEEKDAY(CURDATE()) + 7) DAY)
-                    AND DATE_SUB(CURDATE(), INTERVAL (WEEKDAY(CURDATE()) + 1) DAY)
+            /* Rebuild LIMIT/OFFSET: the original SQL contains the old offset. */
+            $cancelledOrderSql = "
+                SELECT o.*
+                FROM orders o
+                {$cancelled_where_sql}
+                ORDER BY o.closed_at DESC, o.id DESC
+                LIMIT {$cancelled_per_page} OFFSET {$cancelled_offset}
             ";
-            break;
 
-        case 'last_month':
-            $pending_refund_where[] = "
-                DATE({$refund_date_expression}) BETWEEN
-                    DATE_FORMAT(
-                        DATE_SUB(CURDATE(), INTERVAL 1 MONTH),
-                        '%Y-%m-01'
-                    )
-                    AND LAST_DAY(
-                        DATE_SUB(CURDATE(), INTERVAL 1 MONTH)
-                    )
-            ";
-            break;
-
-        case 'specific_date':
-            $pending_refund_where[] =
-                "DATE({$refund_date_expression}) = ?";
-            $pending_refund_params[] = $refund_date;
-            break;
+            $cancelledOrderStmt = $pdo->prepare($cancelledOrderSql);
+            $cancelledOrderStmt->execute($cancelled_params);
+            $cancelled_orders = $cancelledOrderStmt->fetchAll(PDO::FETCH_ASSOC);
+        }
     }
 }
-
-if ($refund_search !== '') {
-
-    $pending_refund_where[] = "
-        (
-            o.order_number LIKE ?
-            OR o.claim_number LIKE ?
-            OR o.customer_name LIKE ?
-            OR o.contact_number LIKE ?
-            OR CAST(o.id AS CHAR) LIKE ?
-        )
-    ";
-
-    $refund_search_value = '%' . $refund_search . '%';
-
-    for ($i = 0; $i < 5; $i++) {
-        $pending_refund_params[] = $refund_search_value;
-    }
-}
-
-$pending_refund_where_sql =
-    'WHERE ' . implode(' AND ', $pending_refund_where);
-
-$pendingRefundTotalStmt = $pdo->prepare("
-    SELECT COUNT(*)
-    FROM orders o
-    {$pending_refund_where_sql}
-");
-$pendingRefundTotalStmt->execute($pending_refund_params);
-$pending_refund_filtered_count =
-    (int)$pendingRefundTotalStmt->fetchColumn();
-
-$pendingRefundOrderStmt = $pdo->prepare("
-    SELECT o.*
-    FROM orders o
-    {$pending_refund_where_sql}
-    ORDER BY COALESCE(o.refund_processed_at, o.refund_requested_at, o.closed_at) DESC,
-             o.id DESC
-");
-$pendingRefundOrderStmt->execute($pending_refund_params);
-
-$pending_refund_orders =
-    $pendingRefundOrderStmt->fetchAll(PDO::FETCH_ASSOC);
 
 /* =========================================================
    LOAD ORDER ITEMS FOR ACTIVE + PENDING REFUNDS + CANCELLED CURRENT PAGE
@@ -1999,7 +1881,6 @@ $order_items = [];
 
 $items_order_ids = array_values(array_unique(array_merge(
     array_map('intval', array_column($orders, 'id')),
-    array_map('intval', array_column($pending_refund_orders, 'id')),
     array_map('intval', array_column($cancelled_orders, 'id'))
 )));
 
@@ -2025,17 +1906,49 @@ if ($items_order_ids) {
 }
 
 /* =========================================================
+   LOAD GCASH REFERENCE NUMBERS (walk-in GCash payments)
+========================================================= */
+$gcash_references = [];
+
+if ($items_order_ids) {
+    try {
+        $refStmt = $pdo->prepare("
+            SELECT order_id, gcash_reference
+            FROM payments
+            WHERE order_id IN ({$placeholders})
+              AND gcash_reference IS NOT NULL
+              AND gcash_reference <> ''
+        ");
+        $refStmt->execute($items_order_ids);
+
+        foreach ($refStmt->fetchAll(PDO::FETCH_ASSOC) as $refRow) {
+            $gcash_references[(int)$refRow['order_id']] = (string)$refRow['gcash_reference'];
+        }
+    } catch (Throwable $e) {
+        /* The page still works before the gcash_reference column is added. */
+        error_log('Staff GCash reference lookup failed: ' . $e->getMessage());
+    }
+}
+
+function staffFormatGcashReference(string $reference): string
+{
+    /* 13 digits shown as 4-3-6 groups, the way GCash receipts print them. */
+    return preg_match('/^\d{13}$/', $reference)
+        ? substr($reference, 0, 4) . ' ' . substr($reference, 4, 3) . ' ' . substr($reference, 7)
+        : $reference;
+}
+
+/* =========================================================
    LOAD CANCELLATION ACTORS FOR CANCELLED ORDERS
 ========================================================= */
 $cancelled_by_roles = [];
 $cancelled_by_ids = [];
 
-if (!empty($cancelled_orders) || !empty($pending_refund_orders)) {
+if (!empty($cancelled_orders)) {
 
-    $history_order_ids = array_values(array_unique(array_merge(
-        array_map('intval', array_column($cancelled_orders, 'id')),
-        array_map('intval', array_column($pending_refund_orders, 'id'))
-    )));
+    $history_order_ids = array_values(array_unique(
+        array_map('intval', array_column($cancelled_orders, 'id'))
+    ));
 
     $history_placeholders = implode(
         ',',
@@ -2074,8 +1987,8 @@ if (!empty($cancelled_orders) || !empty($pending_refund_orders)) {
    DISPLAY HELPERS
 ========================================================= */
 $status_labels = [
-    'pending_verification' => 'Pending',
     'order_queue' => 'Order Queue',
+    'pending_verification' => 'Pending',
     'confirmed' => 'Confirmed',
     'preparing' => 'Preparing',
     'ready' => 'Ready for Pick-up',
@@ -2083,7 +1996,7 @@ $status_labels = [
     'cancelled' => 'Cancelled'
 ];
 
-function adminStatusLabel(
+function staffStatusLabel(
     string $status,
     array $labels
 ): string {
@@ -2091,7 +2004,7 @@ function adminStatusLabel(
         ?? ucwords(str_replace('_', ' ', $status));
 }
 
-function adminFormatTime(?string $value): string {
+function staffFormatTime(?string $value): string {
 
     if (!$value) {
         return '—';
@@ -2104,7 +2017,7 @@ function adminFormatTime(?string $value): string {
         : '—';
 }
 
-function adminFormatDateTime(?string $value): string {
+function staffFormatDateTime(?string $value): string {
 
     if (!$value) {
         return '—';
@@ -2117,7 +2030,7 @@ function adminFormatDateTime(?string $value): string {
         : '—';
 }
 
-function adminCancellationActorLabel(?string $role): string {
+function staffCancellationActorLabel(?string $role): string {
 
     $role = strtolower(trim((string)$role));
 
@@ -2130,7 +2043,7 @@ function adminCancellationActorLabel(?string $role): string {
     };
 }
 
-function adminAssetPath(?string $path): string {
+function staffAssetPath(?string $path): string {
 
     $path = trim((string)$path);
 
@@ -2156,7 +2069,7 @@ function adminAssetPath(?string $path): string {
 /* Name + ID number of the PWD / Senior cardholder.
    Uses the dedicated columns when they exist, otherwise reads the line
    "PWD ID: Name / 12345" that walk-in-order.php writes into orders.notes. */
-function adminDiscountCardholder(array $order): array
+function staffDiscountCardholder(array $order): array
 {
     $name = trim((string)($order['discount_id_name'] ?? ''));
     $idNumber = trim((string)($order['discount_id_number'] ?? ''));
@@ -2178,7 +2091,7 @@ function adminDiscountCardholder(array $order): array
     return ['name' => $name, 'id' => $idNumber];
 }
 
-function adminGetAddonPriceMap(): array
+function staffGetAddonPriceMap(): array
 {
     static $priceMap = null;
 
@@ -2208,13 +2121,13 @@ function adminGetAddonPriceMap(): array
          * The order details page must still render even if the add-ons
          * table cannot be read. The caller will use its safe fallback.
          */
-        error_log('Admin add-on price lookup failed: ' . $e->getMessage());
+        error_log('Staff add-on price lookup failed: ' . $e->getMessage());
     }
 
     return $priceMap;
 }
 
-function adminGetAddonPrice(string $name, float $fallback = 0.00): float
+function staffGetAddonPrice(string $name, float $fallback = 0.00): float
 {
     $normalizedName = strtolower(trim($name));
 
@@ -2222,14 +2135,14 @@ function adminGetAddonPrice(string $name, float $fallback = 0.00): float
         return $fallback;
     }
 
-    $priceMap = adminGetAddonPriceMap();
+    $priceMap = staffGetAddonPriceMap();
 
     return array_key_exists($normalizedName, $priceMap)
         ? (float)$priceMap[$normalizedName]
         : $fallback;
 }
 
-function adminGetAddons(?string $addons): array
+function staffGetAddons(?string $addons): array
 {
     if ($addons === null || trim($addons) === '') {
         return [];
@@ -2255,7 +2168,7 @@ function adminGetAddons(?string $addons): array
             if ($name !== '') {
                 $result[] = [
                     'name' => $name,
-                    'price' => adminGetAddonPrice(
+                    'price' => staffGetAddonPrice(
                         $name,
                         $defaultAddonPrice
                     )
@@ -2284,7 +2197,7 @@ function adminGetAddons(?string $addons): array
 
                 $price = is_numeric($savedPrice)
                     ? (float)$savedPrice
-                    : adminGetAddonPrice(
+                    : staffGetAddonPrice(
                         $name,
                         $defaultAddonPrice
                     );
@@ -2306,7 +2219,7 @@ function adminGetAddons(?string $addons): array
 
             $result[] = [
                 'name' => $name,
-                'price' => adminGetAddonPrice(
+                'price' => staffGetAddonPrice(
                     $name,
                     $defaultAddonPrice
                 )
@@ -2317,7 +2230,7 @@ function adminGetAddons(?string $addons): array
     return $result;
 }
 
-function adminOrdersUrl(array $overrides = []): string {
+function staffOrdersUrl(array $overrides = []): string {
 
     $query = [
         'status' => $GLOBALS['selected_status'],
@@ -2328,11 +2241,7 @@ function adminOrdersUrl(array $overrides = []): string {
         'cancelled_month' => $GLOBALS['cancelled_month'],
         'cancelled_page' => $GLOBALS['cancelled_page'],
         'cancelled_open' => $GLOBALS['cancelled_open'],
-        'refund_q' => $GLOBALS['refund_search'],
-        'refund_status' => $GLOBALS['refund_status_filter'],
-        'refund_period' => $GLOBALS['refund_period'],
-        'refund_date' => $GLOBALS['refund_date'],
-        'refund_open' => $GLOBALS['refund_open']
+        'history_status' => $GLOBALS['history_status'] === 'all' ? '' : $GLOBALS['history_status'],
     ];
 
     foreach ($overrides as $key => $value) {
@@ -2345,7 +2254,7 @@ function adminOrdersUrl(array $overrides = []): string {
         }
     }
 
-    return ($GLOBALS['orders_page'] ?? 'orders.php') . '?' . http_build_query($query);
+    return 'index.php?' . http_build_query($query);
 }
 
 $workflow_cards = [
@@ -2387,13 +2296,7 @@ $cancelled_period_labels = [
     'specific_month' => 'Specific month'
 ];
 
-$refund_period_labels = [
-    'today' => 'Today',
-    'last_week' => 'Last week',
-    'last_month' => 'Last month',
-    'specific_date' => 'Specific date'
-];
-
+$page_title = 'Staff Orders';
 require_once '../includes/header.php';
 ?>
 
@@ -2407,18 +2310,31 @@ require_once '../includes/header.php';
         background: #F7F5F2;
     }
 
-    .admin-orders-page {
+    .staff-orders-page {
         min-height: 100vh;
     }
 
-    /* Staff sidebar is fixed at 260px on desktop. */
-    .admin-main {
-        min-width: 0;
-        width: calc(100% - 260px);
-        margin-left: 260px;
+   .staff-main {
+    min-width: 0;
+}
+
+    /* The desktop sidebar is fixed, so reserve its width for the page content. */
+    @media (min-width: 992px) {
+        .staff-orders-page > .staff-main {
+            margin-left: 260px;
+            width: calc(100% - 260px);
+        }
     }
 
-    .admin-content {
+    /* The sidebar becomes an off-canvas drawer on smaller screens. */
+    @media (max-width: 991.98px) {
+        .staff-orders-page > .staff-main {
+            margin-left: 0;
+            width: 100%;
+        }
+    }
+
+    .staff-content {
         padding: 28px;
     }
 
@@ -2526,16 +2442,6 @@ require_once '../includes/header.php';
     /* Workflow colors */
     .workflow-card.workflow-pending_verification {
         border-color: #D8B56A;
-    }
-
-    .workflow-card.workflow-order_queue {
-        border-color: #C9B19D;
-    }
-
-    .workflow-card.workflow-order_queue:hover,
-    .workflow-card.workflow-order_queue.active {
-        background: #F7F1E8;
-        border-color: #8B6F5A;
     }
 
     .workflow-card.workflow-pending_verification:hover,
@@ -2655,11 +2561,6 @@ require_once '../includes/header.php';
         color: #8A5A00;
     }
 
-    .workflow-order_queue .workflow-icon {
-        background: #EEE4DB;
-        color: #6F4E37;
-    }
-
     .workflow-confirmed .workflow-icon {
         background: #E7F1FF;
         color: #285B9A;
@@ -2714,7 +2615,7 @@ require_once '../includes/header.php';
     ========================= */
     .active-orders-section {
         margin-top: 4px;
-        padding: 18px;
+        padding: 14px 16px;
         border: 2px solid #6F4E37;
         border-left: 4px solid #4A3525;
         border-radius: 14px;
@@ -2749,10 +2650,10 @@ require_once '../includes/header.php';
 
     .active-orders-heading {
         display: flex;
-        align-items: flex-end;
+        align-items: center;
         justify-content: space-between;
-        gap: 16px;
-        margin: 0;
+        gap: 12px;
+        margin: 0 0 8px;
     }
 
     .active-orders-title {
@@ -3469,7 +3370,20 @@ require_once '../includes/header.php';
         font-weight: 500;
     }
 
-    /* Order Queue status pill (same as the Admin side) */
+    /* Order Queue tab (new orders from walk-in, online and guest) */
+    .workflow-card.workflow-order_queue { border-color: #C9B19D; }
+    .workflow-card.workflow-order_queue:hover { background: #F7F0EA; border-color: #6F4E37; }
+    .workflow-card.workflow-order_queue.active {
+        background: #D9C2AE;
+        border-color: #4A3525;
+        box-shadow: 0 4px 14px rgba(74, 53, 37, .16);
+    }
+    .workflow-order_queue .workflow-icon { background: #EFE4DA; color: #6F4E37; }
+    .workflow-order_queue .workflow-label,
+    .workflow-order_queue .workflow-count { color: #6F4E37; }
+    .workflow-card.workflow-order_queue.active .workflow-icon { background: #F3E8DE; color: #4A3525; }
+    .workflow-card.workflow-order_queue.active .workflow-label,
+    .workflow-card.workflow-order_queue.active .workflow-count { color: #3F2D20; }
     .status-order_queue {
         background: #F3ECE5;
         color: #6F4E37;
@@ -3625,75 +3539,18 @@ require_once '../includes/header.php';
         color: #FFFFFF;
     }
 
-    /* =========================================================
-       CANCELLED ORDER PAGINATION
-       Matches the Notifications pagination pattern:
-       page 1 is always visible, nearby pages are shown, and
-       gaps are represented by an ellipsis.
-    ========================================================= */
-
+    /* Cancelled Orders keeps the same Bootstrap pagination appearance as
+       Active Orders and GCash Refunds. This class is retained for the
+       section-specific AJAX click delegation only. */
     .cancelled-pagination {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 6px;
         width: 100%;
-        margin-top: 22px;
-        padding-top: 18px;
         border-top: 1px solid #E6DEC9;
-        flex-wrap: wrap;
+        padding-top: 18px;
+        margin-top: 22px;
     }
 
-    .cancelled-pagination a,
-    .cancelled-pagination span {
-        min-width: 34px;
-        height: 34px;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        padding: 0 9px;
-        border-radius: 8px;
-        font-size: .78rem;
-        font-weight: 500;
-        text-decoration: none;
-        box-sizing: border-box;
-    }
-
-    .cancelled-pagination a {
-        color: #6F4E37;
-        background: #FFFFFF;
-        border: 1px solid #B8A08A;
-        transition:
-            background .15s ease,
-            border-color .15s ease,
-            color .15s ease;
-    }
-
-    .cancelled-pagination a:hover {
-        background: #F7F0E8;
-        border-color: #6F4E37;
-        color: #4A3525;
-    }
-
-    .cancelled-pagination .active {
-        background: #4A3525;
-        border: 1px solid #4A3525;
-        color: #FFFFFF;
-    }
-
-    .cancelled-pagination .disabled {
-        color: #A99B91;
-        background: #F5F1ED;
-        border: 1px solid #E6DEC9;
-        cursor: default;
-    }
-
-    .cancelled-pagination .ellipsis {
-        border: none;
-        background: transparent;
-        color: #8B7D73;
-        min-width: 22px;
-        padding: 0;
+    .cancelled-pagination .pagination {
+        margin-bottom: 0;
     }
 
     .receipt-paper {
@@ -3730,7 +3587,6 @@ require_once '../includes/header.php';
         font-weight: 500;
         margin-bottom: 12px;
     }
-
 
     .order-item-row:first-child {
         padding-top: 0;
@@ -3859,6 +3715,194 @@ require_once '../includes/header.php';
         border-radius: 10px;
     }
 
+    /*
+     * GCash review modal layout.
+     * Keep the dialog below the fixed Staff navbar and within the viewport.
+     * The header and footer stay visible while only the content scrolls.
+     */
+    #staffGcashReviewModal {
+        padding: 78px 12px 12px;
+        overflow-x: hidden;
+        overflow-y: auto;
+    }
+
+    #staffGcashReviewModal .gcash-review-dialog {
+        display: flex;
+        align-items: flex-start;
+        width: min(900px, calc(100vw - 24px));
+        max-width: 900px;
+        min-height: 0;
+        margin: 0 auto;
+    }
+
+    #staffGcashReviewModal .modal-content {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        max-height: calc(100vh - 90px);
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    #staffGcashReviewModal #staffGcashReviewForm {
+        display: flex;
+        flex: 1 1 auto;
+        flex-direction: column;
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    #staffGcashReviewModal .modal-header,
+    #staffGcashReviewModal .modal-footer {
+        flex: 0 0 auto;
+    }
+
+    #staffGcashReviewModal .modal-header {
+        align-items: flex-start;
+        gap: 12px;
+        padding: 15px 18px;
+        background: #FFFCF9;
+        border-bottom: 1px solid #D9C9BB;
+    }
+
+    #staffGcashReviewModal .modal-header .btn-close {
+        flex: 0 0 auto;
+        min-width: 36px;
+        min-height: 36px;
+        margin: 0 0 0 auto;
+        padding: 10px;
+        border-radius: 8px;
+        opacity: .8;
+    }
+
+    #staffGcashReviewModal .modal-body {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-x: hidden;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        padding: 16px 18px !important;
+    }
+
+    #staffGcashReviewModal .modal-footer {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        padding: 12px 18px;
+        background: #FFFCF9;
+        border-top: 1px solid #D9C9BB;
+    }
+
+    #staffGcashReviewModal .modal-footer .btn {
+        min-height: 42px;
+        white-space: normal;
+    }
+
+    .gcash-review-dialog {
+        max-width: 900px;
+    }
+
+    .gcash-review-summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+        padding: 13px 15px;
+        background: #F8F3EE;
+        border: 1px solid #E2D3C5;
+        border-radius: 10px;
+    }
+
+    .gcash-review-total {
+        color: #4A3525;
+        font-size: 1.45rem;
+        font-weight: 750;
+        line-height: 1.2;
+    }
+
+    .gcash-review-proof-frame {
+        min-height: 170px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 12px;
+        overflow: hidden;
+        background: #F7F7F7;
+        border: 1px solid #D8D0C9;
+        border-radius: 10px;
+    }
+
+    .gcash-review-image {
+        display: block;
+        width: auto;
+        max-width: 100%;
+        max-height: 36vh;
+        object-fit: contain;
+        border-radius: 8px;
+    }
+
+    #staffGcashVerifyButton:disabled {
+        opacity: .55;
+        cursor: not-allowed;
+    }
+
+    @media (max-width: 575.98px) {
+        #staffGcashReviewModal {
+            padding: 72px 8px 8px;
+        }
+
+        #staffGcashReviewModal .gcash-review-dialog {
+            width: 100%;
+            max-width: none;
+            margin: 0 auto;
+        }
+
+        #staffGcashReviewModal .modal-content {
+            max-height: calc(100vh - 80px);
+            border-radius: 12px;
+        }
+
+        #staffGcashReviewModal .modal-header {
+            padding: 12px 14px;
+        }
+
+        #staffGcashReviewModal .modal-body {
+            padding: 12px 14px !important;
+        }
+
+        #staffGcashReviewModal .modal-footer {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 8px;
+            padding: 10px 14px;
+        }
+
+        #staffGcashReviewModal .modal-footer > button {
+            width: 100%;
+            min-height: 44px;
+            margin: 0;
+        }
+
+        .gcash-review-image {
+            max-height: 30vh;
+        }
+    }
+
+    @media (max-height: 700px) and (min-width: 576px) {
+        #staffGcashReviewModal {
+            padding-top: 70px;
+        }
+
+        #staffGcashReviewModal .modal-content {
+            max-height: calc(100vh - 80px);
+        }
+
+        .gcash-review-image {
+            max-height: 28vh;
+        }
+    }
+
     .modal-content {
         border: 1px solid #8B6F5A;
         border-radius: 14px;
@@ -3876,6 +3920,29 @@ require_once '../includes/header.php';
         z-index: 2000;
         width: min(420px, calc(100vw - 32px));
         pointer-events: none;
+    }
+
+    /* Independent AJAX notifications stack instead of waiting in a FIFO queue. */
+    .orders-toast-stack {
+        position: fixed;
+        top: 88px;
+        right: 24px;
+        z-index: 2001;
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 10px;
+        width: min(420px, calc(100vw - 32px));
+        max-height: calc(100vh - 108px);
+        overflow-y: auto;
+        padding: 2px;
+        pointer-events: none;
+    }
+
+    .orders-toast-stack .orders-toast {
+        width: 100%;
+        flex: 0 0 auto;
+        pointer-events: auto;
     }
 
     .orders-toast {
@@ -3921,10 +3988,25 @@ require_once '../includes/header.php';
         background: #FCE3E3;
     }
 
+    .orders-toast-copy {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+
+    .orders-toast-title {
+        color: #2F6E3E;
+        font-size: .94rem;
+        line-height: 1.3;
+        font-weight: 700;
+    }
+
     .orders-toast-message {
         flex: 1;
-        padding-top: 3px;
-        font-size: .9rem;
+        padding-top: 1px;
+        font-size: .86rem;
         line-height: 1.45;
         font-weight: 500;
     }
@@ -3979,14 +4061,6 @@ require_once '../includes/header.php';
         to { transform: scaleX(0); }
     }
 
-    @media (max-width: 991.98px) {
-        /* Sidebar becomes off-canvas on tablet/mobile. */
-        .admin-main {
-            width: 100%;
-            margin-left: 0;
-        }
-    }
-
     @media (max-width: 768px) {
 
         .active-orders-section {
@@ -4012,7 +4086,7 @@ require_once '../includes/header.php';
             flex-direction: column;
         }
 
-        .admin-content {
+        .staff-content {
             padding: 18px;
         }
 
@@ -4066,6 +4140,13 @@ require_once '../includes/header.php';
             right: 14px;
             width: min(420px, calc(100vw - 28px));
         }
+
+        .orders-toast-stack {
+            top: 74px;
+            right: 14px;
+            width: min(420px, calc(100vw - 28px));
+            max-height: calc(100vh - 90px);
+        }
     }
 
     @media (max-width: 520px) {
@@ -4079,7 +4160,7 @@ require_once '../includes/header.php';
     ========================================================= */
     @media (max-width: 767.98px) {
 
-        .admin-content {
+        .staff-content {
             padding: 16px 12px 28px;
         }
 
@@ -4200,91 +4281,81 @@ require_once '../includes/header.php';
         }
     }
 
+    /* Print copy of the receipt (filled by printReceipt). Hidden on screen. */
+    #receiptPrintArea {
+        display: none;
+    }
+
     @media print {
 
-        body * {
-            visibility: hidden !important;
+        /* margin: 0 also removes the browser's date / URL / page-number lines. */
+        @page {
+            margin: 0;
         }
 
-        .modal.show[id^="receiptModal"],
-        .modal.show[id^="receiptModal"] * {
-            visibility: visible !important;
+        html,
+        body {
+            margin: 0 !important;
+            padding: 0 !important;
+            background: #FFFFFF !important;
+            overflow: visible !important;
+            height: auto !important;
+            min-height: 0 !important;
         }
 
-        .modal.show[id^="receiptModal"] {
-            position: absolute !important;
-            left: 0 !important;
-            top: 0 !important;
-            width: 100% !important;
-        }
-
-        .modal.show[id^="receiptModal"] .modal-header,
-        .modal.show[id^="receiptModal"] .modal-footer {
+        /* Print ONLY the receipt: everything else is removed from the layout,
+           so no blank second page is produced. */
+        body.is-printing-receipt > *:not(#receiptPrintArea) {
             display: none !important;
         }
 
-        .receipt-paper {
+        body.is-printing-receipt #receiptPrintArea {
+            display: block !important;
+            width: 80mm;
+            max-width: 100%;
+            margin: 0 auto !important;   /* centred on the page */
+            padding: 6mm 4mm;
+            box-sizing: border-box;
+            color: #000000;
+            font-size: 14px;
+            line-height: 1.45;
+        }
+
+        /* Bigger, easier-to-read text on the printed copy. */
+        #receiptPrintArea .small {
+            font-size: 13px !important;
+        }
+
+        #receiptPrintArea h4 {
+            font-size: 22px !important;
+        }
+
+        #receiptPrintArea .receipt-paper strong {
+            font-weight: 700;
+        }
+
+        #receiptPrintArea .receipt-paper {
+            width: 100% !important;
+            max-width: none !important;
+            margin: 0 !important;
+            padding: 0 !important;
             border: none !important;
-            max-width: 430px !important;
+            box-shadow: none !important;
+            background: #FFFFFF !important;
+        }
+
+        #receiptPrintArea .text-muted {
+            color: #333333 !important;
+        }
+
+        #receiptPrintArea .receipt-line {
+            border-top: 1px dashed #000000 !important;
         }
     }
     /* =========================================================
-   PREPARING PAGE-LEVEL LOADING INDICATOR
-========================================================= */
-
-.admin-preparing-loading-overlay {
-    position: fixed;
-    inset: 0;
-    z-index: 9999;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 24px;
-    background: rgba(44, 34, 30, .48);
-    backdrop-filter: blur(2px);
-}
-
-.admin-preparing-loading-box {
-    width: min(420px, calc(100vw - 32px));
-    padding: 26px 24px;
-    text-align: center;
-    background: #FFFFFF;
-    border: 2px solid #6F4E37;
-    border-radius: 16px;
-    box-shadow: 0 16px 40px rgba(44, 34, 30, .22);
-    color: #4A3525;
-}
-
-.admin-preparing-loading-spinner {
-    width: 44px;
-    height: 44px;
-    margin: 0 auto 14px;
-    border: 4px solid #E8DED3;
-    border-top-color: #6F4E37;
-    border-radius: 50%;
-    animation: adminPreparingSpin .8s linear infinite;
-}
-
-.admin-preparing-loading-title {
-    font-size: 1rem;
-    font-weight: 500;
-    margin-bottom: 6px;
-}
-
-.admin-preparing-loading-text {
-    color: #7B6D62;
-    font-size: .82rem;
-    line-height: 1.5;
-}
-
-@keyframes adminPreparingSpin {
-    to {
-        transform: rotate(360deg);
-    }
-}
-
-/* =========================================================
-   ADMIN ORDER PROCESSING LOADING INDICATOR
+   LEGACY PROCESSING STYLES
+   The current order workflow only applies a spinner to the
+   Start Preparing button; no order row is dimmed or covered.
 ========================================================= */
 
 .order-card {
@@ -4292,7 +4363,8 @@ require_once '../includes/header.php';
 }
 
 .order-card.processing-order {
-    pointer-events: none;
+    /* Keep the row visually marked without blocking text selection. */
+    user-select: text;
 }
 
 .order-processing-overlay {
@@ -4337,7 +4409,7 @@ require_once '../includes/header.php';
 
     border-radius: 50%;
 
-    animation: adminOrderSpin .75s linear infinite;
+    animation: staffOrderSpin .75s linear infinite;
 
     margin-bottom: 10px;
 }
@@ -4353,15 +4425,14 @@ require_once '../includes/header.php';
     font-size: .72rem;
 }
 
-@keyframes adminOrderSpin {
+@keyframes staffOrderSpin {
     to {
         transform: rotate(360deg);
     }
 }
 
-
 /* =========================================================
-   TARGET ORDER FROM ADMIN NOTIFICATION
+   TARGET ORDER FROM STAFF NOTIFICATION
 ========================================================= */
 .order-card.view-order-target {
     scroll-margin-top: 120px;
@@ -4374,9 +4445,6 @@ require_once '../includes/header.php';
     z-index: 5;
 }
 
-
-
-
     /* =========================================================
        TABULAR ACTIVE ORDERS
        Adviser-requested compact table view. Full order details
@@ -4388,7 +4456,7 @@ require_once '../includes/header.php';
         column-fill: initial;
     }
 
-    .admin-orders-table-wrap {
+    .staff-orders-table-wrap {
         width: 100%;
         overflow-x: auto;
         background: #FFFFFF;
@@ -4397,42 +4465,45 @@ require_once '../includes/header.php';
         box-shadow: 0 3px 12px rgba(74, 53, 37, .05);
     }
 
-    .admin-orders-table {
+    .staff-orders-table {
         width: 100%;
-        min-width: 1000px;
+        min-width: 1100px;
         border-collapse: separate;
         border-spacing: 0;
         table-layout: fixed;
     }
 
-    .admin-orders-table th:nth-child(1),
-    .admin-orders-table td:nth-child(1) { width: 14%; }
+    .staff-orders-table th:nth-child(1),
+    .staff-orders-table td:nth-child(1) { width: 12%; }
 
-    .admin-orders-table th:nth-child(2),
-    .admin-orders-table td:nth-child(2) { width: 11%; }
+    .staff-orders-table th:nth-child(2),
+    .staff-orders-table td:nth-child(2) { width: 8%; }
 
-    .admin-orders-table th:nth-child(3),
-    .admin-orders-table td:nth-child(3) { width: 17%; }
+    .staff-orders-table th:nth-child(3),
+    .staff-orders-table td:nth-child(3) { width: 13%; }
 
-    .admin-orders-table th:nth-child(4),
-    .admin-orders-table td:nth-child(4) { width: 12%; }
+    .staff-orders-table th:nth-child(4),
+    .staff-orders-table td:nth-child(4) { width: 9%; }
 
-    .admin-orders-table th:nth-child(5),
-    .admin-orders-table td:nth-child(5) { width: 9%; }
+    .staff-orders-table th:nth-child(5),
+    .staff-orders-table td:nth-child(5) { width: 7%; }
 
-    .admin-orders-table th:nth-child(6),
-    .admin-orders-table td:nth-child(6) { width: 13%; }
+    .staff-orders-table th:nth-child(6),
+    .staff-orders-table td:nth-child(6) { width: 8%; }
 
-    .admin-orders-table th:nth-child(7),
-    .admin-orders-table td:nth-child(7) { width: 8%; }
+    .staff-orders-table th:nth-child(7),
+    .staff-orders-table td:nth-child(7) { width: 7%; }
 
-    .admin-orders-table th:nth-child(8),
-    .admin-orders-table td:nth-child(8) { width: 9%; }
+    .staff-orders-table th:nth-child(8),
+    .staff-orders-table td:nth-child(8) { width: 11%; }
 
-    .admin-orders-table th:nth-child(9),
-    .admin-orders-table td:nth-child(9) { width: 12%; }
+    .staff-orders-table th:nth-child(9),
+    .staff-orders-table td:nth-child(9) { width: 14%; }
 
-    .admin-orders-table thead th {
+    .staff-orders-table th:nth-child(10),
+    .staff-orders-table td:nth-child(10) { width: 11%; }
+
+    .staff-orders-table thead th {
         background: #F5EEE7;
         color: #4A3525;
         font-size: .72rem;
@@ -4444,7 +4515,7 @@ require_once '../includes/header.php';
         border-bottom: 1px solid #8B6F5A;
     }
 
-    .admin-orders-table tbody tr.order-card {
+    .staff-orders-table tbody tr.order-card {
         display: table-row;
         width: auto;
         margin: 0;
@@ -4457,11 +4528,11 @@ require_once '../includes/header.php';
         -webkit-column-break-inside: auto;
     }
 
-    .admin-orders-table tbody tr.order-card:hover {
+    .staff-orders-table tbody tr.order-card:hover {
         background: #FDF8F2;
     }
 
-    .admin-orders-table tbody td {
+    .staff-orders-table tbody td {
         padding: 11px 10px;
         vertical-align: middle;
         border-bottom: 1px solid #E6DCCF;
@@ -4471,26 +4542,26 @@ require_once '../includes/header.php';
         background: inherit;
     }
 
-    .admin-orders-table tbody td > * {
+    .staff-orders-table tbody td > * {
         max-width: 100%;
     }
 
-    .admin-orders-table .order-table-primary {
+    .staff-orders-table .order-table-primary {
         overflow: hidden;
         text-overflow: ellipsis;
     }
 
-    .admin-orders-table .order-table-date,
-    .admin-orders-table .order-table-claim,
-    .admin-orders-table .order-table-payment,
-    .admin-orders-table .order-table-discount-badge,
-    .admin-orders-table .order-table-none,
-    .admin-orders-table .order-table-total,
-    .admin-orders-table .status-badge {
+    .staff-orders-table .order-table-date,
+    .staff-orders-table .order-table-claim,
+    .staff-orders-table .order-table-payment,
+    .staff-orders-table .order-table-discount-badge,
+    .staff-orders-table .order-table-none,
+    .staff-orders-table .order-table-total,
+    .staff-orders-table .status-badge {
         font-weight: 500;
     }
 
-    .admin-orders-table tbody tr:last-child td {
+    .staff-orders-table tbody tr:last-child td {
         border-bottom: 0;
     }
 
@@ -4556,22 +4627,143 @@ require_once '../includes/header.php';
         white-space: nowrap;
     }
 
+    .order-table-next-action-cell {
+        min-width: 0;
+        text-align: center;
+    }
+
+    .order-table-next-action-form {
+        display: flex;
+        justify-content: center;
+        width: auto;
+        margin: 0;
+    }
+
+    .btn-table-next-action {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 5px;
+        width: auto;
+        min-width: 0;
+        max-width: 164px;
+        min-height: 36px;
+        padding: 7px 10px;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        font-size: .72rem;
+        font-weight: 650;
+        line-height: 1.15;
+        text-align: center;
+        white-space: nowrap;
+        transition: background .18s ease, border-color .18s ease, color .18s ease, transform .18s ease;
+    }
+
+    /* Each next action uses its workflow/status color instead of one brown style. */
+    .btn-table-next-action.btn-pending-action {
+        background: #FFF1D6;
+        border-color: #D8B56A;
+        color: #8A5A00;
+    }
+    .btn-table-next-action.btn-confirm {
+        background: #DCEEFF;
+        border-color: #7FA9D0;
+        color: #286090;
+    }
+    .btn-table-next-action.btn-preparing {
+        background: #EEE0FF;
+        border-color: #AA88C9;
+        color: #7040A0;
+    }
+    .btn-table-next-action.btn-ready {
+        background: #DFF4E3;
+        border-color: #83B88E;
+        color: #28763B;
+    }
+    .btn-table-next-action.btn-complete {
+        background: #23733D;
+        border-color: #1E6535;
+        color: #FFFFFF;
+    }
+
+    .btn-table-next-action.btn-pending-action:hover,
+    .btn-table-next-action.btn-pending-action:focus-visible {
+        background: #F9E5B7;
+        border-color: #C49B45;
+        color: #754B00;
+    }
+    .btn-table-next-action.btn-confirm:hover,
+    .btn-table-next-action.btn-confirm:focus-visible {
+        background: #C7E2FB;
+        border-color: #5F91C0;
+        color: #214F80;
+    }
+    .btn-table-next-action.btn-preparing:hover,
+    .btn-table-next-action.btn-preparing:focus-visible {
+        background: #E1D0FA;
+        border-color: #9671BF;
+        color: #5A3289;
+    }
+    .btn-table-next-action.btn-ready:hover,
+    .btn-table-next-action.btn-ready:focus-visible {
+        background: #C8EBD0;
+        border-color: #6CA77A;
+        color: #1F6331;
+    }
+    .btn-table-next-action.btn-complete:hover,
+    .btn-table-next-action.btn-complete:focus-visible {
+        background: #1D6535;
+        border-color: #18572D;
+        color: #FFFFFF;
+    }
+
+    .btn-table-next-action:focus-visible,
+    .btn-view-details:focus-visible {
+        outline: 3px solid #C69C6D;
+        outline-offset: 2px;
+    }
+
+    .btn-table-next-action:disabled {
+        opacity: .65;
+        cursor: wait;
+    }
+
+    .order-table-details-cell,
     .order-table-actions-cell {
-        min-width: 145px;
+        min-width: 0;
+        text-align: right;
     }
 
     .btn-view-details {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: auto;
+        min-width: 112px;
+        min-height: 36px;
+        padding: 6px 10px;
         border: 1px solid #6F4E37;
+        border-radius: 8px;
         background: #FFFFFF;
         color: #6F4E37;
+        font-size: .70rem;
         font-weight: 500;
+        line-height: 1.2;
         white-space: nowrap;
     }
 
     .btn-view-details:hover {
-        background: #6F4E37;
+        background: #F3E8DB;
         border-color: #6F4E37;
-        color: #FFFFFF;
+        color: #4A3525;
+    }
+
+    .staff-orders-table tr.processing-order td {
+        opacity: .62;
+    }
+
+    .staff-orders-table tr.processing-order .btn-table-next-action {
+        opacity: 1;
     }
 
     .order-detail-actions {
@@ -4600,7 +4792,7 @@ require_once '../includes/header.php';
         max-width: 900px;
 
         /*
-         * The admin navbar is fixed above the page. Do not vertically
+         * The staff navbar is fixed above the page. Do not vertically
          * center a tall order modal behind it; start it below the navbar
          * and let only the modal body scroll.
          */
@@ -4658,39 +4850,39 @@ require_once '../includes/header.php';
         font-weight: 800 !important;
     }
 
-    .admin-details-items-table {
+    .staff-details-items-table {
         table-layout: fixed;
         width: 100%;
     }
 
-    .admin-details-items-table th:nth-child(1),
-    .admin-details-items-table td:nth-child(1) {
+    .staff-details-items-table th:nth-child(1),
+    .staff-details-items-table td:nth-child(1) {
         width: 54%;
     }
 
-    .admin-details-items-table th:nth-child(2),
-    .admin-details-items-table td:nth-child(2) {
+    .staff-details-items-table th:nth-child(2),
+    .staff-details-items-table td:nth-child(2) {
         width: 10%;
     }
 
-    .admin-details-items-table th:nth-child(3),
-    .admin-details-items-table td:nth-child(3) {
+    .staff-details-items-table th:nth-child(3),
+    .staff-details-items-table td:nth-child(3) {
         width: 18%;
     }
 
-    .admin-details-items-table th:nth-child(4),
-    .admin-details-items-table td:nth-child(4) {
+    .staff-details-items-table th:nth-child(4),
+    .staff-details-items-table td:nth-child(4) {
         width: 18%;
     }
 
-    .admin-details-items-table {
+    .staff-details-items-table {
         border: 1px solid #8B6F5A;
         border-radius: 10px;
         overflow: hidden;
         background: #FFFFFF;
     }
 
-    .admin-details-items-table th {
+    .staff-details-items-table th {
         background: #F7F1E8;
         color: #4A3525;
         font-size: .72rem;
@@ -4700,19 +4892,19 @@ require_once '../includes/header.php';
         border-bottom: 1px solid #8B6F5A;
     }
 
-    .admin-details-items-table td {
+    .staff-details-items-table td {
         color: #3F2D20 !important;
         font-size: .86rem !important;
         font-weight: 600;
         border-color: #E6DCCF;
     }
 
-    .admin-details-items-table th {
+    .staff-details-items-table th {
         color: #3F2D20 !important;
         font-size: .76rem !important;
     }
 
-    .admin-details-items-table td:first-child {
+    .staff-details-items-table td:first-child {
         font-size: .9rem !important;
         font-weight: 500;
         line-height: 1.4;
@@ -4791,7 +4983,7 @@ require_once '../includes/header.php';
         font-size: 1.05rem;
     }
 
-    .admin-orders-table tbody tr.view-order-target td {
+    .staff-orders-table tbody tr.view-order-target td {
         background: #FFF8D8;
         border-top: 1px solid #E4BD3E;
         border-bottom: 1px solid #E4BD3E;
@@ -4829,16 +5021,16 @@ require_once '../includes/header.php';
             gap: 14px;
         }
 
-        .admin-orders-table-wrap {
+        .staff-orders-table-wrap {
             border-radius: 10px;
         }
 
-        .admin-orders-table {
+        .staff-orders-table {
             min-width: 1020px;
         }
 
-        .admin-orders-table thead th,
-        .admin-orders-table tbody td {
+        .staff-orders-table thead th,
+        .staff-orders-table tbody td {
             padding: 10px;
         }
 
@@ -4847,7 +5039,6 @@ require_once '../includes/header.php';
             flex-direction: column;
         }
     }
-
 
     /* POLISHED ORDER DETAILS MODAL */
     .order-details-modal-dialog .modal-content {
@@ -4924,12 +5115,12 @@ require_once '../includes/header.php';
         margin-bottom: 0 !important;
     }
 
-    .order-details-modal-dialog .admin-details-items-table {
+    .order-details-modal-dialog .staff-details-items-table {
         border-color: #CDBBAA;
         border-radius: 10px;
     }
 
-    .order-details-modal-dialog .admin-details-items-table th {
+    .order-details-modal-dialog .staff-details-items-table th {
         background: #F7F1E8;
         color: #6A5647 !important;
         font-size: .68rem !important;
@@ -4937,14 +5128,14 @@ require_once '../includes/header.php';
         padding: 9px 10px;
     }
 
-    .order-details-modal-dialog .admin-details-items-table td {
+    .order-details-modal-dialog .staff-details-items-table td {
         color: #4A3525 !important;
         font-size: .80rem !important;
         font-weight: 400 !important;
         padding: 10px;
     }
 
-    .order-details-modal-dialog .admin-details-items-table td:first-child {
+    .order-details-modal-dialog .staff-details-items-table td:first-child {
         font-size: .84rem !important;
         font-weight: 500 !important;
     }
@@ -4978,7 +5169,7 @@ require_once '../includes/header.php';
     ========================================================= */
 
     /* ---- Shared safety ---- */
-    .admin-content { overflow-x: clip; }
+    .staff-content { overflow-x: clip; }
     .workflow-card { min-width: 0; }
     .workflow-label { overflow-wrap: anywhere; }
     .pagination { flex-wrap: wrap; justify-content: center; row-gap: 6px; }
@@ -4992,54 +5183,55 @@ require_once '../includes/header.php';
         .workflow-count { font-size: 1.3rem; }
     }
 
-    /* ---- Tablet & up: keep the table tabular, just more compact ---- */
+    /* ---- Tablet & compact desktop: keep the 10-column table readable ---- */
     @media (min-width: 576px) and (max-width: 1199.98px) {
-        .admin-orders-table { min-width: 720px; }
+        .staff-orders-table { min-width: 1100px; }
 
-        .admin-orders-table th:nth-child(1), .admin-orders-table td:nth-child(1) { width: 14%; }
-        .admin-orders-table th:nth-child(2), .admin-orders-table td:nth-child(2) { width: 9%; }
-        .admin-orders-table th:nth-child(3), .admin-orders-table td:nth-child(3) { width: 16%; }
-        .admin-orders-table th:nth-child(4), .admin-orders-table td:nth-child(4) { width: 12%; }
-        .admin-orders-table th:nth-child(5), .admin-orders-table td:nth-child(5) { width: 8%; }
-        .admin-orders-table th:nth-child(6), .admin-orders-table td:nth-child(6) { width: 12%; }
-        .admin-orders-table th:nth-child(7), .admin-orders-table td:nth-child(7) { width: 9%; }
-        .admin-orders-table th:nth-child(8), .admin-orders-table td:nth-child(8) { width: 10%; }
-        .admin-orders-table th:nth-child(9), .admin-orders-table td:nth-child(9) { width: 14%; }
+        .staff-orders-table th:nth-child(1), .staff-orders-table td:nth-child(1) { width: 13%; }
+        .staff-orders-table th:nth-child(2), .staff-orders-table td:nth-child(2) { width: 8%; }
+        .staff-orders-table th:nth-child(3), .staff-orders-table td:nth-child(3) { width: 14%; }
+        .staff-orders-table th:nth-child(4), .staff-orders-table td:nth-child(4) { width: 9%; }
+        .staff-orders-table th:nth-child(5), .staff-orders-table td:nth-child(5) { width: 7%; }
+        .staff-orders-table th:nth-child(6), .staff-orders-table td:nth-child(6) { width: 8%; }
+        .staff-orders-table th:nth-child(7), .staff-orders-table td:nth-child(7) { width: 7%; }
+        .staff-orders-table th:nth-child(8), .staff-orders-table td:nth-child(8) { width: 12%; }
+        .staff-orders-table th:nth-child(9), .staff-orders-table td:nth-child(9) { width: 11%; }
+        .staff-orders-table th:nth-child(10), .staff-orders-table td:nth-child(10) { width: 11%; }
 
-        .admin-orders-table thead th {
+        .staff-orders-table thead th {
             padding: 10px 6px;
             font-size: .64rem;
             letter-spacing: .2px;
             white-space: normal;
         }
 
-        .admin-orders-table tbody td {
+        .staff-orders-table tbody td {
             padding: 9px 6px;
             font-size: .72rem;
         }
 
-        .admin-orders-table .order-table-primary { white-space: normal; overflow-wrap: anywhere; }
-        .admin-orders-table .order-table-date { white-space: normal; font-size: .64rem; }
-        .admin-orders-table .order-table-claim { white-space: normal; overflow-wrap: anywhere; }
-        .admin-orders-table .order-table-payment { padding: 4px 6px; font-size: .64rem; min-height: 0; }
-        .admin-orders-table .order-table-discount-badge { white-space: normal; font-size: .62rem; }
-        .admin-orders-table .status-badge { padding: 4px 7px; font-size: .62rem; white-space: normal; text-align: center; }
-        .admin-orders-table .order-table-actions-cell { min-width: 0; }
+        .staff-orders-table .order-table-primary { white-space: normal; overflow-wrap: anywhere; }
+        .staff-orders-table .order-table-date { white-space: normal; font-size: .64rem; }
+        .staff-orders-table .order-table-claim { white-space: normal; overflow-wrap: anywhere; }
+        .staff-orders-table .order-table-payment { padding: 4px 6px; font-size: .64rem; min-height: 0; }
+        .staff-orders-table .order-table-discount-badge { white-space: normal; font-size: .62rem; }
+        .staff-orders-table .status-badge { padding: 4px 7px; font-size: .62rem; white-space: normal; text-align: center; }
+        .staff-orders-table .order-table-actions-cell { min-width: 0; }
 
-        .admin-orders-table .btn-view-details {
+        .staff-orders-table .btn-view-details {
             padding: 6px 8px;
             font-size: .68rem;
             white-space: normal;
             line-height: 1.2;
         }
-        .admin-orders-table .btn-view-details i { display: none; }
+        .staff-orders-table .btn-view-details i { display: none; }
     }
 
     /* ---- Tablet: 3 tabs per row, table scrolls inside its own box ---- */
     @media (min-width: 768px) and (max-width: 1199.98px) {
         .workflow-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-        .admin-content { padding: 22px; }
-        .admin-orders-table-wrap { -webkit-overflow-scrolling: touch; }
+        .staff-content { padding: 22px; }
+        .staff-orders-table-wrap { -webkit-overflow-scrolling: touch; }
         .order-details-modal-dialog { max-width: min(900px, calc(100vw - 32px)); }
     }
 
@@ -5058,7 +5250,7 @@ require_once '../includes/header.php';
        Tablets (576px and up) keep the real table. ---- */
     @media (max-width: 575.98px) {
         /* ---------- Orders table becomes a list of cards ---------- */
-        .admin-orders-table-wrap {
+        .staff-orders-table-wrap {
             overflow: visible;
             background: transparent;
             border: 0;
@@ -5066,14 +5258,14 @@ require_once '../includes/header.php';
             box-shadow: none;
         }
 
-        .admin-orders-table,
-        .admin-orders-table tbody {
+        .staff-orders-table,
+        .staff-orders-table tbody {
             display: block;
             width: 100%;
             min-width: 0;
         }
 
-        .admin-orders-table thead {
+        .staff-orders-table thead {
             position: absolute;
             width: 1px;
             height: 1px;
@@ -5082,7 +5274,7 @@ require_once '../includes/header.php';
             white-space: nowrap;
         }
 
-        .admin-orders-table tbody tr.order-card {
+        .staff-orders-table tbody tr.order-card {
             display: grid;
             grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 10px 14px;
@@ -5095,15 +5287,15 @@ require_once '../includes/header.php';
             box-shadow: 0 3px 12px rgba(74, 53, 37, .06);
         }
 
-        .admin-orders-table tbody tr.order-card:last-child { margin-bottom: 0; }
+        .staff-orders-table tbody tr.order-card:last-child { margin-bottom: 0; }
 
-        .admin-orders-table tbody tr.order-card.view-order-target {
+        .staff-orders-table tbody tr.order-card.view-order-target {
             background: #FFF8D8;
             outline: 3px solid #F1C40F;
             outline-offset: 2px;
         }
 
-        .admin-orders-table tbody tr.order-card td {
+        .staff-orders-table tbody tr.order-card td {
             display: block;
             width: auto;
             min-width: 0;
@@ -5115,7 +5307,7 @@ require_once '../includes/header.php';
         }
 
         /* Small labels above each value */
-        .admin-orders-table tbody tr.order-card td::before {
+        .staff-orders-table tbody tr.order-card td::before {
             display: block;
             margin-bottom: 3px;
             color: #7B6D62;
@@ -5125,30 +5317,38 @@ require_once '../includes/header.php';
             text-transform: uppercase;
         }
 
-        .admin-orders-table td:nth-child(2)::before { content: "Claim No."; }
-        .admin-orders-table td:nth-child(4)::before { content: "Pick-up"; }
-        .admin-orders-table td:nth-child(5)::before { content: "Payment"; }
-        .admin-orders-table td:nth-child(6)::before { content: "Discount"; }
-        .admin-orders-table td:nth-child(7)::before { content: "Total"; }
-        .admin-orders-table td:nth-child(8)::before { content: "Status"; }
+        .staff-orders-table td:nth-child(2)::before { content: "Claim No."; }
+        .staff-orders-table td:nth-child(4)::before { content: "Pick-up"; }
+        .staff-orders-table td:nth-child(5)::before { content: "Payment"; }
+        .staff-orders-table td:nth-child(6)::before { content: "Discount"; }
+        .staff-orders-table td:nth-child(7)::before { content: "Total"; }
+        .staff-orders-table td:nth-child(8)::before { content: "Status"; }
+        .staff-orders-table td:nth-child(9)::before { content: "Next Action"; }
+        .staff-orders-table td:nth-child(10)::before { content: "Details"; }
 
-        /* Order number + customer + action use the full card width */
-        .admin-orders-table tbody tr.order-card td:nth-child(1),
-        .admin-orders-table tbody tr.order-card td:nth-child(3),
-        .admin-orders-table tbody tr.order-card td:nth-child(9) {
+        /* Order number, customer, next action, and details use the full card width. */
+        .staff-orders-table tbody tr.order-card td:nth-child(1),
+        .staff-orders-table tbody tr.order-card td:nth-child(3),
+        .staff-orders-table tbody tr.order-card td:nth-child(9),
+        .staff-orders-table tbody tr.order-card td:nth-child(10) {
             grid-column: 1 / -1;
         }
 
-        .admin-orders-table tbody tr.order-card td:nth-child(1) {
+        .staff-orders-table tbody tr.order-card td:nth-child(1) {
             padding-bottom: 10px;
             border-bottom: 1px solid #E6DCCF;
         }
 
-        .admin-orders-table .order-table-primary { white-space: normal; }
-        .admin-orders-table .order-table-date { white-space: normal; }
-        .admin-orders-table .order-table-actions-cell { min-width: 0; }
+        .staff-orders-table .order-table-primary { white-space: normal; }
+        .staff-orders-table .order-table-date { white-space: normal; }
+        .staff-orders-table .order-table-next-action-cell,
+        .staff-orders-table .order-table-actions-cell,
+        .staff-orders-table .order-table-details-cell { min-width: 0; }
 
-        .admin-orders-table .btn-view-details {
+        .staff-orders-table .order-table-next-action-form { width: 100%; }
+
+        .staff-orders-table .btn-table-next-action,
+        .staff-orders-table .btn-view-details {
             width: 100%;
             min-height: 44px;
             display: inline-flex;
@@ -5164,7 +5364,7 @@ require_once '../includes/header.php';
             -webkit-overflow-scrolling: touch;
         }
 
-        .order-details-modal-dialog .admin-details-items-table { min-width: 520px; }
+        .order-details-modal-dialog .staff-details-items-table { min-width: 520px; }
 
         .order-detail-actions { flex-direction: column; align-items: stretch; }
 
@@ -5195,49 +5395,48 @@ require_once '../includes/header.php';
 
     /* ---- Very small phones ---- */
     @media (max-width: 380px) {
-        .admin-content { padding: 14px 10px 24px; }
+        .staff-content { padding: 14px 10px 24px; }
         .workflow-card { padding: 9px 10px; gap: 8px; }
         .workflow-icon { width: 32px; height: 32px; flex-basis: 32px; }
         .workflow-count { font-size: 1.1rem; }
-        .admin-orders-table tbody tr.order-card { grid-template-columns: 1fr; }
+        .staff-orders-table tbody tr.order-card { grid-template-columns: 1fr; }
     }
 
     /* =========================================================
-       ACTIVE ORDERS TABLE: NO BOX, NO SIDE SCROLL
-       - The outer box (border / rounded corners / background) is
-         removed; rows sit directly on the page.
-       - Table fits the screen width (no horizontal scrollbar) on
-         tablets/laptops/desktops (900px and up).
-       - Status stays on ONE line; View Details has its own room.
-       Phones (<576px) keep the card layout untouched.
+       ACTIVE ORDERS TABLE: SEPARATE NEXT ACTION + DETAILS
+       - The outer box stays visually light.
+       - Ten columns remain readable on wide screens; medium-width
+         devices scroll only inside the table area.
+       - Phones (<576px) use labeled order cards instead.
     ========================================================= */
     @media (min-width: 576px) {
-        .admin-orders-table-wrap {
+        .staff-orders-table-wrap {
             background: transparent;
             border: 0;
             border-radius: 0;
             box-shadow: none;
         }
 
-        .admin-orders-table th:nth-child(1), .admin-orders-table td:nth-child(1) { width: 13%; }
-        .admin-orders-table th:nth-child(2), .admin-orders-table td:nth-child(2) { width: 9%; }
-        .admin-orders-table th:nth-child(3), .admin-orders-table td:nth-child(3) { width: 14%; }
-        .admin-orders-table th:nth-child(4), .admin-orders-table td:nth-child(4) { width: 10%; }
-        .admin-orders-table th:nth-child(5), .admin-orders-table td:nth-child(5) { width: 7%; }
-        .admin-orders-table th:nth-child(6), .admin-orders-table td:nth-child(6) { width: 9%; }
-        .admin-orders-table th:nth-child(7), .admin-orders-table td:nth-child(7) { width: 7%; }
-        .admin-orders-table th:nth-child(8), .admin-orders-table td:nth-child(8) { width: 16%; }
-        .admin-orders-table th:nth-child(9), .admin-orders-table td:nth-child(9) { width: 15%; }
+        .staff-orders-table th:nth-child(1), .staff-orders-table td:nth-child(1) { width: 12%; }
+        .staff-orders-table th:nth-child(2), .staff-orders-table td:nth-child(2) { width: 8%; }
+        .staff-orders-table th:nth-child(3), .staff-orders-table td:nth-child(3) { width: 13%; }
+        .staff-orders-table th:nth-child(4), .staff-orders-table td:nth-child(4) { width: 9%; }
+        .staff-orders-table th:nth-child(5), .staff-orders-table td:nth-child(5) { width: 7%; }
+        .staff-orders-table th:nth-child(6), .staff-orders-table td:nth-child(6) { width: 8%; }
+        .staff-orders-table th:nth-child(7), .staff-orders-table td:nth-child(7) { width: 7%; }
+        .staff-orders-table th:nth-child(8), .staff-orders-table td:nth-child(8) { width: 11%; }
+        .staff-orders-table th:nth-child(9), .staff-orders-table td:nth-child(9) { width: 14%; }
+        .staff-orders-table th:nth-child(10), .staff-orders-table td:nth-child(10) { width: 11%; }
 
-        .admin-orders-table thead th:first-child { border-radius: 10px 0 0 10px; }
-        .admin-orders-table thead th:last-child { border-radius: 0 10px 10px 0; }
-        .admin-orders-table thead th { border-bottom: 0; padding: 12px 8px; white-space: normal; }
-        .admin-orders-table tbody td { padding: 12px 8px; }
+        .staff-orders-table thead th:first-child { border-radius: 10px 0 0 10px; }
+        .staff-orders-table thead th:last-child { border-radius: 0 10px 10px 0; }
+        .staff-orders-table thead th { border-bottom: 0; padding: 12px 8px; white-space: normal; }
+        .staff-orders-table tbody td { padding: 12px 8px; }
 
         /* Long values wrap inside their column instead of forcing a scrollbar */
-        .admin-orders-table .order-table-primary,
-        .admin-orders-table .order-table-date,
-        .admin-orders-table .order-table-claim {
+        .staff-orders-table .order-table-primary,
+        .staff-orders-table .order-table-date,
+        .staff-orders-table .order-table-claim {
             white-space: normal;
             overflow: visible;
             text-overflow: clip;
@@ -5245,9 +5444,9 @@ require_once '../includes/header.php';
         }
 
         /* Status: always one line, centered pill */
-        .admin-orders-table thead th:nth-child(8),
-        .admin-orders-table tbody td:nth-child(8) { padding-left: 16px; }
-        .admin-orders-table .status-badge {
+        .staff-orders-table thead th:nth-child(8),
+        .staff-orders-table tbody td:nth-child(8) { padding-left: 16px; }
+        .staff-orders-table .status-badge {
             display: inline-block;
             white-space: nowrap;
             text-align: center;
@@ -5255,38 +5454,42 @@ require_once '../includes/header.php';
             font-size: .7rem;
         }
 
-        /* View Details: one line, not squeezed against the edge */
-        .admin-orders-table thead th:nth-child(9),
-        .admin-orders-table tbody td:nth-child(9) { padding-right: 12px; }
-        .admin-orders-table .order-table-actions-cell { min-width: 0; }
-        .admin-orders-table .btn-view-details {
+        /* Keep the two actions visually separate and comfortably tappable. */
+        .staff-orders-table thead th:nth-child(9),
+        .staff-orders-table tbody td:nth-child(9) { padding-right: 8px; }
+        .staff-orders-table thead th:nth-child(10),
+        .staff-orders-table tbody td:nth-child(10) { padding-right: 12px; }
+        .staff-orders-table .order-table-next-action-cell,
+        .staff-orders-table .order-table-actions-cell { min-width: 0; }
+        .staff-orders-table .btn-table-next-action { padding: 7px 8px; font-size: .72rem; }
+        .staff-orders-table .btn-view-details {
             display: inline-flex;
             align-items: center;
             justify-content: center;
             white-space: nowrap;
-            padding: 7px 14px;
-            font-size: .78rem;
+            padding: 6px 7px;
+            font-size: .70rem;
             line-height: 1.2;
         }
     }
 
-    /* Laptops / desktops: table is exactly as wide as the page, no scrolling */
-    @media (min-width: 900px) {
-        .admin-orders-table-wrap { overflow: visible; }
-        .admin-orders-table { min-width: 0; width: 100%; }
+    /* Wide desktop screens can show all 10 columns without horizontal scrolling. */
+    @media (min-width: 1400px) {
+        .staff-orders-table-wrap { overflow: visible; }
+        .staff-orders-table { min-width: 0; width: 100%; }
     }
 
     /* Slightly smaller pills / button on narrower laptops so they still fit */
     @media (min-width: 900px) and (max-width: 1199.98px) {
-        .admin-orders-table .status-badge { padding: 5px 9px; font-size: .66rem; }
-        .admin-orders-table .btn-view-details { padding: 7px 10px; font-size: .74rem; }
+        .staff-orders-table .status-badge { padding: 5px 9px; font-size: .66rem; }
+        .staff-orders-table .btn-table-next-action { padding: 7px 8px; font-size: .70rem; }
+        .staff-orders-table .btn-view-details { padding: 7px 9px; font-size: .70rem; }
     }
 
-    /* Small tablets (576-899px) are too narrow to fit 9 columns,
-       so only here the table may scroll inside its own area. */
-    @media (min-width: 576px) and (max-width: 899.98px) {
-        .admin-orders-table-wrap { overflow-x: auto; }
-        .admin-orders-table { min-width: 800px; }
+    /* Tablets and compact laptops keep a readable table inside its own scroll area. */
+    @media (min-width: 576px) and (max-width: 1399.98px) {
+        .staff-orders-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+        .staff-orders-table { min-width: 1100px; }
     }
 
     /* =========================================================
@@ -5313,29 +5516,72 @@ require_once '../includes/header.php';
         margin-left: 4px;
     }
 
+
+    .staff-refund-count-notice {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        width: 100%;
+        margin: 0 0 22px;
+        padding: 14px 17px;
+        border: 1px solid #E6DEC9;
+        border-radius: 12px;
+        background: #fff;
+        box-shadow: 0 3px 12px rgba(74, 53, 37, .045);
+    }
+    .staff-refund-count-icon {
+        display: grid;
+        place-items: center;
+        flex: 0 0 42px;
+        width: 42px;
+        height: 42px;
+        border-radius: 10px;
+        background: #F1E8DC;
+        color: #6F4E37;
+        font-size: 1.2rem;
+    }
+    .staff-refund-count-copy { min-width: 0; flex: 1 1 auto; }
+    .staff-refund-count-copy strong { display: block; color: #4A3525; font-size: .9rem; }
+    .staff-refund-count-copy p { margin: 3px 0 0; color: #78695D; font-size: .78rem; line-height: 1.45; }
+    .staff-refund-count-value {
+        display: grid;
+        place-items: center;
+        flex: 0 0 40px;
+        min-width: 40px;
+        height: 40px;
+        padding: 0 8px;
+        border-radius: 20px;
+        background: #F7F0E9;
+        color: #4A3525;
+        font-size: .95rem;
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
+    }
+    @media (max-width: 575.98px) {
+        .staff-refund-count-notice { align-items: flex-start; gap: 10px; padding: 12px; }
+        .staff-refund-count-icon { flex-basis: 36px; width: 36px; height: 36px; }
+        .staff-refund-count-value { flex-basis: 34px; min-width: 34px; height: 34px; }
+    }
 </style>
 
-<div class="admin-orders-page">
+<div class="staff-orders-page">
 
     <!-- =====================================================
-         ADMIN SIDEBAR
-         This shared Orders layout uses the current user's sidebar.
+         STAFF SIDEBAR
+         Staff navigation is loaded from this folder.
     ====================================================== -->
     <?php require_once 'sidebar.php'; ?>
 
     <?php require_once 'navbar.php'; ?>
 
-    <main class="admin-main admin-content">
+    <main class="staff-main staff-content">
 
             <h2 class="fw-bold page-title mb-1">
                 <i class="bi bi-bag-check me-1"></i>
-                 Orders Queue
+                 Staff Order Queue
             </h2>
 
-            <p class="page-description mb-4">
-                Review, process, and monitor customer orders through the
-                complete pick-up workflow.
-            </p>
+           
 
             <?php
             /*
@@ -5423,13 +5669,13 @@ require_once '../includes/header.php';
                - Lives exactly DURATION ms (3.5s) from the moment the
                  action happened. Clicking tabs, or the same tab again and
                  again, NEVER extends or restarts that countdown.
-               - If the Admin switches tabs, the toast is carried to the next
+               - If the Staff switches tabs, the toast is carried to the next
                  page and continues from where it left off (the progress bar
                  resumes at the correct point instead of restarting).
                - Once the time is up it is gone for good.
             ========================================================= */
             (function () {
-                var STORAGE_KEY = 'adminOrdersActionToast';
+                var STORAGE_KEY = 'staffOrdersActionToast';
                 var DURATION    = 3500;  /* fixed lifetime after the action */
 
                 function readState() {
@@ -5554,13 +5800,16 @@ require_once '../includes/header.php';
             })();
             </script>
 
+
+
+
             <!-- WORKFLOW STATUS CARDS -->
             <div class="workflow-grid">
 
                 <?php foreach ($workflow_cards as $status_key => $workflow): ?>
 
                     <a
-                        href="<?= htmlspecialchars(adminOrdersUrl([
+                        href="<?= htmlspecialchars(staffOrdersUrl([
                             'status' => $status_key,
                             'page' => 1
                         ])) ?>"
@@ -5608,46 +5857,21 @@ require_once '../includes/header.php';
                     >
                 </div>
 
-                <div class="search-actions">
-
-                    <button
-                        type="submit"
-                        class="btn search-button"
-                    >
-                        <i class="bi bi-search me-1"></i>
-                        Search
-                    </button>
-
-                    <?php if ($search !== ''): ?>
-
+                <?php if ($search !== ''): ?>
+                    <div class="search-actions">
                         <a
-                            href="<?= htmlspecialchars(adminOrdersUrl(['q' => '', 'page' => 1])) ?>"
+                            href="<?= htmlspecialchars(staffOrdersUrl(['q' => '', 'page' => 1])) ?>"
                             class="btn clear-button"
                         >
                             Clear
                         </a>
-
-                    <?php endif; ?>
-
-                </div>
+                    </div>
+                <?php endif; ?>
 
             </form>
 
             <!-- ACTIVE ORDERS SECTION -->
             <section class="active-orders-section">
-
-                <div class="active-section-header">
-
-                    <div class="active-section-badge">
-                        <i class="bi bi-lightning-charge-fill"></i>
-                        Active Workflow
-                    </div>
-
-                    <div class="small text-muted">
-                        These orders still require store action.
-                    </div>
-
-                </div>
 
                 <!-- ACTIVE ORDERS HEADING -->
                 <div class="active-orders-heading">
@@ -5703,9 +5927,9 @@ require_once '../includes/header.php';
                 <!-- TABULAR ACTIVE ORDERS -->
                 <div class="orders-grid">
 
-                    <div class="admin-orders-table-wrap">
+                    <div class="staff-orders-table-wrap">
 
-                        <table class="admin-orders-table">
+                        <table class="staff-orders-table <?= $search !== '' ? 'with-status-column' : 'without-status-column' ?>">
 
                             <thead>
                                 <tr>
@@ -5716,11 +5940,43 @@ require_once '../includes/header.php';
                                     <th>Payment</th>
                                     <th>Discount</th>
                                     <th class="text-end">Total</th>
-                                    <th>Status</th>
-                                    <th class="text-end">Action</th>
+                                    <?php if ($search !== ''): ?>
+                                        <th>Status</th>
+                                    <?php endif; ?>
+                                    <th>Next Action</th>
+                                    <th class="text-end">Details</th>
                                 </tr>
                             </thead>
 
+                            <?php
+                            /* One clear next action per active workflow status. */
+                            $tableNextActions = [
+                                'order_queue' => [
+                                    'status' => 'confirmed',
+                                    'label' => 'Confirm Order',
+                                    'icon' => 'bi-check-circle',
+                                    'class' => 'btn-confirm'
+                                ],
+                                'confirmed' => [
+                                    'status' => 'preparing',
+                                    'label' => 'Start Preparing',
+                                    'icon' => 'bi-cup-hot',
+                                    'class' => 'btn-preparing'
+                                ],
+                                'preparing' => [
+                                    'status' => 'ready',
+                                    'label' => 'Mark Ready',
+                                    'icon' => 'bi-bag-check',
+                                    'class' => 'btn-ready'
+                                ],
+                                'ready' => [
+                                    'status' => 'completed',
+                                    'label' => 'Complete Order',
+                                    'icon' => 'bi-check2-all',
+                                    'class' => 'btn-complete'
+                                ]
+                            ];
+                            ?>
                             <tbody>
                                 <?php foreach ($orders as $order): ?>
 
@@ -5744,16 +6000,24 @@ require_once '../includes/header.php';
                                     >
 
                                         <td>
-                                            <div class="order-table-primary">
-                                                <?= htmlspecialchars(
-                                                    $order['order_number']
-                                                    ?: 'ORD-' . $order_id
-                                                ) ?>
-                                            </div>
-                                            <div class="order-table-date">
-                                                <?= htmlspecialchars(
-                                                    adminFormatDateTime($order['created_at'] ?? null)
-                                                ) ?>
+                                            <div class="order-table-mobile-header">
+                                                <div class="order-table-mobile-identification">
+                                                    <div class="order-table-primary">
+                                                        <?= htmlspecialchars(
+                                                            $order['order_number']
+                                                            ?: 'ORD-' . $order_id
+                                                        ) ?>
+                                                    </div>
+                                                    <div class="order-table-date">
+                                                        <?= htmlspecialchars(
+                                                            staffFormatDateTime($order['created_at'] ?? null)
+                                                        ) ?>
+                                                    </div>
+                                                </div>
+                                                <span class="order-table-mobile-claim">
+                                                    <span class="order-table-mobile-claim-label">Claim</span>
+                                                    <?= htmlspecialchars($order['claim_number'] ?: 'N/A') ?>
+                                                </span>
                                             </div>
                                         </td>
 
@@ -5787,7 +6051,7 @@ require_once '../includes/header.php';
                                             </div>
                                             <div class="order-table-date">
                                                 <?= htmlspecialchars(
-                                                    adminFormatTime($order['pickup_time'])
+                                                    staffFormatTime($order['pickup_time'])
                                                 ) ?>
                                             </div>
                                         </td>
@@ -5833,28 +6097,97 @@ require_once '../includes/header.php';
                                             </div>
                                         </td>
 
-                                        <td>
-                                            <span
-                                                class="status-badge status-<?= htmlspecialchars($status) ?>"
-                                            >
-                                                <?= htmlspecialchars(
-                                                    adminStatusLabel(
-                                                        $status,
-                                                        $status_labels
-                                                    )
-                                                ) ?>
-                                            </span>
+                                        <?php if ($search !== ''): ?>
+                                            <td>
+                                                <span
+                                                    class="status-badge status-<?= htmlspecialchars($status) ?>"
+                                                >
+                                                    <?= htmlspecialchars(
+                                                        staffStatusLabel(
+                                                            $status,
+                                                            $status_labels
+                                                        )
+                                                    ) ?>
+                                                </span>
+                                            </td>
+                                        <?php endif; ?>
+
+                                        <td class="order-table-next-action-cell">
+                                            <?php
+                                            $tableNextAction = $tableNextActions[$status] ?? null;
+                                            $rowPaymentProof = staffAssetPath(
+                                                $order['payment_screenshot'] ?? ''
+                                            );
+                                            $isPendingGcash = (
+                                                $status === 'pending_verification'
+                                                && strtolower(trim((string)$order['payment_method'])) === 'gcash'
+                                            );
+                                            ?>
+
+                                            <?php if ($isPendingGcash): ?>
+                                                <?php if ($rowPaymentProof !== ''): ?>
+                                                    <button
+                                                        type="button"
+                                                        class="btn action-btn btn-table-next-action btn-pending-action"
+                                                        data-staff-gcash-review
+                                                        data-order-id="<?= $order_id ?>"
+                                                        data-order-number="<?= htmlspecialchars($order['order_number'] ?: 'ORD-' . $order_id, ENT_QUOTES, 'UTF-8') ?>"
+                                                        data-claim-number="<?= htmlspecialchars($order['claim_number'] ?: 'N/A', ENT_QUOTES, 'UTF-8') ?>"
+                                                        data-total-amount="<?= number_format((float)$order['total_amount'], 2, '.', '') ?>"
+                                                        data-proof-src="<?= htmlspecialchars($rowPaymentProof, ENT_QUOTES, 'UTF-8') ?>"
+                                                        data-status-filter="<?= htmlspecialchars($selected_status, ENT_QUOTES, 'UTF-8') ?>"
+                                                        data-search="<?= htmlspecialchars($search, ENT_QUOTES, 'UTF-8') ?>"
+                                                        data-page="<?= (int)$page ?>"
+                                                        aria-label="Review GCash payment for <?= htmlspecialchars($order['order_number'] ?: 'order ' . $order_id, ENT_QUOTES, 'UTF-8') ?>"
+                                                    >
+                                                        <i class="bi bi-shield-check" aria-hidden="true"></i>
+                                                        Review GCash
+                                                    </button>
+                                                <?php else: ?>
+                                                    <button
+                                                        type="button"
+                                                        class="btn action-btn btn-table-next-action btn-pending-action"
+                                                        disabled
+                                                        title="This order has no uploaded GCash proof."
+                                                    >
+                                                        <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+                                                        Proof Missing
+                                                    </button>
+                                                <?php endif; ?>
+                                            <?php elseif ($status === 'pending_verification'): ?>
+                                                <span class="order-table-none">Payment details unavailable</span>
+                                            <?php elseif ($tableNextAction): ?>
+                                                <form method="POST" action="index.php" class="order-table-next-action-form">
+                                                    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($staff_csrf_token, ENT_QUOTES, 'UTF-8') ?>">
+                                                    <input type="hidden" name="order_id" value="<?= $order_id ?>">
+                                                    <input type="hidden" name="status" value="<?= htmlspecialchars($tableNextAction['status'], ENT_QUOTES, 'UTF-8') ?>">
+                                                    <input type="hidden" name="status_filter" value="<?= htmlspecialchars($selected_status, ENT_QUOTES, 'UTF-8') ?>">
+                                                    <input type="hidden" name="q" value="<?= htmlspecialchars($search, ENT_QUOTES, 'UTF-8') ?>">
+                                                    <input type="hidden" name="page" value="<?= (int)$page ?>">
+                                                    <button
+                                                        type="submit"
+                                                        name="update_status"
+                                                        value="1"
+                                                        class="btn action-btn btn-table-next-action <?= htmlspecialchars($tableNextAction['class'], ENT_QUOTES, 'UTF-8') ?>"
+                                                        aria-label="<?= htmlspecialchars($tableNextAction['label'] . ' for ' . ($order['order_number'] ?: 'order ' . $order_id), ENT_QUOTES, 'UTF-8') ?>"
+                                                    >
+                                                        <i class="bi <?= htmlspecialchars($tableNextAction['icon'], ENT_QUOTES, 'UTF-8') ?>" aria-hidden="true"></i>
+                                                        <?= htmlspecialchars($tableNextAction['label'], ENT_QUOTES, 'UTF-8') ?>
+                                                    </button>
+                                                </form>
+                                            <?php else: ?>
+                                                <span class="order-table-none">No action needed</span>
+                                            <?php endif; ?>
                                         </td>
 
-                                        <td class="text-end order-table-actions-cell">
+                                        <td class="text-end order-table-actions-cell order-table-details-cell">
                                             <button
                                                 type="button"
                                                 class="btn action-btn btn-view-details"
                                                 data-order-details-modal="orderDetailsModal<?= $order_id ?>"
-                                            
-                                                
+                                                aria-label="View details for <?= htmlspecialchars($order['order_number'] ?: 'order ' . $order_id, ENT_QUOTES, 'UTF-8') ?>"
                                             >
-                                                <i class="bi bi-eye me-1"></i>
+                                                <i class="bi bi-eye me-1" aria-hidden="true"></i>
                                                 View Details
                                             </button>
                                         </td>
@@ -5877,8 +6210,12 @@ require_once '../includes/header.php';
                         $order_id = (int)$order['id'];
                         $items = $order_items[$order_id] ?? [];
                         $status = (string)$order['status'];
-                        $payment_proof = adminAssetPath(
+                        $payment_proof = staffAssetPath(
                             $order['payment_screenshot'] ?? ''
+                        );
+                        $isPendingGcash = (
+                            $status === 'pending_verification'
+                            && strtolower(trim((string)($order['payment_method'] ?? ''))) === 'gcash'
                         );
 
                         $discount_type = strtolower(
@@ -5886,453 +6223,411 @@ require_once '../includes/header.php';
                         );
                         $discount_rate = (float)($order['discount_rate'] ?? 0);
                         $discount_amount = (float)($order['discount_amount'] ?? 0);
-                        $discount_holder = adminDiscountCardholder($order);
+                        $discount_holder = staffDiscountCardholder($order);
                         ?>
 
                         <!-- =================================================
-                             ORDER DETAILS MODAL
+                             ORDER DETAILS MODAL — SCREENSHOT-INSPIRED LAYOUT
                         ================================================== -->
+                        <?php
+                        $modalOrderNumber = trim((string)($order['order_number'] ?? ''));
+                        if ($modalOrderNumber === '') {
+                            $modalOrderNumber = 'ORD-' . $order_id;
+                        }
+                        $modalOrderParts = explode('-', $modalOrderNumber);
+                        $modalShortNumber = (string)end($modalOrderParts);
+                        if ($modalShortNumber === '') {
+                            $modalShortNumber = (string)$order_id;
+                        }
+
+                        $modalClaimNumber = trim((string)($order['claim_number'] ?? ''));
+                        $modalClaimNumber = $modalClaimNumber !== '' ? $modalClaimNumber : 'N/A';
+
+                        $modalPaymentMethod = strtolower(trim((string)($order['payment_method'] ?? '')));
+                        $modalPaymentLabel = $modalPaymentMethod !== ''
+                            ? strtoupper($modalPaymentMethod)
+                            : 'NOT SET';
+
+                        $modalCupCount = 0;
+                        foreach ($items as $modalItemForCount) {
+                            $modalCupCount += max(0, (int)($modalItemForCount['quantity'] ?? 0));
+                        }
+
+                        $modalProgressStep = match ($status) {
+                            'order_queue', 'confirmed' => 1,
+                            'preparing' => 2,
+                            'ready' => 3,
+                            'completed' => 4,
+                            default => 0
+                        };
+                        $modalProgressSteps = [
+                            ['label' => 'In queue', 'number' => 1],
+                            ['label' => 'Preparing', 'number' => 2],
+                            ['label' => 'Ready', 'number' => 3],
+                            ['label' => 'Picked up', 'number' => 4]
+                        ];
+
+                        $modalPickupDateTimestamp = !empty($order['pickup_date'])
+                            ? strtotime((string)$order['pickup_date'])
+                            : false;
+                        $modalPickupTimeTimestamp = !empty($order['pickup_time'])
+                            ? strtotime((string)$order['pickup_time'])
+                            : false;
+                        $modalPickupDateLabel = $modalPickupDateTimestamp
+                            ? date('M j, Y', $modalPickupDateTimestamp)
+                            : '—';
+                        $modalPickupTimeLabel = $modalPickupTimeTimestamp
+                            ? date('g:i A', $modalPickupTimeTimestamp)
+                            : staffFormatTime($order['pickup_time'] ?? null);
+
+                        $modalCreatedAtTimestamp = !empty($order['created_at'])
+                            ? strtotime((string)$order['created_at'])
+                            : false;
+                        $modalPlacedAtLabel = $modalCreatedAtTimestamp
+                            ? date('M j, Y, g:i A', $modalCreatedAtTimestamp)
+                            : staffFormatDateTime($order['created_at'] ?? null);
+
+                        $modalDiscountLabel = match ($discount_type) {
+                            'pwd' => 'PWD Discount',
+                            'senior' => 'Senior Citizen Discount',
+                            default => 'Discount (None)'
+                        };
+                        $modalSubtotal = (float)($order['subtotal'] ?? $order['total_amount'] ?? 0);
+                        $modalDiscountAmount = max(0, $discount_amount);
+                        $modalTotal = (float)($order['total_amount'] ?? 0);
+                        ?>
                         <div
-                            class="modal fade"
+                            class="modal fade order-details-modal"
                             id="orderDetailsModal<?= $order_id ?>"
                             tabindex="-1"
                             aria-hidden="true"
                         >
                             <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable order-details-modal-dialog">
-                                <div class="modal-content">
+                                <div class="modal-content order-modal-content">
 
-                                    <div class="modal-header details-header">
-                                        <div>
-                                            <h5 class="modal-title fw-bold" style="color:#4A3525;">
-                                                Order Details
-                                            </h5>
-                                            <div class="small text-muted">
-                                                <?= htmlspecialchars(
-                                                    $order['order_number'] ?: 'ORD-' . $order_id
-                                                ) ?>
-                                                • Claim #<?= htmlspecialchars(
-                                                    $order['claim_number'] ?: 'N/A'
-                                                ) ?>
+                                    <div class="modal-header details-header order-modal-header">
+                                        <div class="order-modal-heading">
+                                            <div class="order-modal-title-row">
+                                                <h5 class="modal-title order-modal-title">
+                                                    Order #<?= htmlspecialchars($modalShortNumber, ENT_QUOTES, 'UTF-8') ?>
+                                                </h5>
+                                                <span class="order-modal-status-pill status-<?= htmlspecialchars($status, ENT_QUOTES, 'UTF-8') ?>">
+                                                    <?= htmlspecialchars(staffStatusLabel($status, $status_labels), ENT_QUOTES, 'UTF-8') ?>
+                                                </span>
+                                            </div>
+                                            <div class="order-modal-subtitle">
+                                                <?= htmlspecialchars($modalOrderNumber, ENT_QUOTES, 'UTF-8') ?>
+                                                <span aria-hidden="true">·</span>
+                                                Claim #<?= htmlspecialchars($modalClaimNumber, ENT_QUOTES, 'UTF-8') ?>
+                                                <span aria-hidden="true">·</span>
+                                                Placed <?= htmlspecialchars($modalPlacedAtLabel, ENT_QUOTES, 'UTF-8') ?>
                                             </div>
                                         </div>
 
                                         <button
                                             type="button"
-                                            class="btn-close"
+                                            class="btn-close order-modal-close"
                                             data-bs-dismiss="modal"
                                             aria-label="Close"
                                         ></button>
+
+                                        <div class="order-modal-progress" aria-label="Order progress">
+                                            <?php foreach ($modalProgressSteps as $modalStep): ?>
+                                                <?php
+                                                $modalStepNumber = (int)$modalStep['number'];
+                                                $modalStepClass = $modalProgressStep > $modalStepNumber
+                                                    ? 'is-complete'
+                                                    : ($modalProgressStep === $modalStepNumber ? 'is-current' : '');
+                                                ?>
+                                                <div class="order-modal-progress-step <?= $modalStepClass ?>">
+                                                    <span class="order-modal-progress-marker">
+                                                        <?php if ($modalProgressStep > $modalStepNumber): ?>
+                                                            <i class="bi bi-check" aria-hidden="true"></i>
+                                                        <?php else: ?>
+                                                            <?= $modalStepNumber ?>
+                                                        <?php endif; ?>
+                                                    </span>
+                                                    <span class="order-modal-progress-label">
+                                                        <?= htmlspecialchars($modalStep['label'], ENT_QUOTES, 'UTF-8') ?>
+                                                    </span>
+                                                </div>
+                                            <?php endforeach; ?>
+                                        </div>
+
+                                        <?php if ($status === 'pending_verification'): ?>
+                                            <div class="order-modal-pending-note">
+                                                <i class="bi bi-info-circle me-1" aria-hidden="true"></i>
+                                                Payment verification is required before this order enters the queue.
+                                            </div>
+                                        <?php endif; ?>
                                     </div>
 
-                                    <div class="modal-body p-4">
+                                    <div class="modal-body order-modal-body">
+                                        <div class="order-modal-layout">
 
-                                        <!-- ORDER STATUS -->
-                                        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-4 order-status-row">
-                                            <div>
-                                                <div class="info-label">Current Status</div>
-                                                <div class="info-value fs-5">
-                                                    <?= htmlspecialchars(
-                                                        adminStatusLabel(
-                                                            $status,
-                                                            $status_labels
-                                                        )
-                                                    ) ?>
-                                                </div>
-                                            </div>
-
-                                            <span class="status-badge status-<?= htmlspecialchars($status) ?>">
-                                                <?= htmlspecialchars(
-                                                    adminStatusLabel(
-                                                        $status,
-                                                        $status_labels
-                                                    )
-                                                ) ?>
-                                            </span>
-                                        </div>
-
-                                        <hr class="order-modal-divider">
-
-                                        <!-- CUSTOMER / PICKUP / PAYMENT -->
-                                    
-                                        
-
-                                        <div class="row g-3 mb-4 order-info-grid">
-                                            <div class="col-md-3">
-                                                <div class="info-label">Customer</div>
-                                                <div class="info-value">
-                                                    <?= htmlspecialchars($order['customer_name']) ?>
-                                                </div>
-                                            </div>
-
-                                            <div class="col-md-3">
-                                                <div class="info-label">Contact Number</div>
-                                                <div class="info-value">
-                                                    <?= htmlspecialchars($order['contact_number']) ?>
-                                                </div>
-                                            </div>
-
-                                            <div class="col-md-3">
-                                                <div class="info-label">Pick-up Date</div>
-                                                <div class="info-value">
-                                                    <?= htmlspecialchars($order['pickup_date']) ?>
-                                                </div>
-                                            </div>
-
-                                            <div class="col-md-3">
-                                                <div class="info-label">Pick-up Time</div>
-                                                <div class="info-value">
-                                                    <?= htmlspecialchars(
-                                                        adminFormatTime($order['pickup_time'])
-                                                    ) ?>
-                                                </div>
-                                            </div>
-
-                                            <div class="col-md-3">
-                                                <div class="info-label">Payment Method</div>
-                                                <div class="info-value text-uppercase <?php
-                                                    echo strtolower(trim((string)$order['payment_method'])) === 'gcash'
-                                                        ? 'payment-gcash'
-                                                        : '';
-                                                ?>">
-                                                    <?= htmlspecialchars($order['payment_method']) ?>
-                                                </div>
-                                            </div>
-
-                                            <div class="col-md-3">
-                                                <div class="info-label">Placed At</div>
-                                                <div class="info-value">
-                                                    <?= htmlspecialchars(
-                                                        adminFormatDateTime($order['created_at'] ?? null)
-                                                    ) ?>
-                                                </div>
-                                            </div>
-
-                                            <div class="col-md-3">
-                                                <div class="info-label">Discount Type</div>
-                                                <div class="info-value">
-                                                    <?php if ($discount_type === 'pwd'): ?>
-                                                        PWD
-                                                    <?php elseif ($discount_type === 'senior'): ?>
-                                                        Senior Citizen
-                                                    <?php else: ?>
-                                                        None
-                                                    <?php endif; ?>
-                                                </div>
-                                            </div>
-
-                                            <div class="col-md-3">
-                                                <div class="info-label">Discount Rate</div>
-                                                <div class="info-value">
-                                                    <?= number_format($discount_rate, 0) ?>%
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        <!-- DISCOUNT SUMMARY -->
-                                        <?php if (
-                                            in_array($discount_type, ['pwd', 'senior'], true)
-                                            && $discount_amount > 0
-                                        ): ?>
-                                            <div class="discount-summary-box mb-4">
-                                                <div>
-                                                    <div class="info-label">
-                                                        <?= $discount_type === 'pwd' ? 'PWD Discount' : 'Senior Citizen Discount' ?>
-                                                    </div>
-                                                    <div class="discount-summary-title">
-                                                        <?= number_format($discount_rate, 0) ?>% discount applied
-                                                    </div>
+                                            <!-- LEFT: ITEMS AND TOTAL -->
+                                            <section class="order-modal-items-column" aria-label="Ordered items">
+                                                <div class="order-modal-section-heading">
+                                                    ITEMS (<?= count($items) ?>) <span>·</span> <?= $modalCupCount ?> CUPS
                                                 </div>
 
-                                                <div class="discount-summary-amount">
-                                                    -₱<?= number_format($discount_amount, 2) ?>
-                                                </div>
-                                            </div>
-
-                                            <?php if ($discount_holder['id'] !== ''): ?>
-                                                <div class="row g-3 mb-4">
-                                                    <div class="col-md-6">
-                                                        <div class="info-label">Name on ID</div>
-                                                        <div class="info-value"><?= htmlspecialchars($discount_holder['name']) ?></div>
-                                                    </div>
-                                                    <div class="col-md-6">
-                                                        <div class="info-label">ID Number</div>
-                                                        <div class="info-value"><?= htmlspecialchars($discount_holder['id']) ?></div>
-                                                    </div>
-                                                </div>
-                                            <?php endif; ?>
-                                        <?php endif; ?>
-
-                                        <hr class="order-modal-divider">
-
-                                        <?php if ($items): ?>
-                                            <div class="table-responsive mb-4">
-                                                <table class="table admin-details-items-table align-middle mb-0">
-                                                    <thead>
-                                                        <tr>
-                                                            <th>Item</th>
-                                                            <th class="text-center">Qty</th>
-                                                            <th class="text-end">Unit Price</th>
-                                                            <th class="text-end">Subtotal</th>
-                                                        </tr>
-                                                    </thead>
-
-                                                    <tbody>
+                                                <?php if ($items): ?>
+                                                    <div class="order-modal-item-list">
                                                         <?php foreach ($items as $item): ?>
                                                             <?php
-                                                            $customizations = [];
-
-                                                            if (!empty($item['size'])) {
-                                                                $customizations[] =
-                                                                    'Size: ' . $item['size'];
+                                                            $itemQuantity = max(0, (int)($item['quantity'] ?? 0));
+                                                            $itemUnitPrice = (float)($item['unit_price'] ?? 0);
+                                                            $itemLineTotal = isset($item['subtotal'])
+                                                                ? (float)$item['subtotal']
+                                                                : (isset($item['total_price'])
+                                                                    ? (float)$item['total_price']
+                                                                    : ($itemUnitPrice * $itemQuantity));
+                                                            $itemCustomizations = [];
+                                                            if (trim((string)($item['size'] ?? '')) !== '') {
+                                                                $itemCustomizations[] = trim((string)$item['size']);
                                                             }
-
-                                                            if (!empty($item['sugar_level'])) {
-                                                                $customizations[] =
-                                                                    'Sugar: ' . $item['sugar_level'];
+                                                            if (trim((string)($item['sugar_level'] ?? '')) !== '') {
+                                                                $itemCustomizations[] = trim((string)$item['sugar_level']) . ' sugar';
                                                             }
-
-                                                            $item_discount_type = strtolower(
-                                                                trim((string)($item['discount_type'] ?? 'none'))
-                                                            );
-                                                            $item_discount_rate = (float)($item['discount_rate'] ?? 0);
-                                                            $item_discount_amount = (float)($item['discount_amount'] ?? 0);
-
-                                                            if (
-                                                                in_array($item_discount_type, ['pwd', 'senior'], true)
-                                                                && $item_discount_amount > 0
-                                                            ) {
-                                                                $customizations[] =
-                                                                    ($item_discount_type === 'pwd' ? 'PWD' : 'Senior Citizen')
-                                                                    . ' Discount: '
-                                                                    . number_format($item_discount_rate, 0)
-                                                                    . '% (-₱'
-                                                                    . number_format($item_discount_amount, 2)
-                                                                    . ')';
+                                                            $itemDiscountType = strtolower(trim((string)($item['discount_type'] ?? 'none')));
+                                                            $itemDiscountRate = (float)($item['discount_rate'] ?? 0);
+                                                            $itemDiscountAmount = (float)($item['discount_amount'] ?? 0);
+                                                            if (in_array($itemDiscountType, ['pwd', 'senior'], true) && $itemDiscountAmount > 0) {
+                                                                $itemCustomizations[] = ($itemDiscountType === 'pwd' ? 'PWD' : 'Senior')
+                                                                    . ' ' . number_format($itemDiscountRate, 0) . '%';
                                                             }
-
-                                                            $addonDetails = adminGetAddons(
-                                                                $item['addons'] ?? null
-                                                            );
+                                                            $modalItemAddons = staffGetAddons($item['addons'] ?? null);
                                                             ?>
+                                                            <article class="order-modal-item">
+                                                                <div class="order-modal-item-quantity">
+                                                                    <?= $itemQuantity ?>×
+                                                                </div>
 
-                                                            <tr>
-                                                                <td>
-                                                                    <div class="fw-semibold">
-                                                                        <?= htmlspecialchars($item['product_name']) ?>
+                                                                <div class="order-modal-item-main">
+                                                                    <div class="order-modal-item-name">
+                                                                        <?= htmlspecialchars($item['product_name'] ?? 'Item', ENT_QUOTES, 'UTF-8') ?>
                                                                     </div>
 
-                                                                    <?php if ($customizations): ?>
-                                                                        <div class="item-customization">
-                                                                            <?= htmlspecialchars(
-                                                                                implode(' • ', $customizations)
-                                                                            ) ?>
+                                                                    <?php if ($itemCustomizations): ?>
+                                                                        <div class="order-modal-item-tags">
+                                                                            <?php foreach ($itemCustomizations as $customization): ?>
+                                                                                <span><?= htmlspecialchars($customization, ENT_QUOTES, 'UTF-8') ?></span>
+                                                                            <?php endforeach; ?>
                                                                         </div>
                                                                     <?php endif; ?>
 
-                                                                    <?php if ($addonDetails): ?>
-                                                                        <div class="order-addon-label mt-2">
-                                                                            Add-ons
-                                                                        </div>
-
-                                                                        <div class="order-addon-list">
-                                                                            <?php foreach ($addonDetails as $addonDetail): ?>
-                                                                                <span class="order-addon-chip">
-                                                                                    <?= htmlspecialchars($addonDetail['name']) ?>
-                                                                                    <span class="order-addon-chip-price">
-                                                                                        +₱<?= number_format(
-                                                                                            (float)$addonDetail['price'],
-                                                                                            2
-                                                                                        ) ?>
-                                                                                    </span>
+                                                                    <?php if ($modalItemAddons): ?>
+                                                                        <div class="order-modal-item-addons">
+                                                                            <?php foreach ($modalItemAddons as $addonDetail): ?>
+                                                                                <span>
+                                                                                    <?= htmlspecialchars($addonDetail['name'] ?? 'Add-on', ENT_QUOTES, 'UTF-8') ?>
+                                                                                    <?php if (isset($addonDetail['price'])): ?>
+                                                                                        (+₱<?= number_format((float)$addonDetail['price'], 2) ?>)
+                                                                                    <?php endif; ?>
                                                                                 </span>
                                                                             <?php endforeach; ?>
                                                                         </div>
                                                                     <?php endif; ?>
-                                                                </td>
+                                                                </div>
 
-                                                                <td class="text-center">
-                                                                    <?= (int)$item['quantity'] ?>
-                                                                </td>
-
-                                                                <td class="text-end">
-                                                                    ₱<?= number_format(
-                                                                        (float)$item['unit_price'],
-                                                                        2
-                                                                    ) ?>
-                                                                </td>
-
-                                                                <td class="text-end fw-semibold">
-                                                                    ₱<?= number_format(
-                                                                        (float)$item['subtotal'],
-                                                                        2
-                                                                    ) ?>
-                                                                </td>
-                                                            </tr>
+                                                                <div class="order-modal-item-price">
+                                                                    <strong>₱<?= number_format($itemLineTotal, 2) ?></strong>
+                                                                    <small>₱<?= number_format($itemUnitPrice, 2) ?> each</small>
+                                                                </div>
+                                                            </article>
                                                         <?php endforeach; ?>
-                                                    </tbody>
-                                                </table>
-                                            </div>
-                                        <?php else: ?>
-                                            <div class="alert alert-warning small">
-                                                No order items were found for this order.
-                                            </div>
-                                        <?php endif; ?>
+                                                    </div>
+                                                <?php else: ?>
+                                                    <div class="order-modal-empty-items">
+                                                        No order items were found for this order.
+                                                    </div>
+                                                <?php endif; ?>
 
-                                        <!-- ORDER SUMMARY -->
-                                        <div class="order-detail-summary-box">
-                                            <div class="d-flex justify-content-between small mb-2">
-                                                <span>Subtotal</span>
-                                                <strong>
-                                                    ₱<?= number_format(
-                                                        (float)$order['subtotal'],
-                                                        2
-                                                    ) ?>
-                                                </strong>
-                                            </div>
-
-                                            <?php if (
-                                                in_array($discount_type, ['pwd', 'senior'], true)
-                                                && $discount_amount > 0
-                                            ): ?>
-                                                <div class="d-flex justify-content-between small mb-2 discount-summary-line">
-                                                    <span>
-                                                        <?= $discount_type === 'pwd' ? 'PWD Discount' : 'Senior Citizen Discount' ?>
-                                                        (<?= number_format($discount_rate, 0) ?>%)
-                                                    </span>
-                                                    <strong>
-                                                        -₱<?= number_format($discount_amount, 2) ?>
-                                                    </strong>
+                                                <!-- TOTAL SUMMARY -->
+                                                <div class="order-modal-total-card">
+                                                    <div class="order-modal-total-line">
+                                                        <span>Subtotal</span>
+                                                        <strong>₱<?= number_format($modalSubtotal, 2) ?></strong>
+                                                    </div>
+                                                    <div class="order-modal-total-line">
+                                                        <span>
+                                                            <?= htmlspecialchars($modalDiscountLabel, ENT_QUOTES, 'UTF-8') ?>
+                                                            <?php if (in_array($discount_type, ['pwd', 'senior'], true) && $discount_amount > 0): ?>
+                                                                (<?= number_format($discount_rate, 0) ?>%)
+                                                            <?php endif; ?>
+                                                        </span>
+                                                        <strong>−₱<?= number_format($modalDiscountAmount, 2) ?></strong>
+                                                    </div>
+                                                    <div class="order-modal-total-divider"></div>
+                                                    <div class="order-modal-total-final">
+                                                        <div>
+                                                            <strong><?= $modalPaymentMethod === 'cash' ? 'Total to collect' : 'Order total' ?></strong>
+                                                            <small>
+                                                                <?php if ($modalPaymentMethod === 'cash'): ?>
+                                                                    Pay with cash on pick-up
+                                                                <?php elseif ($modalPaymentMethod === 'gcash' && $status === 'pending_verification'): ?>
+                                                                    Awaiting GCash payment verification
+                                                                <?php elseif ($modalPaymentMethod === 'gcash'): ?>
+                                                                    GCash payment
+                                                                <?php else: ?>
+                                                                    Payment method not specified
+                                                                <?php endif; ?>
+                                                            </small>
+                                                        </div>
+                                                        <span>₱<?= number_format($modalTotal, 2) ?></span>
+                                                    </div>
                                                 </div>
-                                            <?php endif; ?>
+                                            </section>
 
-                                            <div class="order-detail-summary-divider"></div>
+                                            <!-- RIGHT: CUSTOMER, PICK-UP, PAYMENT -->
+                                            <aside class="order-modal-side-column">
+                                                <section class="order-modal-info-section">
+                                                    <div class="order-modal-section-heading">CUSTOMER</div>
+                                                    <div class="order-modal-info-card">
+                                                        <div class="order-modal-customer-name">
+                                                            <?= htmlspecialchars(trim((string)($order['customer_name'] ?? '')) ?: 'Guest', ENT_QUOTES, 'UTF-8') ?>
+                                                        </div>
+                                                        <div class="order-modal-contact">
+                                                            <i class="bi bi-telephone" aria-hidden="true"></i>
+                                                            <span><?= htmlspecialchars(trim((string)($order['contact_number'] ?? '')) ?: 'No contact number', ENT_QUOTES, 'UTF-8') ?></span>
+                                                        </div>
+                                                    </div>
+                                                </section>
 
-                                            <div class="d-flex justify-content-between">
-                                                <span class="fw-bold">Total</span>
-                                                <span class="fw-bold order-detail-final-total">
-                                                    ₱<?= number_format(
-                                                        (float)$order['total_amount'],
-                                                        2
-                                                    ) ?>
-                                                </span>
-                                            </div>
+                                                <section class="order-modal-info-section">
+                                                    <div class="order-modal-section-heading">PICK-UP</div>
+                                                    <div class="order-modal-info-card order-modal-pickup-card">
+                                                        <div>
+                                                            <small>Date</small>
+                                                            <strong><?= htmlspecialchars($modalPickupDateLabel, ENT_QUOTES, 'UTF-8') ?></strong>
+                                                        </div>
+                                                        <div class="text-end">
+                                                            <small>Time</small>
+                                                            <strong><?= htmlspecialchars($modalPickupTimeLabel, ENT_QUOTES, 'UTF-8') ?></strong>
+                                                        </div>
+                                                    </div>
+                                                </section>
+
+                                                <section class="order-modal-info-section">
+                                                    <div class="order-modal-section-heading">PAYMENT</div>
+                                                    <div class="order-modal-info-card order-modal-payment-card">
+                                                        <div class="order-modal-payment-row">
+                                                            <span class="order-modal-payment-badge <?= $modalPaymentMethod === 'gcash' ? 'is-gcash' : 'is-cash' ?>">
+                                                                <?= htmlspecialchars($modalPaymentLabel, ENT_QUOTES, 'UTF-8') ?>
+                                                            </span>
+                                                            <span class="order-modal-discount-short">
+                                                                <?php if (in_array($discount_type, ['pwd', 'senior'], true) && $discount_amount > 0): ?>
+                                                                    <?= $discount_type === 'pwd' ? 'PWD' : 'Senior' ?> · <?= number_format($discount_rate, 0) ?>%
+                                                                <?php else: ?>
+                                                                    No discount · 0%
+                                                                <?php endif; ?>
+                                                            </span>
+                                                        </div>
+                                                        <?php if ($modalPaymentMethod === 'gcash'): ?>
+                                                            <?php if ($payment_proof !== ''): ?>
+                                                                <div class="order-modal-proof-preview">
+                                                                    <div class="order-modal-proof-preview-heading">
+                                                                        <span><i class="bi bi-image me-1" aria-hidden="true"></i>GCash payment proof</span>
+                                                                        <?php if ($isPendingGcash): ?>
+                                                                            <span class="order-modal-proof-pending-label">Pending verification</span>
+                                                                        <?php endif; ?>
+                                                                    </div>
+                                                                    <img
+                                                                        src="<?= htmlspecialchars($payment_proof, ENT_QUOTES, 'UTF-8') ?>"
+                                                                        alt="Uploaded GCash payment proof for <?= htmlspecialchars($modalOrderNumber, ENT_QUOTES, 'UTF-8') ?>"
+                                                                        class="order-modal-proof-image"
+                                                                        decoding="async"
+                                                                    >
+                                                                </div>
+                                                            <?php elseif (!empty($gcash_references[$order_id])): ?>
+                                                                <div class="order-modal-payment-note">
+                                                                    GCash Ref No.
+                                                                    <strong><?= htmlspecialchars(staffFormatGcashReference($gcash_references[$order_id]), ENT_QUOTES, 'UTF-8') ?></strong>
+                                                                </div>
+                                                            <?php else: ?>
+                                                                <div class="order-modal-payment-note">
+                                                                    GCash payment proof has not been uploaded.
+                                                                </div>
+                                                            <?php endif; ?>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                </section>
+
+                                                <?php if (
+                                                    in_array($discount_type, ['pwd', 'senior'], true)
+                                                    && $discount_amount > 0
+                                                    && ($discount_holder['id'] !== '' || $discount_holder['name'] !== '')
+                                                ): ?>
+                                                    <section class="order-modal-info-section">
+                                                        <div class="order-modal-section-heading">DISCOUNT DETAILS</div>
+                                                        <div class="order-modal-info-card order-modal-discount-card">
+                                                            <strong><?= htmlspecialchars($discount_holder['name'] ?: ($discount_type === 'pwd' ? 'PWD' : 'Senior Citizen'), ENT_QUOTES, 'UTF-8') ?></strong>
+                                                            <?php if ($discount_holder['id'] !== ''): ?>
+                                                                <small>ID: <?= htmlspecialchars($discount_holder['id'], ENT_QUOTES, 'UTF-8') ?></small>
+                                                            <?php endif; ?>
+                                                        </div>
+                                                    </section>
+                                                <?php endif; ?>
+                                            </aside>
                                         </div>
+                                    </div>
 
-                                        <!-- ACTIONS -->
-                                        <div class="order-detail-actions mt-4">
-
-                                            <button
-                                                type="button"
-                                                class="btn action-btn btn-outline-dark"
-                                                onclick="printReceipt('receiptModal<?= $order_id ?>')"
-                                            >
-                                                <i class="bi bi-printer me-1"></i>
-                                                Print Receipt
-                                            </button>
-
-                                            <?php if (
-                                                strtolower((string)$order['payment_method']) === 'gcash'
-                                                && $payment_proof !== ''
-                                            ): ?>
+                                    <!-- ACTIONS STAY IN THE MODAL FOOTER AT BOTTOM-RIGHT -->
+                                    <div class="modal-footer order-modal-footer">
+                                        <div class="order-modal-footer-actions">
+                                            <?php
+                                            $isReadyNoShowCandidate = ($status === 'ready');
+                                            $noShowTiming = staffGetNoShowTiming($order);
+                                            $noShowEligible = $noShowTiming['eligible'];
+                                            ?>
+                                            <?php if ($isReadyNoShowCandidate): ?>
+                                                <!-- All Ready orders have a dedicated No-show action. Preparing orders remain non-cancellable. -->
                                                 <button
                                                     type="button"
-                                                    class="btn action-btn btn-outline-dark"
-                                                    data-admin-payment-proof
-                                                    data-proof-src="<?= htmlspecialchars($payment_proof, ENT_QUOTES) ?>"
-                                                >
-                                                    <i class="bi bi-image me-1"></i>
-                                                    GCash Proof
-                                                </button>
-                                            <?php endif; ?>
-
-                                            <?php if ($status === 'pending_verification'): ?>
-                                                <form method="POST" class="workflow-action">
-                                                    <input type="hidden" name="order_id" value="<?= $order_id ?>">
-                                                    <input type="hidden" name="status" value="order_queue">
-                                                    <input type="hidden" name="status_filter" value="<?= htmlspecialchars($selected_status) ?>">
-                                                    <input type="hidden" name="q" value="<?= htmlspecialchars($search) ?>">
-                                                    <input type="hidden" name="page" value="<?= $page ?>">
-                                                    <button type="submit" name="update_status" class="btn action-btn btn-preparing">
-                                                        <i class="bi bi-inbox me-1"></i>
-                                                        Move to Order Queue
-                                                    </button>
-                                                </form>
-                                            <?php elseif ($status === 'order_queue'): ?>
-                                                <form method="POST" class="workflow-action">
-                                                    <input type="hidden" name="order_id" value="<?= $order_id ?>">
-                                                    <input type="hidden" name="status" value="confirmed">
-                                                    <input type="hidden" name="status_filter" value="<?= htmlspecialchars($selected_status) ?>">
-                                                    <input type="hidden" name="q" value="<?= htmlspecialchars($search) ?>">
-                                                    <input type="hidden" name="page" value="<?= $page ?>">
-                                                    <button type="submit" name="update_status" class="btn action-btn btn-confirm">
-                                                        <i class="bi bi-check-circle me-1"></i>
-                                                        Confirm Order
-                                                    </button>
-                                                </form>
-                                            <?php elseif ($status === 'confirmed'): ?>
-                                                <form method="POST" class="workflow-action">
-                                                    <input type="hidden" name="order_id" value="<?= $order_id ?>">
-                                                    <input type="hidden" name="status" value="preparing">
-                                                    <input type="hidden" name="status_filter" value="<?= htmlspecialchars($selected_status) ?>">
-                                                    <input type="hidden" name="q" value="<?= htmlspecialchars($search) ?>">
-                                                    <input type="hidden" name="page" value="<?= $page ?>">
-                                                    <button type="submit" name="update_status" class="btn action-btn btn-preparing">
-                                                        <i class="bi bi-cup-hot me-1"></i>
-                                                        Start Preparing
-                                                    </button>
-                                                </form>
-                                            <?php elseif ($status === 'preparing'): ?>
-                                                <form method="POST" class="workflow-action">
-                                                    <input type="hidden" name="order_id" value="<?= $order_id ?>">
-                                                    <input type="hidden" name="status" value="ready">
-                                                    <input type="hidden" name="status_filter" value="<?= htmlspecialchars($selected_status) ?>">
-                                                    <input type="hidden" name="q" value="<?= htmlspecialchars($search) ?>">
-                                                    <input type="hidden" name="page" value="<?= $page ?>">
-                                                    <button type="submit" name="update_status" class="btn action-btn btn-ready">
-                                                        <i class="bi bi-bag-check me-1"></i>
-                                                        Mark as Ready
-                                                    </button>
-                                                </form>
-                                            <?php elseif ($status === 'ready'): ?>
-                                                <form method="POST" class="workflow-action">
-                                                    <input type="hidden" name="order_id" value="<?= $order_id ?>">
-                                                    <input type="hidden" name="status" value="completed">
-                                                    <input type="hidden" name="status_filter" value="<?= htmlspecialchars($selected_status) ?>">
-                                                    <input type="hidden" name="q" value="<?= htmlspecialchars($search) ?>">
-                                                    <input type="hidden" name="page" value="<?= $page ?>">
-                                                    <button type="submit" name="update_status" class="btn action-btn btn-complete">
-                                                        <i class="bi bi-check2-all me-1"></i>
-                                                        Complete Order
-                                                    </button>
-                                                </form>
-                                            <?php endif; ?>
-
-                                            <?php if (
-                                                in_array(
-                                                    $status,
-                                                    [
-                                                        'pending_verification',
-                                                        'confirmed',
-                                                        'preparing',
-                                                        'ready'
-                                                    ],
-                                                    true
-                                                )
-                                            ): ?>
-                                                <button
-                                                    type="button"
-                                                    class="btn action-btn btn-cancel"
-                                                    data-admin-cancel-order
+                                                    class="btn order-modal-cancel-button"
+                                                    data-staff-cancel-order
+                                                    data-no-show-only="1"
                                                     data-order-id="<?= $order_id ?>"
-                                                    data-order-number="<?= htmlspecialchars($order['order_number'] ?: 'ORD-' . $order_id, ENT_QUOTES) ?>"
+                                                    data-order-number="<?= htmlspecialchars($modalOrderNumber, ENT_QUOTES, 'UTF-8') ?>"
+                                                    data-order-status="<?= htmlspecialchars($status, ENT_QUOTES, 'UTF-8') ?>"
+                                                    data-order-payment-method="<?= htmlspecialchars(strtolower(trim((string)($order['payment_method'] ?? ''))), ENT_QUOTES, 'UTF-8') ?>"
+                                                    data-no-show-eligible-at="<?= (int)$noShowTiming['eligible_at'] ?>"
+                                                    aria-disabled="<?= $noShowEligible ? 'false' : 'true' ?>"
+                                                    title="<?= $noShowEligible
+                                                        ? 'The pickup time and collection grace period have passed. Confirm that the customer did not collect the order.'
+                                                        : 'Available 30 minutes after the later of the scheduled pickup time and the time the order was marked Ready.' ?>"
+                                                    <?= $noShowEligible ? '' : 'disabled' ?>
                                                 >
-                                                    <i class="bi bi-x-circle me-1"></i>
+                                                    <i class="bi bi-person-x me-1" aria-hidden="true"></i>
+                                                    Mark as No-show
+                                                </button>
+                                            <?php elseif (
+                                                !$isPendingGcash
+                                                && in_array($status, ['pending_verification', 'order_queue', 'confirmed'], true)
+                                            ): ?>
+                                                <button
+                                                    type="button"
+                                                    class="btn order-modal-cancel-button"
+                                                    data-staff-cancel-order
+                                                    data-order-id="<?= $order_id ?>"
+                                                    data-order-number="<?= htmlspecialchars($modalOrderNumber, ENT_QUOTES, 'UTF-8') ?>"
+                                                    data-order-status="<?= htmlspecialchars($status, ENT_QUOTES, 'UTF-8') ?>"
+                                                    data-order-payment-method="<?= htmlspecialchars(strtolower(trim((string)($order['payment_method'] ?? ''))), ENT_QUOTES, 'UTF-8') ?>"
+                                                >
+                                                    <i class="bi bi-x-circle me-1" aria-hidden="true"></i>
                                                     Cancel Order
                                                 </button>
                                             <?php endif; ?>
 
+                                            <button
+                                                type="button"
+                                                class="btn order-modal-print-button"
+                                                onclick="printReceipt('receiptModal<?= $order_id ?>')"
+                                            >
+                                                <i class="bi bi-printer me-1" aria-hidden="true"></i>
+                                                Print Receipt
+                                            </button>
                                         </div>
-
                                     </div>
 
                                 </div>
@@ -6420,28 +6715,52 @@ require_once '../includes/header.php';
                                             </strong>
                                         </div>
 
+                                        <?php
+                                        $receiptIsWalkin = ($order['order_source'] ?? '') === 'walk_in';
+                                        $receiptPaymentLabel = strtolower(trim((string)$order['payment_method'])) === 'gcash'
+                                            ? 'GCash'
+                                            : 'Cash';
+                                        ?>
+
                                         <div class="d-flex justify-content-between small">
-                                            <span>Pickup</span>
-                                            <strong>
-                                                <?= htmlspecialchars(
-                                                    $order['pickup_date']
-                                                ) ?>
-                                                <?= htmlspecialchars(
-                                                    adminFormatTime(
-                                                        $order['pickup_time']
-                                                    )
-                                                ) ?>
-                                            </strong>
+                                            <span>Order Type</span>
+                                            <strong><?= $receiptIsWalkin ? 'Walk-in' : 'Online Pick-up' ?></strong>
                                         </div>
 
                                         <div class="d-flex justify-content-between small">
-                                            <span>Payment</span>
-                                            <strong>
-                                                <?= htmlspecialchars(
-                                                    $order['payment_method']
-                                                ) ?>
-                                            </strong>
+                                            <span>Date</span>
+                                            <strong><?= htmlspecialchars(staffFormatDateTime($order['created_at'] ?? null)) ?></strong>
                                         </div>
+
+                                        <?php if (!$receiptIsWalkin): ?>
+                                            <div class="d-flex justify-content-between small">
+                                                <span>Pick-up</span>
+                                                <strong>
+                                                    <?= htmlspecialchars(
+                                                        !empty($order['pickup_date'])
+                                                            ? date('M d, Y', strtotime((string)$order['pickup_date']))
+                                                            : '—'
+                                                    ) ?>
+                                                    <?= htmlspecialchars(
+                                                        staffFormatTime(
+                                                            $order['pickup_time']
+                                                        )
+                                                    ) ?>
+                                                </strong>
+                                            </div>
+                                        <?php endif; ?>
+
+                                        <div class="d-flex justify-content-between small">
+                                            <span>Payment</span>
+                                            <strong><?= $receiptPaymentLabel ?></strong>
+                                        </div>
+
+                                        <?php if (!empty($gcash_references[$order_id])): ?>
+                                            <div class="d-flex justify-content-between small">
+                                                <span>GCash Ref No.</span>
+                                                <strong><?= htmlspecialchars(staffFormatGcashReference($gcash_references[$order_id])) ?></strong>
+                                            </div>
+                                        <?php endif; ?>
 
                                         <div class="receipt-line"></div>
 
@@ -6631,7 +6950,7 @@ require_once '../includes/header.php';
                                     <a
                                         class="page-link"
                                         href="<?= htmlspecialchars(
-                                            adminOrdersUrl([
+                                            staffOrdersUrl([
                                                 'page' => max(1, $page - 1)
                                             ])
                                         ) ?>"
@@ -6641,18 +6960,48 @@ require_once '../includes/header.php';
                                 </li>
 
                                 <?php
-                                $start_page = max(1, $page - 2);
-                                $end_page = min(
-                                    $total_pages,
-                                    $page + 2
-                                );
+                                /*
+                                 * Always keep page 1 visible, then show a small
+                                 * window around the current page and the last page.
+                                 * Missing ranges are represented by an ellipses item.
+                                 */
+                                $activePaginationPages = [1];
 
                                 for (
-                                    $p = $start_page;
-                                    $p <= $end_page;
-                                    $p++
+                                    $active_p = max(2, $page - 2);
+                                    $active_p <= min(
+                                        $total_pages - 1,
+                                        $page + 2
+                                    );
+                                    $active_p++
+                                ) {
+                                    $activePaginationPages[] = $active_p;
+                                }
+
+                                $activePaginationPages[] = $total_pages;
+
+                                $activePaginationPages = array_values(
+                                    array_unique($activePaginationPages)
+                                );
+
+                                $previousActivePage = 0;
+
+                                foreach (
+                                    $activePaginationPages
+                                    as $p
                                 ):
+
+                                    if (
+                                        $previousActivePage > 0
+                                        && $p > $previousActivePage + 1
+                                    ):
                                 ?>
+
+                                    <li class="page-item disabled" aria-hidden="true">
+                                        <span class="page-link">...</span>
+                                    </li>
+
+                                <?php endif; ?>
 
                                     <li
                                         class="page-item <?= $p === $page ? 'active' : '' ?>"
@@ -6661,17 +7010,21 @@ require_once '../includes/header.php';
                                         <a
                                             class="page-link"
                                             href="<?= htmlspecialchars(
-                                                adminOrdersUrl([
+                                                staffOrdersUrl([
                                                     'page' => $p
                                                 ])
                                             ) ?>"
+                                            <?= $p === $page ? 'aria-current="page"' : '' ?>
                                         >
                                             <?= $p ?>
                                         </a>
 
                                     </li>
 
-                                <?php endfor; ?>
+                                <?php
+                                    $previousActivePage = $p;
+                                endforeach;
+                                ?>
 
                                 <li
                                     class="page-item <?= $page >= $total_pages ? 'disabled' : '' ?>"
@@ -6680,7 +7033,7 @@ require_once '../includes/header.php';
                                     <a
                                         class="page-link"
                                         href="<?= htmlspecialchars(
-                                            adminOrdersUrl([
+                                            staffOrdersUrl([
                                                 'page' => min(
                                                     $total_pages,
                                                     $page + 1
@@ -6703,845 +7056,31 @@ require_once '../includes/header.php';
 
             <?php endif; ?>
 
-
-
             </section>
 
-            <?php if ($current_role === 'admin'): ?>
-
-<!-- =====================================================
-     PENDING REFUNDS
-     Collapsed by default, just like Cancelled Orders.
-     It stays on the same Orders page and expands inline.
-===================================================== -->
-<details
-    class="pending-refunds-section cancelled-orders-section"
-    id="pending-refunds"
-    <?= (
-        ($_GET['refund_open'] ?? '') === '1'
-    ) ? 'open' : '' ?>
->
-
-    <summary class="cancelled-section-summary pending-refunds-summary">
-
-        <div class="cancelled-section-heading pending-refunds-heading">
-
-            <div class="pending-refunds-main">
-
-                <div class="pending-refunds-icon" aria-hidden="true">
-                    <i class="bi bi-arrow-counterclockwise"></i>
-                </div>
-
-                <div>
-                    <h3 class="pending-refunds-title">
-                        Pending Refunds
-                    </h3>
-
-                    <p class="pending-refunds-description">
-                        Cancelled GCash orders with payment proof awaiting refund processing.
-                    </p>
-                </div>
-
-            </div>
-
-            <div class="text-end">
-                <div
-                    class="pending-refunds-count"
-                    aria-label="Pending refund count"
-                >
-                    <?= $pending_refund_count ?>
-                </div>
-            </div>
-
-        </div>
-
-        <div class="cancelled-toggle" aria-hidden="true">
-            <span class="cancelled-toggle-label cancelled-toggle-open">
-                Open
-            </span>
-            <span class="cancelled-toggle-label cancelled-toggle-close">
-                Close
-            </span>
-            <i class="bi bi-chevron-down cancelled-toggle-icon"></i>
-        </div>
-
-    </summary>
-
-    <div class="cancelled-section-content pending-refunds-content">
-
-        <form method="GET" class="cancelled-filter-form pending-refund-filter-form" data-refund-filter-form>
-
-            <input type="hidden" name="status" value="<?= htmlspecialchars($selected_status) ?>">
-            <input type="hidden" name="q" value="<?= htmlspecialchars($search) ?>">
-            <input type="hidden" name="page" value="<?= $page ?>">
-            <input type="hidden" name="refund_open" value="1">
-
-            <div class="cancelled-filter-group">
-                <label for="refundStatus">Refund Status</label>
-                <select
-                    id="refundStatus"
-                    name="refund_status"
-                    class="pending-refund-filter-status"
-                    data-refund-status
-                >
-                    <option
-                        value="pending"
-                        <?= $refund_status_filter === 'pending' ? 'selected' : '' ?>
-                    >
-                        Pending
-                    </option>
-                    <option
-                        value="refunded"
-                        <?= $refund_status_filter === 'refunded' ? 'selected' : '' ?>
-                    >
-                        Refunded
-                    </option>
-                    <option
-                        value="rejected"
-                        <?= $refund_status_filter === 'rejected' ? 'selected' : '' ?>
-                    >
-                        Rejected
-                    </option>
-                </select>
-            </div>
-
-            <div class="cancelled-filter-group">
-                <label for="refundPeriod">History Date</label>
-                <select
-                    id="refundPeriod"
-                    name="refund_period"
-                    class="cancelled-filter-period"
-                    data-refund-period
-                >
-                    <?php foreach ($refund_period_labels as $periodKey => $periodLabel): ?>
-                        <option
-                            value="<?= htmlspecialchars($periodKey) ?>"
-                            <?= $refund_period === $periodKey ? 'selected' : '' ?>
-                        >
-                            <?= htmlspecialchars($periodLabel) ?>
-                        </option>
-                    <?php endforeach; ?>
-                </select>
-            </div>
-
-            <div
-                class="cancelled-filter-group"
-                data-refund-date-wrap
-                style="<?= $refund_period === 'specific_date' ? '' : 'display:none;' ?>"
-            >
-                <label for="refundDate">Choose Date</label>
-                <input
-                    type="date"
-                    id="refundDate"
-                    name="refund_date"
-                    class="pending-refund-filter-date"
-                    value="<?= htmlspecialchars($refund_date) ?>"
-                    max="<?= date('Y-m-d') ?>"
-                    data-refund-date
-                >
-            </div>
-
-            <div class="cancelled-filter-group">
-                <label for="refundSearch">Search Refund History</label>
-                <input
-                    type="search"
-                    id="refundSearch"
-                    name="refund_q"
-                    class="cancelled-filter-search"
-                    value="<?= htmlspecialchars($refund_search) ?>"
-                    placeholder="Order number, claim number, customer..."
-                    autocomplete="off"
-                    data-refund-search
-                >
-            </div>
-
-            <div class="cancelled-filter-actions">
-                <button type="submit" class="btn btn-sm cancelled-filter-apply">
-                    <i class="bi bi-search me-1"></i>
-                    Search
-                </button>
-
-                <a
-                    href="<?= htmlspecialchars(adminOrdersUrl([
-                        'refund_q' => '',
-                        'refund_status' => 'pending',
-                        'refund_period' => 'today',
-                        'refund_date' => date('Y-m-d'),
-                        'refund_open' => '1'
-                    ])) ?>"
-                    class="btn btn-sm cancelled-clear-link"
-                    data-refund-clear
-                >
-                    Clear
-                </a>
-            </div>
-
-        </form>
-
-        <div class="small text-muted mb-3">
-            <?php if ($refund_history_mode): ?>
-                Showing <?= $pending_refund_filtered_count ?> refund history record(s)
-                <?php if ($refund_period === 'specific_date'): ?>
-                    for <?= htmlspecialchars(date('M d, Y', strtotime($refund_date))) ?>
-                <?php else: ?>
-                    for <?= htmlspecialchars($refund_period_labels[$refund_period] ?? 'Today') ?>
-                <?php endif; ?>
+            <!-- Staff sees only the count; refund actions remain Admin-only. -->
+            <div class="staff-refund-count-notice" role="status" aria-live="polite">
+    <span class="staff-refund-count-icon" aria-hidden="true"><i class="bi bi-arrow-counterclockwise"></i></span>
+    <div class="staff-refund-count-copy">
+        <strong>Pending Refunds</strong>
+        <p id="staffRefundCountMessage">
+            <?php if ($pending_refund_count > 0): ?>
+                GCash refunds awaiting Admin review.
             <?php else: ?>
-                Showing <?= $pending_refund_filtered_count ?> current pending refund(s)
+                No pending GCash refunds.
             <?php endif; ?>
-        </div>
-
-        <div class="small text-muted mb-3">
-            <?= $refund_history_mode
-                ? 'Searching refund history. Use the status and date filters to narrow the results.'
-                : 'Current pending refunds are shown. Use the search bar to view refund history.' ?>
-        </div>
-
-        <?php if (empty($pending_refund_orders)): ?>
-
-            <div class="order-card empty-state">
-                <i class="bi bi-arrow-counterclockwise fs-1 d-block mb-2"></i>
-                <div>
-                    <?php if ($refund_history_mode): ?>
-                        No refund history found for this search/filter.
-                    <?php elseif ($refund_status_filter !== 'pending'): ?>
-                        Use the search bar to view <?= htmlspecialchars(ucfirst($refund_status_filter)) ?> refund history.
-                    <?php else: ?>
-                        No pending GCash refunds at the moment.
-                    <?php endif; ?>
-                </div>
-            </div>
-
-        <?php else: ?>
-
-            <div class="orders-grid">
-
-                <?php foreach ($pending_refund_orders as $pending_refund_order): ?>
-
-                    <?php
-                    $pending_refund_order_id = (int)$pending_refund_order['id'];
-                    $pending_refund_items = $order_items[$pending_refund_order_id] ?? [];
-                    $pending_refund_actor = $cancelled_by_roles[$pending_refund_order_id] ?? null;
-                    $pending_refund_proof = adminAssetPath(
-                        $pending_refund_order['payment_screenshot'] ?? ''
-                    );
-                    $pending_refund_processed_proof = adminAssetPath(
-                        $pending_refund_order['refund_proof_image'] ?? ''
-                    );
-                    $pending_refund_status =
-                        strtolower(trim((string)($pending_refund_order['refund_status'] ?? 'pending')));
-
-                    $pending_refund_status_label = match ($pending_refund_status) {
-                        'refunded' => 'Refunded',
-                        'rejected' => 'Refund Rejected',
-                        default => 'Refund Pending'
-                    };
-                    ?>
-
-                    <div
-                        class="order-card cancelled-order-card pending-refund-order-card"
-                        id="pending-refund-order-<?= $pending_refund_order_id ?>"
-                        data-order-id="<?= $pending_refund_order_id ?>"
-                    >
-
-                        <div class="d-flex justify-content-between flex-wrap gap-2">
-
-                            <div>
-                                <div class="fw-bold fs-5" style="color:#4A3525;">
-                                    <?= htmlspecialchars(
-                                        $pending_refund_order['order_number']
-                                        ?: 'ORD-' . $pending_refund_order_id
-                                    ) ?>
-                                </div>
-
-                                <div class="text-muted small">
-                                    Claim No:
-                                    <?= htmlspecialchars(
-                                        $pending_refund_order['claim_number']
-                                        ?: 'N/A'
-                                    ) ?>
-                                </div>
-                            </div>
-
-                            <div class="text-end">
-                                <span class="status-badge status-cancelled">
-                                    <?= htmlspecialchars($pending_refund_status_label) ?>
-                                </span>
-                            </div>
-
-                        </div>
-
-                        <hr>
-
-                        <div class="row small">
-
-                            <div class="col-md-4 mb-3">
-                                <div class="info-label">Customer</div>
-                                <div class="info-value">
-                                    <?= htmlspecialchars($pending_refund_order['customer_name']) ?>
-                                </div>
-                                <div class="text-muted">
-                                    <?= htmlspecialchars($pending_refund_order['contact_number']) ?>
-                                </div>
-                            </div>
-
-                            <div class="col-md-4 mb-3">
-                                <div class="info-label">Pick-up</div>
-                                <div class="info-value">
-                                    <?= htmlspecialchars($pending_refund_order['pickup_date']) ?>
-                                    @
-                                    <?= htmlspecialchars(adminFormatTime($pending_refund_order['pickup_time'])) ?>
-                                </div>
-                            </div>
-
-                            <div class="col-md-4 mb-3">
-                                <div class="info-label">Payment</div>
-                                <div class="info-value text-uppercase payment-gcash">
-                                    GCash
-                                </div>
-                            </div>
-
-                        </div>
-
-                        <div class="cancellation-box mt-1">
-
-                            <div class="row small">
-
-                                <div class="col-md-4 mb-2 mb-md-0">
-                                    <div class="info-label">Cancellation Reason</div>
-                                    <div class="info-value text-danger">
-                                        <?= !empty($pending_refund_order['cancellation_reason'])
-                                            ? htmlspecialchars($pending_refund_order['cancellation_reason'])
-                                            : 'No reason recorded.' ?>
-                                    </div>
-                                </div>
-
-                                <div class="col-md-4 mb-2 mb-md-0">
-                                    <div class="info-label">Cancelled At</div>
-                                    <div class="info-value">
-                                        <?= !empty($pending_refund_order['closed_at'])
-                                            ? htmlspecialchars(
-                                                date(
-                                                    'M d, Y h:i A',
-                                                    strtotime($pending_refund_order['closed_at'])
-                                                )
-                                            )
-                                            : '—' ?>
-                                    </div>
-                                </div>
-
-                                <div class="col-md-4">
-                                    <div class="info-label">Cancelled By</div>
-                                    <div class="info-value text-danger">
-                                        <?= htmlspecialchars(
-                                            adminCancellationActorLabel($pending_refund_actor)
-                                        ) ?>
-                                    </div>
-                                </div>
-
-                            </div>
-
-                        </div>
-
-                        <?php if ($pending_refund_status === 'pending'): ?>
-                            <div class="pending-refund-action-box mt-3">
-
-                                <div class="pending-refund-action-header">
-                                    <div>
-                                        <div class="details-section-title mb-1">
-                                            Refund Processing
-                                        </div>
-                                        <div class="small text-muted">
-                                            Requested:
-                                            <?= !empty($pending_refund_order['refund_requested_at'])
-                                                ? htmlspecialchars(
-                                                    date(
-                                                        'M d, Y h:i A',
-                                                        strtotime($pending_refund_order['refund_requested_at'])
-                                                    )
-                                                )
-                                                : '—' ?>
-                                        </div>
-                                    </div>
-
-                                    <span class="pending-refund-action-note">
-                                        Review the proof before choosing an action.
-                                    </span>
-                                </div>
-
-                                <div class="pending-refund-action-buttons">
-                                    <?php if ($pending_refund_proof): ?>
-                                        <button
-                                            type="button"
-                                            class="pending-refund-btn pending-refund-btn-proof"
-                                            data-bs-toggle="modal"
-                                            data-bs-target="#pendingPaymentProofModal<?= $pending_refund_order_id ?>"
-                                        >
-                                            <i class="bi bi-image me-1"></i>
-                                            Open Payment Proof
-                                        </button>
-                                    <?php endif; ?>
-
-                                    <button
-                                        type="button"
-                                        class="pending-refund-btn pending-refund-btn-refunded"
-                                        data-bs-toggle="modal"
-                                        data-bs-target="#processRefundModal<?= $pending_refund_order_id ?>"
-                                    >
-                                        <i class="bi bi-check-circle me-1"></i>
-                                        Mark as Refunded
-                                    </button>
-
-                                    <button
-                                        type="button"
-                                        class="pending-refund-btn pending-refund-btn-rejected"
-                                        data-bs-toggle="modal"
-                                        data-bs-target="#rejectRefundModal<?= $pending_refund_order_id ?>"
-                                    >
-                                        <i class="bi bi-x-circle me-1"></i>
-                                        Reject Refund
-                                    </button>
-                                </div>
-
-                            </div>
-                        <?php elseif ($refund_history_mode): ?>
-                            <div class="pending-refund-action-box mt-3">
-                                <div class="pending-refund-action-header">
-                                    <div>
-                                        <div class="details-section-title mb-1">
-                                            Refund History
-                                        </div>
-                                        <div class="small text-muted">
-                                            <?= $pending_refund_status === 'refunded' ? 'Processed: ' : 'Rejected: ' ?>
-                                            <?= !empty($pending_refund_order['refund_processed_at'])
-                                                ? htmlspecialchars(
-                                                    date(
-                                                        'M d, Y h:i A',
-                                                        strtotime($pending_refund_order['refund_processed_at'])
-                                                    )
-                                                )
-                                                : '—' ?>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <?php if ($pending_refund_status === 'refunded' && $pending_refund_processed_proof): ?>
-                                    <div class="mt-3">
-                                        <button
-                                            type="button"
-                                            class="pending-refund-btn pending-refund-btn-proof w-100 w-md-auto"
-                                            data-bs-toggle="modal"
-                                            data-bs-target="#refundProcessedProofModal<?= $pending_refund_order_id ?>"
-                                        >
-                                            <i class="bi bi-image me-1"></i>
-                                            View Refund Proof
-                                        </button>
-                                    </div>
-                                <?php endif; ?>
-
-                                <?php if ($pending_refund_status === 'rejected' && !empty($pending_refund_order['refund_rejection_reason'])): ?>
-                                    <div class="small text-danger mt-2">
-                                        Reason:
-                                        <?= htmlspecialchars($pending_refund_order['refund_rejection_reason']) ?>
-                                    </div>
-                                <?php endif; ?>
-                            </div>
-                        <?php endif; ?>
-
-                        <!-- GCASH PAYMENT PROOF MODAL -->
-                        <?php if ($pending_refund_proof): ?>
-                            <div
-                                class="modal fade pending-refund-modal"
-                                id="pendingPaymentProofModal<?= $pending_refund_order_id ?>"
-                                tabindex="-1"
-                                aria-hidden="true"
-                            >
-                                <div class="modal-dialog modal-dialog-centered modal-lg">
-                                    <div class="modal-content">
-                                        <div class="modal-header">
-                                            <div>
-                                                <h5 class="modal-title fw-bold mb-1">
-                                                    GCash Payment Proof
-                                                </h5>
-                                                <div class="small text-muted">
-                                                    <?= htmlspecialchars(
-                                                        $pending_refund_order['order_number']
-                                                        ?: 'Order #' . $pending_refund_order_id
-                                                    ) ?>
-                                                </div>
-                                            </div>
-
-                                            <button
-                                                type="button"
-                                                class="btn-close"
-                                                data-bs-dismiss="modal"
-                                                aria-label="Close"
-                                            ></button>
-                                        </div>
-
-                                        <div class="modal-body pending-refund-proof-modal-body">
-                                            <img
-                                                src="<?= htmlspecialchars($pending_refund_proof) ?>"
-                                                alt="GCash Payment Proof"
-                                                class="pending-refund-proof-image"
-                                            >
-                                        </div>
-
-                                        <div class="modal-footer">
-                                            <button
-                                                type="button"
-                                                class="btn btn-outline-dark"
-                                                data-bs-dismiss="modal"
-                                            >
-                                                Close
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        <?php endif; ?>
-
-                        <!-- MARK AS REFUNDED MODAL -->
-                        <div
-                            class="modal fade pending-refund-modal"
-                            id="processRefundModal<?= $pending_refund_order_id ?>"
-                            tabindex="-1"
-                            aria-hidden="true"
-                        >
-                            <div class="modal-dialog modal-dialog-centered">
-                                <div class="modal-content">
-                                    <form method="POST" enctype="multipart/form-data">
-                                        <div class="modal-header">
-                                            <div>
-                                                <h5 class="modal-title fw-bold mb-1">
-                                                    Mark as Refunded
-                                                </h5>
-                                                <div class="small text-muted">
-                                                    <?= htmlspecialchars(
-                                                        $pending_refund_order['order_number']
-                                                        ?: 'this order'
-                                                    ) ?>
-                                                </div>
-                                            </div>
-
-                                            <button
-                                                type="button"
-                                                class="btn-close"
-                                                data-bs-dismiss="modal"
-                                                aria-label="Close"
-                                            ></button>
-                                        </div>
-
-                                        <div class="modal-body">
-                                            <div class="refund-proof-upload-info">
-                                                <i class="bi bi-info-circle-fill"></i>
-                                                <div>
-                                                    Upload a screenshot or photo showing the successful GCash refund transaction.
-                                                    This proof will be saved with the order and the customer will be notified.
-                                                </div>
-                                            </div>
-
-                                            <div class="mb-3">
-                                                <label
-                                                    class="form-label small fw-semibold"
-                                                    for="refundProofImage<?= $pending_refund_order_id ?>"
-                                                >
-                                                    Refund Proof
-                                                </label>
-                                                <input
-                                                    type="file"
-                                                    id="refundProofImage<?= $pending_refund_order_id ?>"
-                                                    name="refund_proof_image"
-                                                    class="form-control"
-                                                    accept="image/jpeg,image/png"
-                                                    required
-                                                >
-                                                <div class="form-text">
-                                                    JPG, JPEG, or PNG. Maximum 5MB.
-                                                </div>
-                                            </div>
-
-                                            <input type="hidden" name="process_refund" value="1">
-                                            <input type="hidden" name="order_id" value="<?= $pending_refund_order_id ?>">
-                                            <input type="hidden" name="status_filter" value="<?= htmlspecialchars($selected_status) ?>">
-                                            <input type="hidden" name="q" value="<?= htmlspecialchars($search) ?>">
-                                            <input type="hidden" name="page" value="<?= $page ?>">
-                                        </div>
-
-                                        <div class="modal-footer">
-                                            <button
-                                                type="button"
-                                                class="btn btn-outline-dark"
-                                                data-bs-dismiss="modal"
-                                            >
-                                                Cancel
-                                            </button>
-
-                                            <button
-                                                type="submit"
-                                                class="btn pending-refund-modal-confirm-btn"
-                                            >
-                                                <i class="bi bi-check-circle me-1"></i>
-                                                Confirm Refund
-                                            </button>
-                                        </div>
-                                    </form>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- PROCESSED REFUND PROOF MODAL -->
-                        <?php if ($pending_refund_processed_proof): ?>
-                            <div
-                                class="modal fade pending-refund-modal"
-                                id="refundProcessedProofModal<?= $pending_refund_order_id ?>"
-                                tabindex="-1"
-                                aria-hidden="true"
-                            >
-                                <div class="modal-dialog modal-dialog-centered modal-lg">
-                                    <div class="modal-content">
-                                        <div class="modal-header">
-                                            <div>
-                                                <h5 class="modal-title fw-bold mb-1">
-                                                    Refund Proof
-                                                </h5>
-                                                <div class="small text-muted">
-                                                    <?= htmlspecialchars(
-                                                        $pending_refund_order['order_number']
-                                                        ?: 'Order #' . $pending_refund_order_id
-                                                    ) ?>
-                                                </div>
-                                            </div>
-
-                                            <button
-                                                type="button"
-                                                class="btn-close"
-                                                data-bs-dismiss="modal"
-                                                aria-label="Close"
-                                            ></button>
-                                        </div>
-
-                                        <div class="modal-body pending-refund-proof-modal-body">
-                                            <img
-                                                src="<?= htmlspecialchars($pending_refund_processed_proof) ?>"
-                                                alt="Refund Proof"
-                                                class="pending-refund-proof-image"
-                                            >
-                                        </div>
-
-                                        <div class="modal-footer">
-                                            <button
-                                                type="button"
-                                                class="btn btn-outline-dark"
-                                                data-bs-dismiss="modal"
-                                            >
-                                                Close
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        <?php endif; ?>
-
-                        <!-- REJECT REFUND MODAL -->
-                        <div
-                            class="modal fade pending-refund-modal"
-                            id="rejectRefundModal<?= $pending_refund_order_id ?>"
-                            tabindex="-1"
-                            aria-hidden="true"
-                        >
-                            <div class="modal-dialog modal-dialog-centered">
-                                <div class="modal-content">
-                                    <form method="POST">
-                                        <div class="modal-header">
-                                            <div>
-                                                <h5 class="modal-title fw-bold mb-1">
-                                                    Reject Refund
-                                                </h5>
-                                                <div class="small text-muted">
-                                                    <?= htmlspecialchars(
-                                                        $pending_refund_order['order_number']
-                                                        ?: 'this order'
-                                                    ) ?>
-                                                </div>
-                                            </div>
-
-                                            <button
-                                                type="button"
-                                                class="btn-close"
-                                                data-bs-dismiss="modal"
-                                                aria-label="Close"
-                                            ></button>
-                                        </div>
-
-                                        <div class="modal-body">
-                                            <div class="refund-rejection-alert">
-                                                <i class="bi bi-exclamation-circle-fill"></i>
-                                                <span>
-                                                    The customer will be notified that the refund was rejected.
-                                                </span>
-                                            </div>
-
-                                            <label
-                                                class="form-label small fw-semibold"
-                                                for="refundRejectionReason<?= $pending_refund_order_id ?>"
-                                            >
-                                                Reason for Rejection
-                                            </label>
-
-                                            <textarea
-                                                id="refundRejectionReason<?= $pending_refund_order_id ?>"
-                                                name="refund_rejection_reason"
-                                                class="form-control"
-                                                rows="4"
-                                                maxlength="255"
-                                                placeholder="Enter the reason for rejecting this refund..."
-                                                required
-                                            ></textarea>
-
-                                            <div class="form-text">
-                                                Maximum 255 characters.
-                                            </div>
-
-                                            <input type="hidden" name="reject_refund" value="1">
-                                            <input type="hidden" name="order_id" value="<?= $pending_refund_order_id ?>">
-                                            <input type="hidden" name="status_filter" value="<?= htmlspecialchars($selected_status) ?>">
-                                            <input type="hidden" name="q" value="<?= htmlspecialchars($search) ?>">
-                                            <input type="hidden" name="page" value="<?= $page ?>">
-                                        </div>
-
-                                        <div class="modal-footer">
-                                            <button
-                                                type="button"
-                                                class="btn btn-outline-dark"
-                                                data-bs-dismiss="modal"
-                                            >
-                                                Cancel
-                                            </button>
-
-                                            <button
-                                                type="submit"
-                                                class="btn pending-refund-modal-reject-btn"
-                                            >
-                                                <i class="bi bi-x-circle me-1"></i>
-                                                Reject Refund
-                                            </button>
-                                        </div>
-                                    </form>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="order-items-card mt-3">
-
-                            <div class="order-items-title">
-                                <i class="bi bi-cup-straw me-1"></i>
-                                Order Items
-                            </div>
-
-                            <?php if ($pending_refund_items): ?>
-
-                                <?php foreach ($pending_refund_items as $item): ?>
-
-                                    <?php
-                                    $addonDetails = adminGetAddons($item['addons'] ?? null);
-                                    ?>
-
-                                    <div class="order-item-row">
-
-                                        <div class="d-flex justify-content-between align-items-start gap-3">
-
-                                            <div class="flex-grow-1">
-
-                                                <div class="order-item-name">
-                                                    <?= htmlspecialchars($item['product_name']) ?>
-                                                    <span class="order-item-quantity">
-                                                        × <?= (int)$item['quantity'] ?>
-                                                    </span>
-                                                </div>
-
-                                                <div class="order-item-base-price">
-                                                    Base Price: ₱<?= number_format(
-                                                        (float)($item['unit_price'] ?? 0),
-                                                        2
-                                                    ) ?> each
-                                                </div>
-
-                                                <?php if (
-                                                    !empty($item['size'])
-                                                    || !empty($item['sugar_level'])
-                                                ): ?>
-                                                    <div class="order-item-customization">
-                                                        <div class="order-item-customization-main">
-                                                            <?php if (!empty($item['size'])): ?>
-                                                                <span>
-                                                                    Size: <?= htmlspecialchars($item['size']) ?>
-                                                                </span>
-                                                            <?php endif; ?>
-                                                            <?php if (!empty($item['sugar_level'])): ?>
-                                                                <span>
-                                                                    Sugar: <?= htmlspecialchars($item['sugar_level']) ?>
-                                                                </span>
-                                                            <?php endif; ?>
-                                                        </div>
-                                                    </div>
-                                                <?php endif; ?>
-
-                                                <?php if ($addonDetails): ?>
-                                                    <span class="order-addon-label">Add-ons</span>
-                                                    <div class="order-addon-list">
-                                                        <?php foreach ($addonDetails as $addon): ?>
-                                                            <span class="order-addon-chip">
-                                                                <?= htmlspecialchars($addon['name']) ?>
-                                                            </span>
-                                                        <?php endforeach; ?>
-                                                    </div>
-                                                <?php endif; ?>
-
-                                            </div>
-
-                                            <div class="order-item-total text-end">
-                                                ₱<?= number_format(
-                                                    (float)($item['total_price'] ?? 0),
-                                                    2
-                                                ) ?>
-                                            </div>
-
-                                        </div>
-
-                                    </div>
-
-                                <?php endforeach; ?>
-
-                            <?php else: ?>
-                                <div class="small text-muted">
-                                    No item details available.
-                                </div>
-                            <?php endif; ?>
-
-                        </div>
-
-                    </div>
-
-                <?php endforeach; ?>
-
-            </div>
-
-        <?php endif; ?>
-
+        </p>
     </div>
+    <span class="staff-refund-count-value" aria-label="Pending GCash refund request count"><?= (int)$pending_refund_count ?></span>
+</div>
 
-</details>
-
-            <?php endif; ?>
-
-<!-- =====================================================
+            <!-- =====================================================
                  CANCELLED ORDERS
                  Collapsed by default so historical records do not
                  make the Orders page unnecessarily long.
             ====================================================== -->
             <details
-                class="cancelled-orders-section"
+                class="cancelled-orders-section order-history-section"
                 <?= (
                     $cancelled_search !== ''
                     || $cancelled_open === '1'
@@ -7549,40 +7088,24 @@ require_once '../includes/header.php';
             >
                 <summary class="cancelled-section-summary">
 
-                    <div class="cancelled-section-heading">
+                    <span class="cancelled-summary-icon" aria-hidden="true">
+                        <i class="bi bi-clock-history"></i>
+                    </span>
 
-                        <div>
-                            <h3 class="cancelled-section-title">
-                                <i class="bi bi-x-circle me-1"></i>
-                                CANCELLED ORDERS
-                            </h3>
-
-                            <p class="cancelled-section-description">
-                                View orders that were cancelled during the order process.
-                            </p>
-                        </div>
-
-                        <div class="text-end">
-                            <div class="cancelled-history-badge mb-2">
-                                <i class="bi bi-archive-fill"></i>
-                                Historical Records
-                            </div>
-                            <div class="small text-muted">
-                                <?= $cancelled_total_orders ?> cancelled order(s)
-                            </div>
-                        </div>
-
+                    <div class="cancelled-summary-copy">
+                        <h3 class="cancelled-section-title">Order History</h3>
+                        <span class="cancelled-section-description">
+                            Completed and cancelled orders
+                        </span>
                     </div>
 
-                    <div class="cancelled-toggle" aria-hidden="true">
-                        <span class="cancelled-toggle-label cancelled-toggle-open">
-                            Open
-                        </span>
-                        <span class="cancelled-toggle-label cancelled-toggle-close">
-                            Close
-                        </span>
+                    <span class="cancelled-summary-count">
+                        <?= (int)$cancelled_total_orders ?>
+                    </span>
+
+                    <span class="cancelled-toggle" aria-hidden="true">
                         <i class="bi bi-chevron-down cancelled-toggle-icon"></i>
-                    </div>
+                    </span>
 
                 </summary>
 
@@ -7616,8 +7139,30 @@ require_once '../includes/header.php';
 
                         <div class="cancelled-filter-group">
 
+                            <label for="historyStatus">
+                                Status
+                            </label>
+
+                            <select
+                                id="historyStatus"
+                                name="history_status"
+                                class="cancelled-filter-period"
+                                data-history-status
+                            >
+                                <?php foreach (['all' => 'All', 'completed' => 'Completed', 'cancelled' => 'Cancelled'] as $historyStatusKey => $historyStatusLabel): ?>
+                                    <option
+                                        value="<?= $historyStatusKey ?>"
+                                        <?= $history_status === $historyStatusKey ? 'selected' : '' ?>
+                                    ><?= $historyStatusLabel ?></option>
+                                <?php endforeach; ?>
+                            </select>
+
+                        </div>
+
+                        <div class="cancelled-filter-group">
+
                             <label for="cancelledPeriod">
-                                Cancelled Date
+                                Date
                             </label>
 
                             <select
@@ -7660,53 +7205,38 @@ require_once '../includes/header.php';
 
                         </div>
 
-                        <div class="cancelled-filter-group">
+                        <div class="cancelled-search-field">
 
-                            <label for="cancelledSearch">
-                                Search Cancelled Orders
+                            <label class="visually-hidden" for="cancelledSearch">
+                                Search Order History
                             </label>
 
-                            <input
-                                type="search"
-                                id="cancelledSearch"
-                                name="cancelled_q"
-                                class="cancelled-filter-search"
-                                value="<?= htmlspecialchars($cancelled_search) ?>"
-                                placeholder="Order number, claim number, customer..."
-                                autocomplete="off"
-                                data-cancelled-search
-                            >
+                            <div class="search-box cancelled-search-box">
+                                <i class="bi bi-search" aria-hidden="true"></i>
 
-                        </div>
+                                <input
+                                    type="search"
+                                    id="cancelledSearch"
+                                    name="cancelled_q"
+                                    class="cancelled-filter-search"
+                                    value="<?= htmlspecialchars($cancelled_search) ?>"
+                                    placeholder="Search order no., claim no., customer, GCash ref..."
+                                    autocomplete="off"
+                                    data-cancelled-search
+                                >
+                            </div>
 
-                        <div class="cancelled-filter-actions">
-
+                            <!-- Keeps Enter-to-search behavior without showing a Search button. -->
                             <button
                                 type="submit"
-                                class="btn search-button"
-                            >
-                                <i class="bi bi-search me-1"></i>
-                                Search
-                            </button>
-
-                            <?php if ($cancelled_search !== ''): ?>
-
-                                <a
-                                    href="<?= htmlspecialchars(
-                                        adminOrdersUrl([
-                                            'cancelled_q' => '',
-                                            'cancelled_page' => 1,
-                                            'cancelled_open' => '1'
-                                        ])
-                                    ) ?>"
-                                    class="btn clear-button cancelled-clear-link"
-                                >
-                                    Clear
-                                </a>
-
-                            <?php endif; ?>
+                                class="visually-hidden"
+                                tabindex="-1"
+                                aria-hidden="true"
+                            >Search</button>
 
                         </div>
+
+                        
 
                     </form>
 
@@ -7721,13 +7251,13 @@ require_once '../includes/header.php';
                             ): ?>
 
                                 <div>
-                                    No cancelled orders matched the selected filters.
+                                    No orders matched the selected filters.
                                 </div>
 
                             <?php else: ?>
 
                                 <div>
-                                    No cancelled orders have been recorded.
+                                    No completed or cancelled orders for this period.
                                 </div>
 
                             <?php endif; ?>
@@ -7746,659 +7276,220 @@ require_once '../includes/header.php';
                             ) ?>
                             of
                             <?= $cancelled_total_orders ?>
-                            cancelled order(s)
+                            order(s)
 
                         </div>
 
-                        <div class="orders-grid">
+                        <div class="history-table-scroll-hint d-xl-none"><i class="bi bi-arrows-angle-expand me-1"></i>Swipe horizontally to view all columns.</div>
+                        <div class="staff-orders-table-wrap history-orders-table-wrap cancelled-history-table-wrap">
+                            <table class="staff-orders-table history-orders-table cancelled-history-table">
+                                <thead>
+                                    <tr>
+                                        <th>Order</th>
+                                        <th>Customer</th>
+                                        <th>Type / Pick-up</th>
+                                        <th>Payment</th>
+                                        <th class="text-end">Total</th>
+                                        <th>Notes</th>
+                                        <th>Closed At</th>
+                                        <th class="text-end">Details</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                <?php foreach ($cancelled_orders as $cancelled_order): ?>
+                                    <?php
+                                    $cancelled_order_id = (int)$cancelled_order['id'];
+                                    $cancelled_items = $order_items[$cancelled_order_id] ?? [];
+                                    $cancelled_by_role = $cancelled_by_roles[$cancelled_order_id] ?? null;
+                                    $cancelled_payment_proof = staffAssetPath($cancelled_order['payment_screenshot'] ?? '');
+                                    $cancelledIdentifier = $cancelled_order['order_number'] ?: 'ORD-' . $cancelled_order_id;
+                                    $historyIsCancelled = (string)$cancelled_order['status'] === 'cancelled';
+                                    $historyIsWalkin = ($cancelled_order['order_source'] ?? '') === 'walk_in';
+                                    $historyIsGcash = strtolower(trim((string)$cancelled_order['payment_method'])) === 'gcash';
+                                    $historyGcashRef = $gcash_references[$cancelled_order_id] ?? '';
+                                    ?>
+                                    <tr class="order-card history-order-row <?= ($target_order_id === $cancelled_order_id) ? 'view-order-target' : '' ?>" id="order-<?= $cancelled_order_id ?>" data-order-id="<?= $cancelled_order_id ?>">
+                                        <td>
+                                            <div class="order-table-primary"><?= htmlspecialchars($cancelledIdentifier) ?></div>
+                                            <div class="order-table-date">Claim: <?= htmlspecialchars($cancelled_order['claim_number'] ?: 'N/A') ?></div>
+                                            <span class="status-badge status-<?= $historyIsCancelled ? 'cancelled' : 'completed' ?>"><?= $historyIsCancelled ? 'Cancelled' : 'Completed' ?></span>
+                                        </td>
+                                        <td>
+                                            <div class="order-table-primary"><?= htmlspecialchars($cancelled_order['customer_name'] ?? 'Guest') ?></div>
+                                            <div class="order-table-date"><?= htmlspecialchars($cancelled_order['contact_number'] ?? '—') ?></div>
+                                        </td>
+                                        <td>
+                                            <?php if ($historyIsWalkin): ?>
+                                                <div class="order-table-primary">Walk-in</div>
+                                            <?php else: ?>
+                                                <div class="order-table-primary"><?= htmlspecialchars($cancelled_order['pickup_date'] ?? '—') ?></div>
+                                                <div class="order-table-date"><?= htmlspecialchars(staffFormatTime($cancelled_order['pickup_time'] ?? '')) ?></div>
+                                            <?php endif; ?>
+                                        </td>
+                                        <td>
+                                            <span class="order-table-payment <?= $historyIsGcash ? 'payment-gcash' : '' ?>"><?= $historyIsGcash ? 'GCash' : 'Cash' ?></span>
+                                            <?php if ($historyGcashRef !== ''): ?>
+                                                <div class="order-table-date text-nowrap">Ref <?= htmlspecialchars(staffFormatGcashReference($historyGcashRef)) ?></div>
+                                            <?php endif; ?>
+                                        </td>
+                                        <td class="text-end"><span class="order-table-total">₱<?= number_format((float)$cancelled_order['total_amount'], 2) ?></span></td>
+                                        <td><div class="history-reason-cell"><?= $historyIsCancelled ? htmlspecialchars($cancelled_order['cancellation_reason'] ?: 'No reason recorded.') : '—' ?></div></td>
+                                        <td>
+                                            <div class="order-table-primary"><?= !empty($cancelled_order['closed_at']) ? htmlspecialchars(date('M d, Y', strtotime($cancelled_order['closed_at']))) : '—' ?></div>
+                                            <div class="order-table-date"><?= !empty($cancelled_order['closed_at']) ? htmlspecialchars(date('h:i A', strtotime($cancelled_order['closed_at']))) : '' ?></div>
+                                            <?php if ($historyIsCancelled): ?>
+                                                <div class="order-table-date">By <?= htmlspecialchars(staffCancellationActorLabel($cancelled_by_role)) ?></div>
+                                            <?php endif; ?>
+                                        </td>
+                                        <td class="text-end history-details-cell">
+                                            <button type="button" class="btn btn-view-details" data-cancelled-order-details data-order-id="<?= $cancelled_order_id ?>" data-order-details-modal="detailsModal<?= $cancelled_order_id ?>" aria-label="View details for <?= htmlspecialchars($cancelledIdentifier, ENT_QUOTES, 'UTF-8') ?>"><i class="bi bi-eye me-1"></i>View Details</button>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
 
-                            <?php foreach ($cancelled_orders as $cancelled_order): ?>
-
-                                <?php
-                                $cancelled_order_id =
-                                    (int)$cancelled_order['id'];
-
-                                $cancelled_items =
-                                    $order_items[$cancelled_order_id] ?? [];
-
-                                $cancelled_by_role =
-                                    $cancelled_by_roles[$cancelled_order_id]
-                                    ?? null;
-
-                                $cancelled_payment_proof =
-                                    adminAssetPath(
-                                        $cancelled_order['payment_screenshot']
-                                        ?? ''
-                                    );
-                                ?>
-
-                                <div
-                                    class="order-card cancelled-order-card <?= (
-                                        false
-                                    ) ? 'view-order-target' : '' ?>"
-                                    id="order-<?= $cancelled_order_id ?>"
-                                    data-order-id="<?= $cancelled_order_id ?>"
-                                >
-
-                                    <div class="d-flex justify-content-between flex-wrap gap-2">
-
-                                        <div>
-
-                                            <div
-                                                class="fw-bold fs-5"
-                                                style="color:#4A3525;"
-                                            >
-                                                <?= htmlspecialchars(
-                                                    $cancelled_order['order_number']
-                                                    ?: 'ORD-' . $cancelled_order_id
-                                                ) ?>
-                                            </div>
-
-                                            <div class="text-muted small">
-                                                Claim No:
-                                                <?= htmlspecialchars(
-                                                    $cancelled_order['claim_number']
-                                                    ?: 'N/A'
-                                                ) ?>
-                                            </div>
-
+                        <!-- Cancelled order detail modals are kept outside the table for valid markup. -->
+                        <?php foreach ($cancelled_orders as $cancelled_order): ?>
+                            <?php
+                            $cancelled_order_id = (int)$cancelled_order['id'];
+                            $cancelled_items = $order_items[$cancelled_order_id] ?? [];
+                            $cancelled_by_role = $cancelled_by_roles[$cancelled_order_id] ?? null;
+                            $cancelled_payment_proof = staffAssetPath($cancelled_order['payment_screenshot'] ?? '');
+                            $cancelledIdentifier = $cancelled_order['order_number'] ?: 'ORD-' . $cancelled_order_id;
+                            $historyIsCancelled = (string)$cancelled_order['status'] === 'cancelled';
+                            $historyIsWalkin = ($cancelled_order['order_source'] ?? '') === 'walk_in';
+                            $historyIsGcash = strtolower(trim((string)$cancelled_order['payment_method'])) === 'gcash';
+                            ?>
+                            <div class="modal fade cancelled-order-details-modal" id="detailsModal<?= $cancelled_order_id ?>" data-order-id="<?= $cancelled_order_id ?>" tabindex="-1" aria-hidden="true">
+                                <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable"><div class="modal-content">
+                                    <div class="modal-header"><div><h5 class="modal-title fw-bold"><?= $historyIsCancelled ? 'Cancelled' : 'Completed' ?> Order Details</h5><div class="small text-muted"><?= htmlspecialchars($cancelledIdentifier) ?></div></div><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+                                    <div class="modal-body">
+                                        <div class="row g-3 mb-3">
+                                            <div class="col-sm-6"><div class="info-label">Claim Number</div><div class="info-value"><?= htmlspecialchars($cancelled_order['claim_number'] ?: 'N/A') ?></div></div>
+                                            <div class="col-sm-6"><div class="info-label">Customer</div><div class="info-value"><?= htmlspecialchars($cancelled_order['customer_name'] ?? 'Guest') ?></div><div class="small text-muted"><?= htmlspecialchars($cancelled_order['contact_number'] ?? '—') ?></div></div>
+                                            <?php if ($historyIsWalkin): ?>
+                                                <div class="col-sm-6"><div class="info-label">Order Type</div><div class="info-value">Walk-in</div></div>
+                                            <?php else: ?>
+                                                <div class="col-sm-6"><div class="info-label">Pick-up</div><div class="info-value"><?= htmlspecialchars($cancelled_order['pickup_date'] ?? '—') ?> @ <?= htmlspecialchars(staffFormatTime($cancelled_order['pickup_time'] ?? '')) ?></div></div>
+                                            <?php endif; ?>
+                                            <div class="col-sm-6"><div class="info-label">Payment Method</div><div class="info-value"><?= $historyIsGcash ? 'GCash' : 'Cash' ?></div><?php if (!empty($gcash_references[(int)$cancelled_order['id']])): ?><div class="small text-muted">GCash Ref No. <?= htmlspecialchars(staffFormatGcashReference($gcash_references[(int)$cancelled_order['id']])) ?></div><?php endif; ?></div>
+                                            <div class="col-sm-6"><div class="info-label"><?= $historyIsCancelled ? 'Cancelled At' : 'Completed At' ?></div><div class="info-value"><?= !empty($cancelled_order['closed_at']) ? htmlspecialchars(date('M d, Y h:i A', strtotime($cancelled_order['closed_at']))) : '—' ?></div></div>
+                                            <?php if ($historyIsCancelled): ?>
+                                                <div class="col-sm-6"><div class="info-label">Cancelled By</div><div class="info-value text-danger"><?= htmlspecialchars(staffCancellationActorLabel($cancelled_by_role)) ?></div></div>
+                                                <div class="col-12"><div class="info-label">Cancellation Reason</div><div class="info-value text-danger"><?= htmlspecialchars($cancelled_order['cancellation_reason'] ?: 'No reason recorded.') ?></div></div>
+                                            <?php endif; ?>
                                         </div>
-
-                                        <div class="text-end">
-
-                                            <span class="status-badge status-cancelled">
-                                                Cancelled
-                                            </span>
-
-                                        </div>
-
-                                    </div>
-
-                                    <hr>
-
-                                    <div class="row small">
-
-                                        <div class="col-md-4 mb-3">
-
-                                            <div class="info-label">
-                                                Customer
-                                            </div>
-
-                                            <div class="info-value">
-                                                <?= htmlspecialchars(
-                                                    $cancelled_order['customer_name']
-                                                ) ?>
-                                            </div>
-
-                                            <div class="text-muted">
-                                                <?= htmlspecialchars(
-                                                    $cancelled_order['contact_number']
-                                                ) ?>
-                                            </div>
-
-                                        </div>
-
-                                        <div class="col-md-4 mb-3">
-
-                                            <div class="info-label">
-                                                Pick-up
-                                            </div>
-
-                                            <div class="info-value">
-                                                <?= htmlspecialchars(
-                                                    $cancelled_order['pickup_date']
-                                                ) ?>
-                                                @
-                                                <?= htmlspecialchars(
-                                                    adminFormatTime(
-                                                        $cancelled_order['pickup_time']
-                                                    )
-                                                ) ?>
-                                            </div>
-
-                                        </div>
-
-                                        <div class="col-md-4 mb-3">
-
-                                            <div class="info-label">
-                                                Payment
-                                            </div>
-
-                                            <div
-                                                class="info-value text-uppercase <?=
-                                                    strtolower(trim((string)$cancelled_order['payment_method'])) === 'gcash'
-                                                        ? 'payment-gcash'
-                                                        : ''
-                                                ?>"
-                                            >
-                                                <?= htmlspecialchars(
-                                                    $cancelled_order['payment_method']
-                                                ) ?>
-                                            </div>
-
-                                        </div>
-
-                                    </div>
-
-                                    <div class="cancellation-box mt-1">
-
-                                        <div class="row small">
-
-                                            <div class="col-md-4 mb-2 mb-md-0">
-                                                <div class="info-label">
-                                                    Cancellation Reason
-                                                </div>
-
-                                                <div class="info-value text-danger">
-                                                    <?= !empty(
-                                                        $cancelled_order['cancellation_reason']
-                                                    )
-                                                        ? htmlspecialchars(
-                                                            $cancelled_order['cancellation_reason']
-                                                        )
-                                                        : 'No reason recorded.' ?>
-                                                </div>
-                                            </div>
-
-                                            <div class="col-md-4 mb-2 mb-md-0">
-                                                <div class="info-label">
-                                                    Cancelled At
-                                                </div>
-
-                                                <div class="info-value">
-                                                    <?= !empty($cancelled_order['closed_at'])
-                                                        ? htmlspecialchars(
-                                                            date(
-                                                                'M d, Y h:i A',
-                                                                strtotime(
-                                                                    $cancelled_order['closed_at']
-                                                                )
-                                                            )
-                                                        )
-                                                        : '—' ?>
-                                                </div>
-                                            </div>
-
-                                            <div class="col-md-4">
-                                                <div class="info-label">
-                                                    Cancelled By
-                                                </div>
-
-                                                <div class="info-value text-danger">
-                                                    <?= htmlspecialchars(
-                                                        adminCancellationActorLabel(
-                                                            $cancelled_by_role
-                                                        )
-                                                    ) ?>
-                                                </div>
-                                            </div>
-
-                                        </div>
-
-                                    </div>
-
-                                    <div class="order-items-card mt-3">
-
-                                        <div class="order-items-title">
-                                            <i class="bi bi-cup-straw me-1"></i>
-                                            Order Items
-                                        </div>
-
+                                        <div class="details-section-title mb-2">Ordered Items</div>
                                         <?php if ($cancelled_items): ?>
-
+                                            <div class="table-responsive"><table class="table table-sm align-middle"><thead><tr><th>Item</th><th>Customization</th><th class="text-center">Qty</th><th class="text-end">Subtotal</th></tr></thead><tbody>
                                             <?php foreach ($cancelled_items as $item): ?>
-
-                                                <?php
-                                                $addonDetails = adminGetAddons(
-                                                    $item['addons'] ?? null
-                                                );
-                                                ?>
-
-                                                <div class="order-item-row">
-
-                                                    <div class="d-flex justify-content-between align-items-start gap-3">
-
-                                                        <div class="flex-grow-1">
-
-                                                            <div class="order-item-name">
-                                                                <?= htmlspecialchars(
-                                                                    $item['product_name']
-                                                                ) ?>
-
-                                                                <span class="order-item-quantity">
-                                                                    × <?= (int)$item['quantity'] ?>
-                                                                </span>
-                                                            </div>
-
-                                                            <div class="order-item-base-price">
-                                                                Base Price: ₱<?= number_format(
-                                                                    (float)($item['unit_price'] ?? 0),
-                                                                    2
-                                                                ) ?> each
-                                                            </div>
-
-                                                            <?php if (
-                                                                !empty($item['size'])
-                                                                || !empty($item['sugar_level'])
-                                                            ): ?>
-
-                                                                <div class="order-item-customization">
-                                                                    <div class="order-item-customization-main">
-
-                                                                        <?php if (!empty($item['size'])): ?>
-                                                                            <span>
-                                                                                Size: <?= htmlspecialchars(
-                                                                                    $item['size']
-                                                                                ) ?>
-                                                                            </span>
-                                                                        <?php endif; ?>
-
-                                                                        <?php if (!empty($item['sugar_level'])): ?>
-                                                                            <span>
-                                                                                Sugar: <?= htmlspecialchars(
-                                                                                    $item['sugar_level']
-                                                                                ) ?>
-                                                                            </span>
-                                                                        <?php endif; ?>
-
-                                                                    </div>
-                                                                </div>
-
-                                                            <?php endif; ?>
-
-                                                            <?php if ($addonDetails): ?>
-
-                                                                <span class="order-addon-label">
-                                                                    Add-ons
-                                                                </span>
-
-                                                                <div class="order-addon-list">
-
-                                                                    <?php foreach ($addonDetails as $addon): ?>
-
-                                                                        <span class="order-addon-chip">
-
-                                                                            <?= htmlspecialchars(
-                                                                                $addon['name']
-                                                                            ) ?>
-
-                                                                            <span class="order-addon-chip-price">
-                                                                                +₱<?= number_format(
-                                                                                    (float)$addon['price'],
-                                                                                    2
-                                                                                ) ?>
-                                                                            </span>
-
-                                                                        </span>
-
-                                                                    <?php endforeach; ?>
-
-                                                                </div>
-
-                                                            <?php endif; ?>
-
-                                                        </div>
-
-                                                        <div class="order-item-price">
-                                                            ₱<?= number_format(
-                                                                (float)($item['subtotal'] ?? 0),
-                                                                2
-                                                            ) ?>
-                                                        </div>
-
-                                                    </div>
-
-                                                </div>
-
+                                                <?php $addonDetails = staffGetAddons($item['addons'] ?? null); ?>
+                                                <tr>
+                                                    <td><?= htmlspecialchars($item['product_name'] ?? 'Item') ?><div class="small text-muted">₱<?= number_format((float)($item['unit_price'] ?? 0), 2) ?> each</div></td>
+                                                    <td class="small text-muted"><?= htmlspecialchars(trim(($item['size'] ?? '') . (!empty($item['sugar_level']) ? ' · ' . $item['sugar_level'] : '') . ($addonDetails ? ' · ' . implode(', ', array_column($addonDetails, 'name')) : '')) ?: '—') ?></td>
+                                                    <td class="text-center"><?= (int)($item['quantity'] ?? 0) ?></td>
+                                                    <td class="text-end">₱<?= number_format((float)($item['subtotal'] ?? $item['total_price'] ?? 0), 2) ?></td>
+                                                </tr>
                                             <?php endforeach; ?>
-
-                                        <?php else: ?>
-
-                                            <div class="text-muted small">
-                                                No order items were found for this order.
+                                            </tbody></table></div>
+                                        <?php else: ?><div class="small text-muted">No order items were found for this order.</div><?php endif; ?>
+                                        <div class="d-flex justify-content-between border-top pt-3 mt-3"><strong>Order Total</strong><strong>₱<?= number_format((float)$cancelled_order['total_amount'], 2) ?></strong></div>
+                                        <?php if ($cancelled_payment_proof && strtolower(trim((string)$cancelled_order['payment_method'])) === 'gcash'): ?>
+                                            <div class="order-modal-proof-preview mt-3">
+                                                <div class="order-modal-proof-preview-heading">
+                                                    <span><i class="bi bi-image me-1" aria-hidden="true"></i>GCash payment proof</span>
+                                                </div>
+                                                <img
+                                                    src="<?= htmlspecialchars($cancelled_payment_proof, ENT_QUOTES, 'UTF-8') ?>"
+                                                    alt="GCash payment proof for <?= htmlspecialchars($cancelledIdentifier, ENT_QUOTES, 'UTF-8') ?>"
+                                                    class="order-modal-proof-image"
+                                                    decoding="async"
+                                                >
                                             </div>
-
                                         <?php endif; ?>
-
-                                        <div class="order-total-summary">
-
-                                            <span class="order-total-label">
-                                                Total
-                                            </span>
-
-                                            <span class="order-total-amount">
-                                                ₱<?= number_format(
-                                                    (float)$cancelled_order['total_amount'],
-                                                    2
-                                                ) ?>
-                                            </span>
-
-                                        </div>
-
                                     </div>
-
-                                    <div class="order-actions">
-
-                                        <button
-                                            type="button"
-                                            class="action-btn btn-outline-dark border"
-                                            data-bs-toggle="modal"
-                                            data-bs-target="#detailsModal<?= $cancelled_order_id ?>"
-                                        >
-                                            <i class="bi bi-eye me-1"></i>
-                                            View Details
-                                        </button>
-
-                                    </div>
-
-                                </div>
-
-                                <!-- CANCELLED ORDER DETAILS MODAL -->
-                                <div
-                                    class="modal fade"
-                                    id="detailsModal<?= $cancelled_order_id ?>"
-                                    tabindex="-1"
-                                    aria-hidden="true"
-                                >
-                                    <div class="modal-dialog modal-lg modal-dialog-centered">
-
-                                        <div class="modal-content">
-
-                                            <div class="modal-header">
-
-                                                <h5 class="modal-title fw-bold">
-                                                    Cancelled Order Details
-                                                </h5>
-
-                                                <button
-                                                    type="button"
-                                                    class="btn-close"
-                                                    data-bs-dismiss="modal"
-                                                    aria-label="Close"
-                                                ></button>
-
-                                            </div>
-
-                                            <div class="modal-body">
-
-                                                <div class="mb-3">
-
-                                                    <div class="details-section-title">
-                                                        Order Information
-                                                    </div>
-
-                                                    <div class="row small">
-
-                                                        <div class="col-md-6 mb-2">
-                                                            <div class="info-label">
-                                                                Order Number
-                                                            </div>
-                                                            <div class="info-value">
-                                                                <?= htmlspecialchars(
-                                                                    $cancelled_order['order_number']
-                                                                    ?: 'ORD-' . $cancelled_order_id
-                                                                ) ?>
-                                                            </div>
-                                                        </div>
-
-                                                        <div class="col-md-6 mb-2">
-                                                            <div class="info-label">
-                                                                Claim Number
-                                                            </div>
-                                                            <div class="info-value">
-                                                                <?= htmlspecialchars(
-                                                                    $cancelled_order['claim_number']
-                                                                    ?: 'N/A'
-                                                                ) ?>
-                                                            </div>
-                                                        </div>
-
-                                                        <div class="col-md-6 mb-2">
-                                                            <div class="info-label">
-                                                                Customer
-                                                            </div>
-                                                            <div class="info-value">
-                                                                <?= htmlspecialchars(
-                                                                    $cancelled_order['customer_name']
-                                                                ) ?>
-                                                            </div>
-                                                        </div>
-
-                                                        <div class="col-md-6 mb-2">
-                                                            <div class="info-label">
-                                                                Payment
-                                                            </div>
-                                                            <div
-                                                                class="info-value text-uppercase <?=
-                                                                    strtolower(trim((string)$cancelled_order['payment_method'])) === 'gcash'
-                                                                        ? 'payment-gcash'
-                                                                        : ''
-                                                                ?>"
-                                                            >
-                                                                <?= htmlspecialchars(
-                                                                    $cancelled_order['payment_method']
-                                                                ) ?>
-                                                            </div>
-                                                        </div>
-
-                                                    </div>
-
-                                                </div>
-
-                                                <div class="cancellation-box mb-3">
-
-                                                    <div class="details-section-title text-danger">
-                                                        Cancellation Details
-                                                    </div>
-
-                                                    <div class="row small">
-
-                                                        <div class="col-md-4 mb-2">
-                                                            <div class="info-label">
-                                                                Reason
-                                                            </div>
-                                                            <div class="info-value">
-                                                                <?= !empty(
-                                                                    $cancelled_order['cancellation_reason']
-                                                                )
-                                                                    ? htmlspecialchars(
-                                                                        $cancelled_order['cancellation_reason']
-                                                                    )
-                                                                    : 'No reason recorded.' ?>
-                                                            </div>
-                                                        </div>
-
-                                                        <div class="col-md-4 mb-2">
-                                                            <div class="info-label">
-                                                                Cancelled At
-                                                            </div>
-                                                            <div class="info-value">
-                                                                <?= !empty($cancelled_order['closed_at'])
-                                                                    ? htmlspecialchars(
-                                                                        date(
-                                                                            'M d, Y h:i A',
-                                                                            strtotime(
-                                                                                $cancelled_order['closed_at']
-                                                                            )
-                                                                        )
-                                                                    )
-                                                                    : '—' ?>
-                                                            </div>
-                                                        </div>
-
-                                                        <div class="col-md-4 mb-2">
-                                                            <div class="info-label">
-                                                                Cancelled By
-                                                            </div>
-                                                            <div class="info-value">
-                                                                <?= htmlspecialchars(
-                                                                    adminCancellationActorLabel(
-                                                                        $cancelled_by_role
-                                                                    )
-                                                                ) ?>
-                                                            </div>
-                                                        </div>
-
-                                                    </div>
-
-                                                </div>
-
-                                                <?php if ($cancelled_payment_proof && strtolower(
-                                                    trim((string)$cancelled_order['payment_method'])
-                                                ) === 'gcash'): ?>
-
-                                                    <div class="mb-3">
-
-                                                        <div class="details-section-title">
-                                                            GCash Payment Proof
-                                                        </div>
-
-                                                        <a
-                                                            href="<?= htmlspecialchars($cancelled_payment_proof) ?>"
-                                                            target="_blank"
-                                                            rel="noopener"
-                                                            class="btn btn-sm btn-outline-dark"
-                                                        >
-                                                            <i class="bi bi-image me-1"></i>
-                                                            Open Payment Proof
-                                                        </a>
-
-                                                    </div>
-
-                                                <?php endif; ?>
-
-                                            </div>
-
-                                        </div>
-
-                                    </div>
-                                </div>
-
-                            <?php endforeach; ?>
-
-                        </div>
+                                    <div class="modal-footer"><button type="button" class="btn btn-outline-dark" data-bs-dismiss="modal">Close</button></div>
+                                </div></div>
+                            </div>
+                        <?php endforeach; ?>
 
                         <?php if ($cancelled_total_pages > 1): ?>
-
-                            <div class="cancelled-pagination" aria-label="Cancelled order pagination">
-
-                                <?php if ($cancelled_page > 1): ?>
-
-                                    <a
-                                        href="<?= htmlspecialchars(
-                                            adminOrdersUrl([
-                                                'cancelled_page' => $cancelled_page - 1,
-                                                'cancelled_open' => '1'
-                                            ])
-                                        ) ?>"
-                                        aria-label="Previous page"
-                                        data-cancelled-pagination
-                                    >
-                                        <i class="bi bi-chevron-left"></i>
-                                    </a>
-
-                                <?php else: ?>
-
-                                    <span class="disabled" aria-hidden="true">
-                                        <i class="bi bi-chevron-left"></i>
-                                    </span>
-
-                                <?php endif; ?>
-
-                                <?php
-                                $cancelledPaginationPages = [1];
-
-                                for (
-                                    $cancelled_p = max(2, $cancelled_page - 2);
-                                    $cancelled_p <= min(
-                                        $cancelled_total_pages - 1,
-                                        $cancelled_page + 2
-                                    );
-                                    $cancelled_p++
-                                ) {
-                                    $cancelledPaginationPages[] = $cancelled_p;
-                                }
-
-                                $cancelledPaginationPages[] = $cancelled_total_pages;
-
-                                $cancelledPaginationPages = array_values(
-                                    array_unique($cancelledPaginationPages)
-                                );
-
-                                $cancelledPreviousPage = 0;
-
-                                foreach (
-                                    $cancelledPaginationPages
-                                    as $cancelled_p
-                                ):
-
-                                    if (
-                                        $cancelledPreviousPage > 0
-                                        && $cancelled_p > $cancelledPreviousPage + 1
-                                    ):
-                                ?>
-
-                                        <span class="ellipsis" aria-hidden="true">
-                                            ...
-                                        </span>
-
-                                    <?php endif; ?>
-
-                                    <?php if ($cancelled_p === $cancelled_page): ?>
-
-                                        <span
-                                            class="active"
-                                            aria-current="page"
-                                        >
-                                            <?= $cancelled_p ?>
-                                        </span>
-
-                                    <?php else: ?>
-
-                                        <a
-                                            href="<?= htmlspecialchars(
-                                                adminOrdersUrl([
-                                                    'cancelled_page' => $cancelled_p,
+                            <div class="pagination-wrap cancelled-pagination-wrap cancelled-pagination">
+                                <nav aria-label="Cancelled order pagination">
+                                    <ul class="pagination mb-0">
+                                        <li class="page-item <?= $cancelled_page <= 1 ? 'disabled' : '' ?>">
+                                            <a
+                                                class="page-link"
+                                                href="<?= htmlspecialchars(staffOrdersUrl([
+                                                    'cancelled_page' => max(1, $cancelled_page - 1),
                                                     'cancelled_open' => '1'
-                                                ])
-                                            ) ?>"
-                                            data-cancelled-pagination
-                                        >
-                                            <?= $cancelled_p ?>
-                                        </a>
+                                                ])) ?>"
+                                                data-cancelled-pagination
+                                                aria-label="Previous cancelled orders page"
+                                            >Previous</a>
+                                        </li>
 
-                                    <?php endif; ?>
+                                        <?php
+                                        /* Keep page 1 visible and show the current page window,
+                                           matching Active Orders and GCash Refunds. */
+                                        $cancelledPaginationPages = [1];
+                                        for (
+                                            $cancelled_p = max(2, $cancelled_page - 2);
+                                            $cancelled_p <= min($cancelled_total_pages - 1, $cancelled_page + 2);
+                                            $cancelled_p++
+                                        ) {
+                                            $cancelledPaginationPages[] = $cancelled_p;
+                                        }
+                                        $cancelledPaginationPages[] = $cancelled_total_pages;
+                                        $cancelledPaginationPages = array_values(array_unique($cancelledPaginationPages));
+                                        $cancelledPreviousPage = 0;
+                                        foreach ($cancelledPaginationPages as $cancelled_p):
+                                            if (
+                                                $cancelledPreviousPage > 0
+                                                && $cancelled_p > $cancelledPreviousPage + 1
+                                            ):
+                                        ?>
+                                            <li class="page-item disabled" aria-hidden="true">
+                                                <span class="page-link">...</span>
+                                            </li>
+                                        <?php endif; ?>
 
-                                <?php
-                                    $cancelledPreviousPage = $cancelled_p;
-                                endforeach;
-                                ?>
+                                            <li class="page-item <?= $cancelled_p === $cancelled_page ? 'active' : '' ?>">
+                                                <a
+                                                    class="page-link"
+                                                    href="<?= htmlspecialchars(staffOrdersUrl([
+                                                        'cancelled_page' => $cancelled_p,
+                                                        'cancelled_open' => '1'
+                                                    ])) ?>"
+                                                    data-cancelled-pagination
+                                                    <?= $cancelled_p === $cancelled_page ? 'aria-current="page"' : '' ?>
+                                                ><?= $cancelled_p ?></a>
+                                            </li>
+                                        <?php
+                                            $cancelledPreviousPage = $cancelled_p;
+                                        endforeach;
+                                        ?>
 
-                                <?php if ($cancelled_page < $cancelled_total_pages): ?>
-
-                                    <a
-                                        href="<?= htmlspecialchars(
-                                            adminOrdersUrl([
-                                                'cancelled_page' => $cancelled_page + 1,
-                                                'cancelled_open' => '1'
-                                            ])
-                                        ) ?>"
-                                        aria-label="Next page"
-                                        data-cancelled-pagination
-                                    >
-                                        <i class="bi bi-chevron-right"></i>
-                                    </a>
-
-                                <?php else: ?>
-
-                                    <span class="disabled" aria-hidden="true">
-                                        <i class="bi bi-chevron-right"></i>
-                                    </span>
-
-                                <?php endif; ?>
-
+                                        <li class="page-item <?= $cancelled_page >= $cancelled_total_pages ? 'disabled' : '' ?>">
+                                            <a
+                                                class="page-link"
+                                                href="<?= htmlspecialchars(staffOrdersUrl([
+                                                    'cancelled_page' => min($cancelled_total_pages, $cancelled_page + 1),
+                                                    'cancelled_open' => '1'
+                                                ])) ?>"
+                                                data-cancelled-pagination
+                                                aria-label="Next cancelled orders page"
+                                            >Next</a>
+                                        </li>
+                                    </ul>
+                                </nav>
                             </div>
-
+                            <div class="small text-muted text-center mt-2">
+                                Page <?= (int)$cancelled_page ?> of <?= (int)$cancelled_total_pages ?> ·
+                                <?= (int)$cancelled_total_orders ?> order(s) · 5 per page
+                            </div>
                         <?php endif; ?>
 
                     <?php endif; ?>
@@ -8407,30 +7498,31 @@ require_once '../includes/header.php';
 
             </details>
 
-
     </main>
 
 </div>
 
 <!-- =========================================================
-     SHARED ORDER MODALS
+     SHARED STAFF ORDER MODALS
      These stay outside the AJAX-replaced Active Orders section.
 ========================================================= -->
 
 <!-- SHARED CANCEL ORDER MODAL -->
-<div class="modal fade" id="adminCancelOrderModal" tabindex="-1" aria-hidden="true">
+<div class="modal fade" id="staffCancelOrderModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content">
 
             <form
                 method="POST"
-                action="<?= htmlspecialchars($orders_page, ENT_QUOTES, 'UTF-8') ?>"
-                id="adminCancelOrderForm"
+                action="index.php"
+                id="staffCancelOrderForm"
             >
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($staff_csrf_token, ENT_QUOTES, 'UTF-8') ?>">
 
                 <div class="modal-header">
                     <h5
                         class="modal-title fw-bold"
+                        id="staffCancelOrderModalTitle"
                         style="color:#4A3525;"
                     >
                         Cancel Order
@@ -8447,12 +7539,15 @@ require_once '../includes/header.php';
                 <div class="modal-body">
 
                     <p class="small text-muted mb-3">
-                        You are cancelling
-                        <strong id="adminCancelOrderNumber">
+                        <span id="staffCancelOrderActionText">You are cancelling</span>
+                        <strong id="staffCancelOrderNumber">
                             this order
                         </strong>.
-                        Please select a cancellation reason.
+                        <span id="staffCancelOrderInstruction">Please select a cancellation reason.</span>
                     </p>
+                    <div id="staffNoShowRefundNotice" class="alert alert-warning py-2 small mb-3" role="note" hidden>
+                        This order has already been prepared. Under the No-show policy, it will be closed without a refund.
+                    </div>
 
                     <input
                         type="hidden"
@@ -8463,121 +7558,111 @@ require_once '../includes/header.php';
                     <input
                         type="hidden"
                         name="order_id"
-                        id="adminCancelOrderId"
+                        id="staffCancelOrderId"
                         value=""
                     >
 
                     <input
                         type="hidden"
                         name="status_filter"
-                        id="adminCancelStatusFilter"
+                        id="staffCancelStatusFilter"
                         value="<?= htmlspecialchars($selected_status) ?>"
                     >
 
                     <input
                         type="hidden"
                         name="q"
-                        id="adminCancelSearch"
+                        id="staffCancelSearch"
                         value="<?= htmlspecialchars($search) ?>"
                     >
 
                     <input
                         type="hidden"
                         name="page"
-                        id="adminCancelPage"
+                        id="staffCancelPage"
                         value="<?= (int)$page ?>"
                     >
+
+                    <input type="hidden" id="staffCancelOrderStatus" value="">
+                    <input type="hidden" id="staffCancelOrderPaymentMethod" value="">
 
                     <div class="mb-3">
 
                         <label
                             class="form-label small fw-semibold"
-                            for="adminCancelReason"
+                            for="staffCancelReasonToggle"
                         >
                             Cancellation Reason
                         </label>
 
-                        <select
+                        <input
+                            type="hidden"
                             name="cancellation_reason"
-                            id="adminCancelReason"
-                            class="form-select"
-                            required
+                            id="staffCancelReason"
+                            value=""
                         >
-                            <option
-                                value=""
-                                selected
-                                disabled
+
+                        <div
+                            class="staff-cancel-reason-dropdown"
+                            id="staffCancelReasonDropdown"
+                        >
+                            <button
+                                type="button"
+                                class="form-select staff-cancel-reason-toggle"
+                                id="staffCancelReasonToggle"
+                                aria-haspopup="listbox"
+                                aria-expanded="false"
+                                aria-controls="staffCancelReasonMenu"
                             >
-                                Select a cancellation reason
-                            </option>
+                                <span id="staffCancelReasonLabel">Select a cancellation reason</span>
+                                <i class="bi bi-chevron-down" aria-hidden="true"></i>
+                            </button>
 
-                            <optgroup label="Payment-related reasons">
+                            <div
+                                class="staff-cancel-reason-menu"
+                                id="staffCancelReasonMenu"
+                                role="listbox"
+                                aria-labelledby="staffCancelReasonToggle"
+                                hidden
+                            >
+                                <div class="staff-cancel-reason-group-label" data-standard-reason-group>Store and fulfillment reasons</div>
+                                <button type="button" class="staff-cancel-reason-option" role="option" aria-selected="false" data-value="Item unavailable / out of stock" data-standard-reason>Item unavailable / out of stock</button>
+                                <button type="button" class="staff-cancel-reason-option" role="option" aria-selected="false" data-value="Store unable to fulfill at selected pickup time" data-standard-reason>Store unable to fulfill at selected pickup time</button>
+                                <button type="button" class="staff-cancel-reason-option" role="option" aria-selected="false" data-value="Store closure or operational issue" data-standard-reason>Store closure or operational issue</button>
 
-                                <option value="Payment could not be verified">
-                                    Payment could not be verified
-                                </option>
+                                <div class="staff-cancel-reason-group-label" data-standard-reason-group>Payment-related reasons</div>
+                                <button type="button" class="staff-cancel-reason-option" role="option" aria-selected="false" data-value="Payment could not be verified" data-standard-reason>Payment could not be verified</button>
+                                <button type="button" class="staff-cancel-reason-option" role="option" aria-selected="false" data-value="GCash proof is missing, unreadable, or invalid" data-standard-reason>GCash proof is missing, unreadable, or invalid</button>
+                                <button type="button" class="staff-cancel-reason-option" role="option" aria-selected="false" data-value="Payment amount does not match order total" data-standard-reason>Payment amount does not match order total</button>
 
-                                <option value="Payment screenshot does not match order total">
-                                    Payment screenshot does not match order total
-                                </option>
+                                <div class="staff-cancel-reason-group-label" data-standard-reason-group>System and other reasons</div>
+                                <button type="button" class="staff-cancel-reason-option" role="option" aria-selected="false" data-value="Pricing or system error on the order" data-standard-reason>Pricing or system error on the order</button>
+                                <button type="button" class="staff-cancel-reason-option" role="option" aria-selected="false" data-value="Invalid order or suspected fraudulent activity" data-standard-reason>Invalid order or suspected fraudulent activity</button>
+                                <button type="button" class="staff-cancel-reason-option" role="option" aria-selected="false" data-value="__other__" data-standard-reason>Other — please specify</button>
 
-                            </optgroup>
-
-                            <optgroup label="Store-caused reasons">
-
-                                <option value="Item unavailable / out of stock">
-                                    Item unavailable / out of stock
-                                </option>
-
-                                <option value="Store unable to fulfill due to closure or operational issue">
-                                    Store unable to fulfill due to closure or operational issue
-                                </option>
-
-                                <option value="Pricing or system error on the order">
-                                    Pricing or system error on the order
-                                </option>
-
-                            </optgroup>
-
-                            <optgroup label="Other reasons">
-
-                                <option value="Customer requested cancellation">
-                                    Customer requested cancellation
-                                </option>
-
-                                <option value="Duplicate order">
-                                    Duplicate order
-                                </option>
-
-                                <option value="Incorrect order details">
-                                    Incorrect order details
-                                </option>
-
-                                <option value="__other__">
-                                    Other — please specify
-                                </option>
-
-                            </optgroup>
-                        </select>
+                                <div class="staff-cancel-reason-group-label" data-no-show-reason-group hidden>Pick-up outcome</div>
+                                <button type="button" class="staff-cancel-reason-option" role="option" aria-selected="false" data-value="Customer did not collect order (No-show)" data-no-show-reason hidden>Customer did not collect order (No-show)</button>
+                            </div>
+                        </div>
 
                     </div>
 
                     <div
-                        id="adminOtherCancellationReasonWrap"
+                        id="staffOtherCancellationReasonWrap"
                         class="mb-2"
                         style="display:none;"
                     >
 
                         <label
                             class="form-label small fw-semibold"
-                            for="adminOtherCancellationReason"
+                            for="staffOtherCancellationReason"
                         >
                             Other Cancellation Reason
                         </label>
 
                         <textarea
                             name="other_cancellation_reason"
-                            id="adminOtherCancellationReason"
+                            id="staffOtherCancellationReason"
                             class="form-control"
                             rows="3"
                             maxlength="255"
@@ -8605,7 +7690,7 @@ require_once '../includes/header.php';
                     <button
                         type="submit"
                         class="btn btn-danger"
-                        id="adminConfirmCancellationButton"
+                        id="staffConfirmCancellationButton"
                     >
                         <i class="bi bi-x-circle me-1"></i>
                         Confirm Cancellation
@@ -8619,8 +7704,92 @@ require_once '../includes/header.php';
     </div>
 </div>
 
+<!-- SHARED GCASH PAYMENT REVIEW MODAL -->
+<div class="modal fade" id="staffGcashReviewModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable modal-lg gcash-review-dialog">
+        <div class="modal-content">
+            <form method="POST" action="index.php" id="staffGcashReviewForm">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($staff_csrf_token, ENT_QUOTES, 'UTF-8') ?>">
+                <div class="modal-header details-header">
+                    <div>
+                        <h5 class="modal-title fw-bold mb-1" style="color:#4A3525;">Review GCash Payment</h5>
+                        <div class="small text-muted" id="staffGcashReviewReference">Order details</div>
+                    </div>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+
+                <div class="modal-body p-3 p-md-4">
+                    <input type="hidden" name="order_id" id="staffGcashReviewOrderId" value="">
+                    <input type="hidden" name="status" value="order_queue">
+                    <input type="hidden" name="status_filter" id="staffGcashReviewStatusFilter" value="pending_verification">
+                    <input type="hidden" name="q" id="staffGcashReviewSearch" value="">
+                    <input type="hidden" name="page" id="staffGcashReviewPage" value="1">
+
+                    <div class="gcash-review-summary mb-3">
+                        <div>
+                            <div class="info-label">Order Total</div>
+                            <div class="gcash-review-total" id="staffGcashReviewTotal">₱0.00</div>
+                        </div>
+                        <span class="status-badge status-pending_verification">Pending Verification</span>
+                    </div>
+
+                    <div class="alert alert-info py-2 small mb-3" role="note">
+                        Compare the screenshot with the actual GCash transaction history or account received by the store. A screenshot by itself does not prove that the money was received.
+                    </div>
+
+                    <div class="details-section-title mb-2">Uploaded GCash Payment Screenshot</div>
+                    <div class="gcash-review-proof-frame">
+                        <img
+                            id="staffGcashReviewImage"
+                            class="gcash-review-image"
+                            src=""
+                            alt="Uploaded GCash payment screenshot"
+                            hidden
+                        >
+                        <div id="staffGcashReviewImageMessage" class="small text-muted text-center" aria-live="polite">
+                            Loading payment screenshot...
+                        </div>
+                    </div>
+
+                    <p class="small text-muted mt-2 mb-0">
+                        Verify only after confirming that the transaction was actually received in the store's GCash account and that the amount matches the order total.
+                    </p>
+
+                </div>
+
+                <div class="modal-footer d-flex flex-column flex-sm-row justify-content-between gap-2">
+                    <button
+                        type="button"
+                        class="btn btn-outline-danger me-sm-auto"
+                        id="staffGcashRejectPaymentButton"
+                        data-order-id=""
+                        data-order-number=""
+                    >
+                        <i class="bi bi-x-circle me-1"></i>
+                        Reject Payment
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
+                        Close
+                    </button>
+                    <button
+                        type="submit"
+                        name="update_status"
+                        value="1"
+                        class="btn btn-success"
+                        id="staffGcashVerifyButton"
+                        disabled
+                    >
+                        <i class="bi bi-shield-check me-1"></i>
+                        Verify Payment &amp; Move to Order Queue
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
 <!-- SHARED PAYMENT PROOF MODAL -->
-<div class="modal fade" id="adminPaymentProofModal" tabindex="-1" aria-hidden="true">
+<div class="modal fade" id="staffPaymentProofModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered modal-lg">
         <div class="modal-content">
             <div class="modal-header details-header">
@@ -8629,7 +7798,7 @@ require_once '../includes/header.php';
             </div>
             <div class="modal-body text-center">
                 <img
-                    id="adminPaymentProofImage"
+                    id="staffPaymentProofImage"
                     src=""
                     alt="GCash payment proof"
                     class="payment-proof-image"
@@ -8640,12 +7809,47 @@ require_once '../includes/header.php';
 </div>
 
 <!-- =========================================================
+     CSRF TOKEN FOR AJAX REQUESTS
+     Adds the X-CSRF-Token header to every same-origin POST
+     sent with fetch(). The forms also carry a hidden field.
+========================================================= -->
+<script>
+(function () {
+    const csrfToken = <?= json_encode($staff_csrf_token) ?>;
+    const nativeFetch = window.fetch;
+
+    if (typeof nativeFetch !== 'function') {
+        return;
+    }
+
+    window.fetch = function (input, init) {
+        try {
+            const isRequest = input instanceof Request;
+            const url = new URL(isRequest ? input.url : String(input), window.location.href);
+            const method = String((init && init.method) || (isRequest ? input.method : 'GET')).toUpperCase();
+
+            if (url.origin === window.location.origin && method !== 'GET' && method !== 'HEAD') {
+                init = Object.assign({}, init || {});
+                const headers = new Headers(init.headers || (isRequest ? input.headers : undefined));
+                headers.set('X-CSRF-Token', csrfToken);
+                init.headers = headers;
+            }
+        } catch (error) {
+            /* Never block a request because of this helper. */
+        }
+
+        return nativeFetch.call(window, input, init);
+    };
+})();
+</script>
+
+<!-- =========================================================
      RELIABLE ORDER DETAIL / SHARED MODAL HANDLERS
 ========================================================= -->
 <script>
 document.addEventListener('DOMContentLoaded', function () {
 
-    const adminOrdersContent = document.querySelector('.admin-content');
+    const staffOrdersContent = document.querySelector('.staff-content');
 
     function cleanupStaleModalState() {
         document.querySelectorAll('.modal-backdrop').forEach(function (backdrop) {
@@ -8657,81 +7861,15 @@ document.addEventListener('DOMContentLoaded', function () {
         document.body.style.removeProperty('overflow');
     }
 
-
-    function openLocaliteaModal(modalElement) {
-        if (!modalElement) {
-            return;
-        }
-
-        /* Remove stale Localitea/Bootstrap backdrops first. */
-        document
-            .querySelectorAll('[data-localitea-modal-backdrop], .modal-backdrop')
-            .forEach(function (backdrop) {
-                backdrop.remove();
-            });
-
-        /* Close any other visible modal before opening this one. */
-        document
-            .querySelectorAll('.modal.show')
-            .forEach(function (openModal) {
-                if (openModal !== modalElement) {
-                    openModal.classList.remove('show');
-                    openModal.style.display = 'none';
-                    openModal.setAttribute('aria-hidden', 'true');
-                    openModal.removeAttribute('aria-modal');
-                }
-            });
-
-        modalElement.classList.add('show');
-        modalElement.style.display = 'block';
-        modalElement.removeAttribute('aria-hidden');
-        modalElement.setAttribute('aria-modal', 'true');
-        modalElement.setAttribute('role', 'dialog');
-
-        document.body.classList.add('modal-open');
-        document.body.style.overflow = 'hidden';
-
-        const backdrop = document.createElement('div');
-        backdrop.className = 'modal-backdrop fade show';
-        backdrop.setAttribute('data-localitea-modal-backdrop', 'true');
-
-        backdrop.addEventListener('click', function () {
-            closeLocaliteaModal(modalElement);
-        });
-
-        document.body.appendChild(backdrop);
-    }
-
-    function closeLocaliteaModal(modalElement) {
-        if (!modalElement) {
-            return;
-        }
-
-        modalElement.classList.remove('show');
-        modalElement.style.display = 'none';
-        modalElement.setAttribute('aria-hidden', 'true');
-        modalElement.removeAttribute('aria-modal');
-
-        document
-            .querySelectorAll('[data-localitea-modal-backdrop]')
-            .forEach(function (backdrop) {
-                backdrop.remove();
-            });
-
-        document.body.classList.remove('modal-open');
-        document.body.style.removeProperty('overflow');
-    }
-
     function showModalCleanly(modalElement) {
         if (!modalElement) {
             return;
         }
 
         /*
-         * Keep Bootstrap when available, but retain the Localitea fallback.
-         * This is important for Staff because the Orders section can be
-         * refreshed/re-rendered and Bootstrap's data-api may not reliably
-         * bind the newly rendered View Details buttons.
+         * Keep the existing Bootstrap behavior for the other shared
+         * modals on this page. View Details has its own fallback below
+         * so it still works even if Bootstrap's JS is unavailable.
          */
         if (!window.bootstrap || !bootstrap.Modal) {
             openLocaliteaModal(modalElement);
@@ -8773,8 +7911,6 @@ document.addEventListener('DOMContentLoaded', function () {
             );
 
             currentInstance.hide();
-
-            /* Fallback in case Bootstrap's hidden event is interrupted. */
             window.setTimeout(openTarget, 400);
             return;
         }
@@ -8792,19 +7928,580 @@ document.addEventListener('DOMContentLoaded', function () {
         targetInstance.show();
     }
 
-    if (adminOrdersContent) {
+    function openLocaliteaModal(modalElement) {
+        if (!modalElement) {
+            return;
+        }
 
-        adminOrdersContent.addEventListener('click', function (event) {
+        /* Remove any stale local/Bootstrap backdrop first. */
+        document
+            .querySelectorAll('[data-localitea-modal-backdrop], .modal-backdrop')
+            .forEach(function (backdrop) {
+                backdrop.remove();
+            });
+
+        document
+            .querySelectorAll('.modal.show')
+            .forEach(function (openModal) {
+                if (openModal !== modalElement) {
+                    openModal.classList.remove('show');
+                    openModal.style.display = 'none';
+                    openModal.setAttribute('aria-hidden', 'true');
+                    openModal.removeAttribute('aria-modal');
+                }
+            });
+
+        modalElement.classList.add('show');
+        modalElement.style.display = 'block';
+        modalElement.removeAttribute('aria-hidden');
+        modalElement.setAttribute('aria-modal', 'true');
+        modalElement.setAttribute('role', 'dialog');
+
+        document.body.classList.add('modal-open');
+        document.body.style.overflow = 'hidden';
+
+        const backdrop = document.createElement('div');
+        backdrop.className = 'modal-backdrop fade show';
+        backdrop.setAttribute('data-localitea-modal-backdrop', 'true');
+        backdrop.addEventListener('click', function () {
+            closeLocaliteaModal(modalElement);
+        });
+        document.body.appendChild(backdrop);
+    }
+
+    function closeLocaliteaModal(modalElement) {
+        if (!modalElement) {
+            return;
+        }
+
+        modalElement.classList.remove('show');
+        modalElement.style.display = 'none';
+        modalElement.setAttribute('aria-hidden', 'true');
+        modalElement.removeAttribute('aria-modal');
+
+        document
+            .querySelectorAll('[data-localitea-modal-backdrop]')
+            .forEach(function (backdrop) {
+                backdrop.remove();
+            });
+
+        document.body.classList.remove('modal-open');
+        document.body.style.removeProperty('overflow');
+    }
+
+    /*
+     * Expose the fallback close helper for the separate AJAX workflow script
+     * below. Function declarations inside this DOMContentLoaded callback are
+     * otherwise private to this callback and cannot be called by other script
+     * blocks.
+     */
+    window.closeLocaliteaModal = closeLocaliteaModal;
+
+    /*
+     * Cancelled history modals are rendered inside a <details> section with
+     * overflow:hidden. Move only the selected modal to <body> before opening
+     * so it is not clipped. Capture phase keeps this reliable after the
+     * Cancelled Orders section is replaced through AJAX pagination/search.
+     */
+    document.addEventListener('click', function (event) {
+        const targetElement = event.target instanceof Element ? event.target : null;
+        const detailsButton = targetElement
+            ? targetElement.closest('.cancelled-history-table [data-cancelled-order-details]')
+            : null;
+
+        if (!detailsButton) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+
+        const orderId = detailsButton.getAttribute('data-order-id') || '';
+        const modalId = detailsButton.getAttribute('data-order-details-modal') || '';
+        const detailsModal = modalId ? document.getElementById(modalId) : null;
+
+        if (
+            !detailsModal
+            || detailsModal.getAttribute('data-order-id') !== orderId
+        ) {
+            console.error('Cancelled Order Details modal does not match the selected order:', {orderId, modalId});
+            return;
+        }
+
+        if (detailsModal.parentElement !== document.body) {
+            detailsModal.setAttribute('data-cancelled-order-modal-detached', 'true');
+            document.body.appendChild(detailsModal);
+        }
+
+        showModalCleanly(detailsModal);
+    }, true);
+
+    /* Fallback close handling for detached Cancelled Order modals when Bootstrap JS is unavailable. */
+    document.addEventListener('click', function (event) {
+        const targetElement = event.target instanceof Element ? event.target : null;
+        const dismissButton = targetElement
+            ? targetElement.closest('.cancelled-order-details-modal [data-bs-dismiss="modal"]')
+            : null;
+
+        if (!dismissButton || (window.bootstrap && bootstrap.Modal)) {
+            return;
+        }
+
+        const modalElement = dismissButton.closest('.cancelled-order-details-modal');
+        if (!modalElement || !modalElement.classList.contains('show')) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        closeLocaliteaModal(modalElement);
+    }, true);
+
+    /* =====================================================
+       PENDING REFUND MODALS
+       These modals are rendered inside a <details> section that has
+       overflow:hidden and is refreshed through AJAX. Move the selected
+       modal to <body> before opening it so the section cannot clip it.
+       Handle the clicks ourselves so the buttons also work when Bootstrap's
+       data API is unavailable or the refund section has been AJAX-replaced.
+    ===================================================== */
+    function openPendingRefundModal(modalElement) {
+        if (!modalElement) {
+            return;
+        }
+
+        if (modalElement.parentElement !== document.body) {
+            modalElement.setAttribute('data-pending-refund-detached', 'true');
+            document.body.appendChild(modalElement);
+        }
+
+        showModalCleanly(modalElement);
+    }
+
+    function closePendingRefundModal(modalElement) {
+        if (!modalElement) {
+            return;
+        }
+
+        if (window.bootstrap && window.bootstrap.Modal) {
+            const instance =
+                bootstrap.Modal.getInstance(modalElement) ||
+                bootstrap.Modal.getOrCreateInstance(modalElement, {
+                    backdrop: true,
+                    keyboard: true,
+                    focus: true
+                });
+
+            instance.hide();
+
+            /* Safety net for stale Bootstrap instances/backdrops. */
+            window.setTimeout(function () {
+                if (modalElement.classList.contains('show')) {
+                    closeLocaliteaModal(modalElement);
+                }
+
+                if (!document.querySelector('.modal.show')) {
+                    cleanupStaleModalState();
+                }
+            }, 500);
+        } else {
+            closeLocaliteaModal(modalElement);
+        }
+    }
+
+    /* Capture phase prevents a second Bootstrap data-api handler from
+       opening the same modal a second time. */
+    document.addEventListener('click', function (event) {
+        const targetElement = event.target instanceof Element
+            ? event.target
+            : null;
+        const openButton = targetElement
+            ? targetElement.closest('.pending-refund-btn[data-bs-toggle="modal"][data-bs-target]')
+            : null;
+
+        if (!openButton) {
+            return;
+        }
+
+        const modalSelector = openButton.getAttribute('data-bs-target') || '';
+        const modalElement = modalSelector.startsWith('#')
+            ? document.getElementById(modalSelector.slice(1))
+            : null;
+
+        if (!modalElement) {
+            console.error('Pending Refund modal not found:', modalSelector);
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+
+        openPendingRefundModal(modalElement);
+    }, true);
+
+    /* Explicit close behavior for pending-refund modals, including fallback
+       mode when Bootstrap JavaScript is missing or has a stale instance. */
+    document.addEventListener('click', function (event) {
+        const targetElement = event.target instanceof Element
+            ? event.target
+            : null;
+        const dismissButton = targetElement
+            ? targetElement.closest('.pending-refund-modal [data-bs-dismiss="modal"]')
+            : null;
+
+        if (!dismissButton) {
+            return;
+        }
+
+        const modalElement = dismissButton.closest('.pending-refund-modal');
+        if (!modalElement) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+
+        closePendingRefundModal(modalElement);
+    }, true);
+
+    /*
+     * Make clicking outside an Order Details dialog close it reliably.
+     * This explicit handler also covers cases where a previously created
+     * Bootstrap modal instance retained a static-backdrop configuration.
+     * Clicks inside .modal-dialog are left untouched.
+     */
+    document.addEventListener('click', function (event) {
+        const activeOrderModal = document.querySelector(
+            '.modal.show[id^="orderDetailsModal"]'
+        );
+
+        if (!activeOrderModal) {
+            return;
+        }
+
+        const target = event.target;
+        const clickedModalSurface = target === activeOrderModal;
+        const clickedBackdrop = target instanceof Element &&
+            target.classList.contains('modal-backdrop');
+
+        if (!clickedModalSurface && !clickedBackdrop) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+
+        if (window.bootstrap && bootstrap.Modal) {
+            const instance =
+                bootstrap.Modal.getInstance(activeOrderModal) ||
+                bootstrap.Modal.getOrCreateInstance(activeOrderModal, {
+                    backdrop: true,
+                    keyboard: true,
+                    focus: true
+                });
+            instance.hide();
+        } else {
+            closeLocaliteaModal(activeOrderModal);
+        }
+    }, true);
+
+    /* =====================================================
+       GCASH REVIEW-FIRST FLOW
+       The screenshot must load before Verify Payment is enabled.
+       Server-side PHP remains responsible for validating the payment.
+    ===================================================== */
+    const gcashReviewModal = document.getElementById('staffGcashReviewModal');
+    const gcashReviewForm = document.getElementById('staffGcashReviewForm');
+    const gcashReviewImage = document.getElementById('staffGcashReviewImage');
+    const gcashReviewImageMessage = document.getElementById('staffGcashReviewImageMessage');
+    const gcashVerifyButton = document.getElementById('staffGcashVerifyButton');
+    const gcashVerifyButtonDefaultHTML = gcashVerifyButton ? gcashVerifyButton.innerHTML : '';
+    const gcashRejectButton = document.getElementById('staffGcashRejectPaymentButton');
+
+    let gcashReviewImageLoaded = false;
+
+    function syncGcashReviewButton() {
+        if (!gcashVerifyButton) {
+            return;
+        }
+
+        /* Enable verification once the uploaded proof is visibly loaded. */
+        gcashVerifyButton.disabled = !gcashReviewImageLoaded;
+    }
+
+    function resetGcashVerifyAction() {
+        if (gcashReviewForm) {
+            delete gcashReviewForm.dataset.processing;
+        }
+
+        if (gcashVerifyButton) {
+            gcashVerifyButton.disabled = true;
+            gcashVerifyButton.innerHTML = gcashVerifyButtonDefaultHTML;
+            gcashVerifyButton.removeAttribute('aria-busy');
+        }
+    }
+
+    /* Make it callable from the AJAX workflow script. */
+    window.resetGcashVerifyAction = resetGcashVerifyAction;
+
+    function resetGcashReviewModal() {
+        gcashReviewImageLoaded = false;
+
+        if (gcashReviewImage) {
+            gcashReviewImage.onload = null;
+            gcashReviewImage.onerror = null;
+            gcashReviewImage.removeAttribute('src');
+            gcashReviewImage.hidden = true;
+        }
+
+        if (gcashReviewImageMessage) {
+            gcashReviewImageMessage.hidden = false;
+            gcashReviewImageMessage.textContent = 'Loading payment screenshot...';
+        }
+
+        resetGcashVerifyAction();
+        syncGcashReviewButton();
+    }
+
+    function openStaffGcashReview(button) {
+        if (!gcashReviewModal || !gcashReviewForm || !gcashReviewImage) {
+            console.error('GCash review modal or form is missing.');
+            return;
+        }
+
+        resetGcashReviewModal();
+
+        const orderId = button.getAttribute('data-order-id') || '';
+        const orderNumber = button.getAttribute('data-order-number') || 'Order';
+        const claimNumber = button.getAttribute('data-claim-number') || 'N/A';
+        const totalAmount = Number(button.getAttribute('data-total-amount') || 0);
+        const proofSrc = button.getAttribute('data-proof-src') || '';
+
+        document.getElementById('staffGcashReviewOrderId').value = orderId;
+        document.getElementById('staffGcashReviewStatusFilter').value =
+            button.getAttribute('data-status-filter') || 'pending_verification';
+        document.getElementById('staffGcashReviewSearch').value =
+            button.getAttribute('data-search') || '';
+        document.getElementById('staffGcashReviewPage').value =
+            button.getAttribute('data-page') || '1';
+
+        document.getElementById('staffGcashReviewReference').textContent =
+            orderNumber + ' · Claim ' + claimNumber;
+        document.getElementById('staffGcashReviewTotal').textContent =
+            '₱' + totalAmount.toLocaleString('en-PH', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            });
+
+        if (gcashRejectButton) {
+            gcashRejectButton.setAttribute('data-order-id', orderId);
+            gcashRejectButton.setAttribute('data-order-number', orderNumber);
+            gcashRejectButton.setAttribute(
+                'data-status-filter',
+                button.getAttribute('data-status-filter') || 'pending_verification'
+            );
+            gcashRejectButton.setAttribute(
+                'data-search',
+                button.getAttribute('data-search') || ''
+            );
+            gcashRejectButton.setAttribute(
+                'data-page',
+                button.getAttribute('data-page') || '1'
+            );
+        }
+
+        if (!proofSrc) {
+            if (gcashReviewImageMessage) {
+                gcashReviewImageMessage.textContent =
+                    'No GCash screenshot is attached to this order.';
+            }
+        } else {
+            gcashReviewImage.onload = function () {
+                if (gcashReviewImage.naturalWidth > 0) {
+                    gcashReviewImageLoaded = true;
+                    gcashReviewImage.hidden = false;
+
+                    if (gcashReviewImageMessage) {
+                        gcashReviewImageMessage.hidden = true;
+                    }
+
+                    syncGcashReviewButton();
+                }
+            };
+
+            gcashReviewImage.onerror = function () {
+                gcashReviewImageLoaded = false;
+                gcashReviewImage.hidden = true;
+
+                if (gcashReviewImageMessage) {
+                    gcashReviewImageMessage.hidden = false;
+                    gcashReviewImageMessage.textContent =
+                        'The screenshot could not be loaded. Payment verification is disabled until the proof can be viewed.';
+                }
+
+                syncGcashReviewButton();
+            };
+
+            gcashReviewImage.src = proofSrc;
+
+            /* A cached screenshot may already be complete without a new load event. */
+            if (gcashReviewImage.complete && gcashReviewImage.naturalWidth > 0) {
+                gcashReviewImage.onload();
+            }
+        }
+
+        showModalCleanly(gcashReviewModal);
+    }
+
+    function closeStaffGcashReviewModal() {
+        if (!gcashReviewModal) {
+            return;
+        }
+
+        if (window.bootstrap && bootstrap.Modal) {
+            const instance =
+                bootstrap.Modal.getInstance(gcashReviewModal) ||
+                bootstrap.Modal.getOrCreateInstance(gcashReviewModal, {
+                    backdrop: true,
+                    keyboard: true,
+                    focus: true
+                });
+
+            instance.hide();
+
+            /* Fallback for stale Bootstrap instances or interrupted transitions. */
+            window.setTimeout(function () {
+                if (gcashReviewModal.classList.contains('show')) {
+                    closeLocaliteaModal(gcashReviewModal);
+                    cleanupStaleModalState();
+                    resetGcashReviewModal();
+                }
+            }, 450);
+        } else {
+            closeLocaliteaModal(gcashReviewModal);
+            cleanupStaleModalState();
+            resetGcashReviewModal();
+        }
+    }
+
+    if (gcashReviewModal) {
+        gcashReviewModal.addEventListener('hidden.bs.modal', function () {
+            resetGcashReviewModal();
+            cleanupStaleModalState();
+        });
+    }
+
+    /*
+     * This shared modal is outside .staff-content, so the existing
+     * delegated modal-close listener cannot receive its close button.
+     * Handle close button, backdrop click, and Escape explicitly.
+     */
+    document.addEventListener('click', function (event) {
+        const target = event.target instanceof Element ? event.target : null;
+        const dismissButton = target
+            ? target.closest('#staffGcashReviewModal [data-bs-dismiss="modal"]')
+            : null;
+        const clickedModalBackdrop =
+            gcashReviewModal && event.target === gcashReviewModal;
+
+        if (!dismissButton && !clickedModalBackdrop) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        closeStaffGcashReviewModal();
+    }, true);
+
+    document.addEventListener('keydown', function (event) {
+        if (
+            event.key === 'Escape'
+            && gcashReviewModal
+            && gcashReviewModal.classList.contains('show')
+        ) {
+            event.preventDefault();
+            event.stopPropagation();
+            event.stopImmediatePropagation();
+            closeStaffGcashReviewModal();
+        }
+    }, true);
+
+    document.addEventListener('click', function (event) {
+        const reviewButton = event.target.closest('[data-staff-gcash-review]');
+
+        if (reviewButton) {
+            event.preventDefault();
+            event.stopPropagation();
+            openStaffGcashReview(reviewButton);
+            return;
+        }
+
+        const rejectButton = event.target.closest('#staffGcashRejectPaymentButton');
+
+        if (rejectButton) {
+            event.preventDefault();
+            event.stopPropagation();
+
+            const cancelModal = document.getElementById('staffCancelOrderModal');
+            const orderIdInput = document.getElementById('staffCancelOrderId');
+            const orderNumberText = document.getElementById('staffCancelOrderNumber');
+            const reasonInput = document.getElementById('staffCancelReason');
+            const otherReasonWrap = document.getElementById('staffOtherCancellationReasonWrap');
+            const otherReasonInput = document.getElementById('staffOtherCancellationReason');
+
+            if (!cancelModal || !orderIdInput || !reasonInput) {
+                console.error('The shared cancellation modal is unavailable.');
+                return;
+            }
+
+            orderIdInput.value = rejectButton.getAttribute('data-order-id') || '';
+            if (orderNumberText) {
+                orderNumberText.textContent =
+                    rejectButton.getAttribute('data-order-number') || 'this order';
+            }
+
+            document.getElementById('staffCancelStatusFilter').value =
+                rejectButton.getAttribute('data-status-filter') || 'pending_verification';
+            document.getElementById('staffCancelOrderStatus').value = 'pending_verification';
+            document.getElementById('staffCancelOrderPaymentMethod').value = 'gcash';
+            document.getElementById('staffCancelSearch').value =
+                rejectButton.getAttribute('data-search') || '';
+            document.getElementById('staffCancelPage').value =
+                rejectButton.getAttribute('data-page') || '1';
+
+            reasonInput.value = 'Payment could not be verified';
+            reasonInput.dispatchEvent(new Event('change', {bubbles: true}));
+
+            if (otherReasonInput) {
+                otherReasonInput.value = '';
+                otherReasonInput.required = false;
+            }
+            if (otherReasonWrap) {
+                otherReasonWrap.style.display = 'none';
+            }
+
+            /* Staff must still confirm the cancellation in the next modal. */
+            showModalCleanly(cancelModal);
+        }
+    });
+
+    if (staffOrdersContent) {
+
+        staffOrdersContent.addEventListener('click', function (event) {
 
             /* =====================================================
-               VIEW DETAILS
-               Open the exact order modal ourselves. Do NOT rely on
-               Bootstrap's data-api because this Orders section can be
-               refreshed/re-rendered and the dynamically rendered buttons
-               may otherwise stop opening their modal.
+               DETAILS / REVIEW PAYMENT
+               Both controls open the relevant order modal. Neither control
+               changes the order status; status updates use their own forms.
             ===================================================== */
             const detailsButton = event.target.closest(
-                '.btn-view-details[data-order-details-modal]'
+                '.btn-view-details[data-order-details-modal], .btn-review-payment[data-order-details-modal]'
             );
 
             if (detailsButton) {
@@ -8819,12 +8516,17 @@ document.addEventListener('DOMContentLoaded', function () {
 
                 if (!detailsModal) {
                     console.error(
-                        'Staff Order Details modal not found:',
+                        'Order Details modal not found:',
                         modalId
                     );
                     return;
                 }
 
+                /*
+                 * Open the exact order modal ourselves. The button no longer
+                 * uses Bootstrap's data-api, so this remains reliable after
+                 * the Active Orders section is replaced through AJAX.
+                 */
                 showModalCleanly(detailsModal);
                 return;
             }
@@ -8835,7 +8537,7 @@ document.addEventListener('DOMContentLoaded', function () {
                cancellation modal. Nested Bootstrap modals are avoided.
             ===================================================== */
             const cancelButton = event.target.closest(
-                '[data-admin-cancel-order]'
+                '[data-staff-cancel-order]'
             );
 
             if (cancelButton) {
@@ -8844,7 +8546,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 event.stopImmediatePropagation();
 
                 const cancelModal =
-                    document.getElementById('adminCancelOrderModal');
+                    document.getElementById('staffCancelOrderModal');
 
                 if (!cancelModal) {
                     console.error('Shared cancellation modal not found.');
@@ -8859,29 +8561,54 @@ document.addEventListener('DOMContentLoaded', function () {
                     'this order';
 
                 const orderIdInput =
-                    document.getElementById('adminCancelOrderId');
+                    document.getElementById('staffCancelOrderId');
                 const orderNumberText =
-                    document.getElementById('adminCancelOrderNumber');
+                    document.getElementById('staffCancelOrderNumber');
                 const reasonInput =
-                    document.getElementById('adminCancelReason');
+                    document.getElementById('staffCancelReason');
+                const orderStatusInput =
+                    document.getElementById('staffCancelOrderStatus');
+                const orderPaymentMethodInput =
+                    document.getElementById('staffCancelOrderPaymentMethod');
 
                 const otherReasonWrap =
                     document.getElementById(
-                        'adminOtherCancellationReasonWrap'
+                        'staffOtherCancellationReasonWrap'
                     );
 
                 const otherReasonInput =
                     document.getElementById(
-                        'adminOtherCancellationReason'
+                        'staffOtherCancellationReason'
                     );
+                const isNoShowAction =
+                    cancelButton.getAttribute('data-no-show-only') === '1';
+                const cancelModalTitle =
+                    document.getElementById('staffCancelOrderModalTitle');
+                const cancelActionText =
+                    document.getElementById('staffCancelOrderActionText');
+                const cancelInstruction =
+                    document.getElementById('staffCancelOrderInstruction');
+                const noShowNotice =
+                    document.getElementById('staffNoShowRefundNotice');
+                const confirmCancellationButton =
+                    document.getElementById('staffConfirmCancellationButton');
 
                 if (orderIdInput) orderIdInput.value = orderId;
                 if (orderNumberText) {
                     orderNumberText.textContent = orderNumber;
                 }
+                if (orderStatusInput) {
+                    orderStatusInput.value = cancelButton.getAttribute('data-order-status') || '';
+                }
+                if (orderPaymentMethodInput) {
+                    orderPaymentMethodInput.value = cancelButton.getAttribute('data-order-payment-method') || '';
+                }
 
                 if (reasonInput) {
-                    reasonInput.value = '';
+                    reasonInput.value = isNoShowAction
+                        ? 'Customer did not collect order (No-show)'
+                        : '';
+                    reasonInput.dispatchEvent(new Event('change', { bubbles: true }));
                 }
 
                 if (otherReasonInput) {
@@ -8891,6 +8618,31 @@ document.addEventListener('DOMContentLoaded', function () {
 
                 if (otherReasonWrap) {
                     otherReasonWrap.style.display = 'none';
+                }
+
+                if (cancelModalTitle) {
+                    cancelModalTitle.textContent = isNoShowAction
+                        ? 'Mark Order as No-show'
+                        : 'Cancel Order';
+                }
+                if (cancelActionText) {
+                    cancelActionText.textContent = isNoShowAction
+                        ? 'You are closing'
+                        : 'You are cancelling';
+                }
+                if (cancelInstruction) {
+                    cancelInstruction.textContent = isNoShowAction
+                        ? 'Confirm that the customer did not collect this prepared order after the pickup window.'
+                        : 'Please select a cancellation reason.';
+                }
+                if (noShowNotice) {
+                    noShowNotice.textContent = 'This order can only be marked as No-show 30 minutes after the later of its scheduled pickup time or the time it was marked Ready. Verified GCash payments are not refundable under the No-show policy. Cash-on-pickup orders remain unpaid.';
+                    noShowNotice.hidden = !isNoShowAction;
+                }
+                if (confirmCancellationButton) {
+                    confirmCancellationButton.innerHTML = isNoShowAction
+                        ? '<i class="bi bi-person-x me-1" aria-hidden="true"></i> Confirm No-show'
+                        : '<i class="bi bi-x-circle me-1" aria-hidden="true"></i> Confirm Cancellation';
                 }
 
                 showModalCleanly(cancelModal);
@@ -8903,7 +8655,7 @@ document.addEventListener('DOMContentLoaded', function () {
                payment-proof modal.
             ===================================================== */
             const proofButton = event.target.closest(
-                '[data-admin-payment-proof]'
+                '[data-staff-payment-proof]'
             );
 
             if (proofButton) {
@@ -8912,10 +8664,10 @@ document.addEventListener('DOMContentLoaded', function () {
                 event.stopImmediatePropagation();
 
                 const proofModal =
-                    document.getElementById('adminPaymentProofModal');
+                    document.getElementById('staffPaymentProofModal');
 
                 const proofImage =
-                    document.getElementById('adminPaymentProofImage');
+                    document.getElementById('staffPaymentProofImage');
 
                 if (!proofModal || !proofImage) {
                     console.error('Shared payment proof modal not found.');
@@ -8930,15 +8682,14 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-
     /*
      * GCash proof has a shared modal outside the main order-content
-     * delegation area. Handle its close button directly so it works
-     * with both Bootstrap and the Localitea fallback modal.
+     * delegation area. Handle its close button directly at document level
+     * so it works with both Bootstrap and the Localitea fallback modal.
      */
     document.addEventListener('click', function (event) {
         const dismissButton = event.target.closest(
-            '#adminPaymentProofModal [data-bs-dismiss="modal"]'
+            '#staffPaymentProofModal [data-bs-dismiss="modal"]'
         );
 
         if (!dismissButton) {
@@ -8946,7 +8697,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         const proofModal = document.getElementById(
-            'adminPaymentProofModal'
+            'staffPaymentProofModal'
         );
 
         if (!proofModal) {
@@ -8955,58 +8706,76 @@ document.addEventListener('DOMContentLoaded', function () {
 
         event.preventDefault();
         event.stopPropagation();
-        event.stopImmediatePropagation();
 
         if (window.bootstrap && bootstrap.Modal) {
-            try {
-                const instance =
-                    bootstrap.Modal.getInstance(proofModal) ||
-                    bootstrap.Modal.getOrCreateInstance(proofModal, {
-                        backdrop: true,
-                        keyboard: true,
-                        focus: true
-                    });
-
-                instance.hide();
-            } catch (error) {
-                console.warn('GCash proof modal close failed:', error);
-            }
+            const instance =
+                bootstrap.Modal.getInstance(proofModal) ||
+                bootstrap.Modal.getOrCreateInstance(proofModal);
+            instance.hide();
+        } else {
+            closeLocaliteaModal(proofModal);
         }
 
-        window.setTimeout(function () {
-            proofModal.classList.remove('show');
-            proofModal.style.display = 'none';
-            proofModal.setAttribute('aria-hidden', 'true');
-            proofModal.removeAttribute('aria-modal');
+        const proofImage = document.getElementById(
+            'staffPaymentProofImage'
+        );
 
-            document.querySelectorAll(
-                '.modal-backdrop, [data-localitea-modal-backdrop]'
-            ).forEach(function (backdrop) {
-                backdrop.remove();
-            });
-
-            document.body.classList.remove('modal-open');
-            document.body.style.removeProperty('padding-right');
-            document.body.style.removeProperty('overflow');
-
-            if (paymentProofImage) {
-                paymentProofImage.removeAttribute('src');
-            }
-        }, 250);
-    });
+        if (proofImage) {
+            proofImage.removeAttribute('src');
+        }
+    }, true);
 
     /*
-     * UNIVERSAL MODAL CLOSE HANDLER
-     *
-     * Do not rely only on Bootstrap's data-api. The Staff Orders
-     * section can be refreshed/re-rendered, so every modal close
-     * button is handled explicitly in the capture phase.
-     *
-     * This is intentionally self-contained so the GCash Proof modal,
-     * Receipt modal, Order Details modal, and Cancel modal all use the
-     * same reliable close behavior.
+     * Cancel Order modal close handling.
+     * This modal lives outside .staff-content, so the delegated fallback
+     * handler below never reaches its X / "Keep Order" buttons. Handle them
+     * at document level (capture phase) so they always close the modal,
+     * whether it was opened through Bootstrap or the Localitea fallback.
      */
     document.addEventListener('click', function (event) {
+        const dismissButton = event.target.closest(
+            '#staffCancelOrderModal [data-bs-dismiss="modal"]'
+        );
+
+        if (!dismissButton) {
+            return;
+        }
+
+        const cancelOrderModal = document.getElementById(
+            'staffCancelOrderModal'
+        );
+
+        if (!cancelOrderModal) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (window.bootstrap && bootstrap.Modal) {
+            const instance =
+                bootstrap.Modal.getInstance(cancelOrderModal) ||
+                bootstrap.Modal.getOrCreateInstance(cancelOrderModal);
+            instance.hide();
+
+            /* Safety net: force-close if Bootstrap did not finish hiding. */
+            window.setTimeout(function () {
+                if (cancelOrderModal.classList.contains('show')) {
+                    closeLocaliteaModal(cancelOrderModal);
+                    cleanupStaleModalState();
+                }
+            }, 500);
+        } else {
+            closeLocaliteaModal(cancelOrderModal);
+        }
+    }, true);
+
+    /*
+     * Fallback close handling for the local View Details modal when
+     * Bootstrap JS is unavailable. Bootstrap can still handle its own
+     * modals normally when it is loaded.
+     */
+    staffOrdersContent.addEventListener('click', function (event) {
         const dismissButton = event.target.closest('[data-bs-dismiss="modal"]');
 
         if (!dismissButton) {
@@ -9015,84 +8784,59 @@ document.addEventListener('DOMContentLoaded', function () {
 
         const modalElement = dismissButton.closest('.modal');
 
-        if (!modalElement) {
+        if (modalElement && modalElement.classList.contains('show') &&
+            (!window.bootstrap || !bootstrap.Modal)) {
+            event.preventDefault();
+            event.stopPropagation();
+            closeLocaliteaModal(modalElement);
+        }
+    });
+
+    document.addEventListener('keydown', function (event) {
+        if (event.key !== 'Escape') {
             return;
         }
 
-        event.preventDefault();
-        event.stopPropagation();
-        event.stopImmediatePropagation();
-
-        let bootstrapHandled = false;
-
         if (window.bootstrap && bootstrap.Modal) {
-            try {
-                const instance =
-                    bootstrap.Modal.getInstance(modalElement) ||
-                    bootstrap.Modal.getOrCreateInstance(modalElement, {
-                        backdrop: true,
-                        keyboard: true,
-                        focus: true
-                    });
-
-                instance.hide();
-                bootstrapHandled = true;
-            } catch (error) {
-                console.warn('Bootstrap modal close failed:', error);
-            }
+            return;
         }
 
-        /*
-         * Always force the visual state closed as a fallback.
-         * This prevents a stuck gray backdrop when Bootstrap's
-         * transition/event chain is interrupted.
-         */
-        window.setTimeout(function () {
-            modalElement.classList.remove('show');
-            modalElement.style.display = 'none';
-            modalElement.setAttribute('aria-hidden', 'true');
-            modalElement.removeAttribute('aria-modal');
-            modalElement.removeAttribute('role');
-
-            document.querySelectorAll(
-                '.modal-backdrop, [data-localitea-modal-backdrop]'
-            ).forEach(function (backdrop) {
-                backdrop.remove();
-            });
-
-            document.body.classList.remove('modal-open');
-            document.body.style.removeProperty('padding-right');
-            document.body.style.removeProperty('overflow');
-
-            if (
-                bootstrapHandled &&
-                window.bootstrap &&
-                bootstrap.Modal
-            ) {
-                try {
-                    const instance = bootstrap.Modal.getInstance(modalElement);
-                    if (instance) {
-                        instance.dispose();
-                    }
-                } catch (error) {
-                    console.warn('Modal dispose warning:', error);
-                }
-            }
-        }, 250);
-
-        cleanupStaleModalState();
-    }, true);
+        const openModal = document.querySelector('.modal.show');
+        if (openModal) {
+            closeLocaliteaModal(openModal);
+        }
+    });
 
     /* Shared cancellation modal: keep the reason box clean whenever it closes. */
-    const cancelModal = document.getElementById('adminCancelOrderModal');
+    const cancelModal = document.getElementById('staffCancelOrderModal');
 
     if (cancelModal) {
         cancelModal.addEventListener('hidden.bs.modal', function () {
             const reasonInput =
-                document.getElementById('adminCancelReason');
+                document.getElementById('staffCancelReason');
 
             if (reasonInput) {
                 reasonInput.value = '';
+                reasonInput.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+
+            const orderStatusInput = document.getElementById('staffCancelOrderStatus');
+            const orderPaymentMethodInput = document.getElementById('staffCancelOrderPaymentMethod');
+            if (orderStatusInput) orderStatusInput.value = '';
+            if (orderPaymentMethodInput) orderPaymentMethodInput.value = '';
+
+            const cancelModalTitle = document.getElementById('staffCancelOrderModalTitle');
+            const cancelActionText = document.getElementById('staffCancelOrderActionText');
+            const cancelInstruction = document.getElementById('staffCancelOrderInstruction');
+            const noShowNotice = document.getElementById('staffNoShowRefundNotice');
+            const confirmCancellationButton = document.getElementById('staffConfirmCancellationButton');
+
+            if (cancelModalTitle) cancelModalTitle.textContent = 'Cancel Order';
+            if (cancelActionText) cancelActionText.textContent = 'You are cancelling';
+            if (cancelInstruction) cancelInstruction.textContent = 'Please select a cancellation reason.';
+            if (noShowNotice) noShowNotice.hidden = true;
+            if (confirmCancellationButton) {
+                confirmCancellationButton.innerHTML = '<i class="bi bi-x-circle me-1" aria-hidden="true"></i> Confirm Cancellation';
             }
 
             cleanupStaleModalState();
@@ -9101,9 +8845,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
     /* Shared GCash proof modal cleanup. */
     const paymentProofModal =
-        document.getElementById('adminPaymentProofModal');
+        document.getElementById('staffPaymentProofModal');
     const paymentProofImage =
-        document.getElementById('adminPaymentProofImage');
+        document.getElementById('staffPaymentProofImage');
 
     if (paymentProofModal && paymentProofImage) {
         paymentProofModal.addEventListener('hidden.bs.modal', function () {
@@ -9119,13 +8863,13 @@ document.addEventListener('DOMContentLoaded', function () {
      SCROLL POSITION
 ========================================================= -->
 <script>
-/* Preserve the Admin's scroll position when searching/filtering orders.
+/* Preserve the Staff's scroll position when searching/filtering orders.
    The page still refreshes normally, but it returns to the previous
    position instead of jumping to the top. */
 document.addEventListener('DOMContentLoaded', function () {
 
     /*
-     * When an Admin opened this page from a notification, the target
+     * When an Staff opened this page from a notification, the target
      * order must take priority over the normal saved-scroll restoration.
      * Otherwise the saved position can immediately move the page away
      * from the order that was just opened.
@@ -9134,11 +8878,11 @@ document.addEventListener('DOMContentLoaded', function () {
         Number(new URLSearchParams(window.location.search).get('order_id') || 0);
 
     const savedScrollY =
-        sessionStorage.getItem('adminOrdersScrollY');
+        sessionStorage.getItem('staffOrdersScrollY');
 
     if (savedScrollY !== null && !targetOrderFromUrl) {
 
-        sessionStorage.removeItem('adminOrdersScrollY');
+        sessionStorage.removeItem('staffOrdersScrollY');
 
         requestAnimationFrame(function () {
 
@@ -9150,26 +8894,23 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-
     const preserveScrollForms =
         document.querySelectorAll(
             '.order-search-form, .cancelled-filter-form, form:has(button[name="update_status"]), form:has(button[name="cancel_order"])'
         );
-
 
     preserveScrollForms.forEach(function (form) {
 
         form.addEventListener('submit', function () {
 
             sessionStorage.setItem(
-                'adminOrdersScrollY',
+                'staffOrdersScrollY',
                 String(window.scrollY)
             );
 
         });
 
     });
-
 
     /* Also preserve scroll position when clicking pagination links
        (both the main Orders pagination and the Cancelled Orders
@@ -9180,7 +8921,6 @@ document.addEventListener('DOMContentLoaded', function () {
             '.pagination .page-link[href]'
         );
 
-
     paginationLinks.forEach(function (link) {
 
         link.addEventListener('click', function (event) {
@@ -9189,9 +8929,8 @@ document.addEventListener('DOMContentLoaded', function () {
                 return;
             }
 
-
             sessionStorage.setItem(
-                'adminOrdersScrollY',
+                'staffOrdersScrollY',
                 String(window.scrollY)
             );
 
@@ -9202,10 +8941,9 @@ document.addEventListener('DOMContentLoaded', function () {
 });
 </script>
 
-
 <!-- =========================================================
      SCRIPT 2
-     ADMIN PROFILE
+     STAFF PROFILE
      OTHER CANCELLATION REASON
      PRINT RECEIPT
 ========================================================= -->
@@ -9230,12 +8968,10 @@ document.addEventListener(
                         'select[name="cancellation_reason"]'
                     );
 
-
                 const otherWrap =
                     modal.querySelector(
                         '[data-other-reason]'
                     );
-
 
                 const otherTextarea =
                     otherWrap
@@ -9244,15 +8980,12 @@ document.addEventListener(
                         )
                         : null;
 
-
                 const form =
                     modal.querySelector('form');
-
 
                 if (!select || !form) {
                     return;
                 }
-
 
                 select.addEventListener(
                     'change',
@@ -9264,7 +8997,6 @@ document.addEventListener(
                                 otherWrap.style.display =
                                     'block';
                             }
-
 
                             if (otherTextarea) {
 
@@ -9282,7 +9014,6 @@ document.addEventListener(
                                     'none';
                             }
 
-
                             if (otherTextarea) {
 
                                 otherTextarea.required =
@@ -9297,7 +9028,6 @@ document.addEventListener(
                     }
                 );
 
-
                 form.addEventListener(
                     'submit',
                     function (event) {
@@ -9308,7 +9038,6 @@ document.addEventListener(
                                 otherTextarea
                                     ? otherTextarea.value.trim()
                                     : '';
-
 
                             if (reason === '') {
 
@@ -9321,13 +9050,11 @@ document.addEventListener(
                                 return;
                             }
 
-
                             /*
                              * Replace the select value with
                              * the custom reason before submitting.
                              */
                             select.value = reason;
-
 
                             /*
                              * The select does not contain the
@@ -9339,18 +9066,14 @@ document.addEventListener(
                                     'option'
                                 );
 
-
                             customOption.value =
                                 reason;
-
 
                             customOption.textContent =
                                 reason;
 
-
                             customOption.selected =
                                 true;
-
 
                             select.appendChild(
                                 customOption
@@ -9366,12 +9089,8 @@ document.addEventListener(
     }
 );
 
-
 /* =========================================================
    PRINT RECEIPT
-   Self-contained handler.
-   IMPORTANT: this function must not depend on the modal helper
-   functions declared inside another DOMContentLoaded callback.
 ========================================================= */
 
 function printReceipt(modalId) {
@@ -9379,42 +9098,30 @@ function printReceipt(modalId) {
     const modalElement = document.getElementById(modalId);
 
     if (!modalElement) {
-        console.error('Receipt modal not found:', modalId);
         return;
     }
 
-    let printStarted = false;
-    let cleanupTimer = null;
-
-    /*
-     * Close every other modal first.  Use Bootstrap when available,
-     * but also force-remove stale modal state so a previous GCash
-     * proof/details modal cannot block the receipt.
-     */
+    /* Close any other open modal first so Bootstrap does not leave
+       multiple backdrops or modal-open states behind. */
     document.querySelectorAll('.modal.show').forEach(function (openModal) {
         if (openModal === modalElement) {
             return;
         }
 
-        try {
-            if (window.bootstrap && bootstrap.Modal) {
-                const instance =
-                    bootstrap.Modal.getInstance(openModal) ||
-                    bootstrap.Modal.getOrCreateInstance(openModal);
-
-                instance.hide();
-            }
-        } catch (error) {
-            console.warn('Could not hide previous modal:', error);
+        if (window.bootstrap && bootstrap.Modal) {
+            const instance =
+                bootstrap.Modal.getInstance(openModal) ||
+                bootstrap.Modal.getOrCreateInstance(openModal);
+            instance.hide();
+        } else {
+            openModal.classList.remove('show');
+            openModal.style.display = 'none';
+            openModal.setAttribute('aria-hidden', 'true');
         }
-
-        openModal.classList.remove('show');
-        openModal.style.display = 'none';
-        openModal.setAttribute('aria-hidden', 'true');
-        openModal.removeAttribute('aria-modal');
     });
 
-    /* Remove stale Bootstrap/Localitea backdrops. */
+    /* Remove stale custom/Bootstrap backdrop state before opening the
+       receipt. This prevents the receipt from becoming unclickable. */
     document.querySelectorAll(
         '.modal-backdrop, [data-localitea-modal-backdrop]'
     ).forEach(function (backdrop) {
@@ -9425,47 +9132,77 @@ function printReceipt(modalId) {
     document.body.style.removeProperty('padding-right');
     document.body.style.removeProperty('overflow');
 
-    /*
-     * Open the receipt directly and deterministically.
-     * We intentionally do not rely on Bootstrap's data-api here.
-     * This also works if Bootstrap's modal plugin is unavailable.
-     */
-    modalElement.classList.add('show');
-    modalElement.style.display = 'block';
-    modalElement.removeAttribute('aria-hidden');
-    modalElement.setAttribute('aria-modal', 'true');
-    modalElement.setAttribute('role', 'dialog');
+    if (window.bootstrap && bootstrap.Modal) {
+        const receiptInstance =
+            bootstrap.Modal.getInstance(modalElement) ||
+            bootstrap.Modal.getOrCreateInstance(modalElement, {
+                backdrop: true,
+                keyboard: true,
+                focus: true
+            });
 
-    document.body.classList.add('modal-open');
-    document.body.style.overflow = 'hidden';
+        receiptInstance.show();
+    } else {
+        modalElement.classList.add('show');
+        modalElement.style.display = 'block';
+        modalElement.removeAttribute('aria-hidden');
+        modalElement.setAttribute('aria-modal', 'true');
+        modalElement.setAttribute('role', 'dialog');
+        document.body.classList.add('modal-open');
+        document.body.style.overflow = 'hidden';
 
-    /*
-     * The print stylesheet only displays receipt content when the
-     * receipt modal has the "show" class, so wait briefly for the
-     * browser to apply the layout before opening Print.
-     */
+        const backdrop = document.createElement('div');
+        backdrop.className = 'modal-backdrop fade show';
+        backdrop.setAttribute('data-localitea-modal-backdrop', 'true');
+        document.body.appendChild(backdrop);
+    }
+
+    /* Do not depend on shown.bs.modal. Bootstrap/custom modal timing can
+       vary after AJAX updates, while a short delay is enough for the
+       receipt to be painted before the browser print dialog opens. */
     window.setTimeout(function () {
-        printStarted = true;
+        const paper = modalElement.querySelector('.receipt-paper');
+        let printArea = document.getElementById('receiptPrintArea');
 
-        try {
-            window.print();
-        } catch (error) {
-            console.error('Print dialog could not be opened:', error);
-            cleanupReceiptModal();
+        if (!printArea) {
+            printArea = document.createElement('div');
+            printArea.id = 'receiptPrintArea';
+            document.body.appendChild(printArea);
         }
+
+        printArea.innerHTML = '';
+
+        if (paper) {
+            const copy = paper.cloneNode(true);
+            copy.removeAttribute('id');
+            printArea.appendChild(copy);
+        }
+
+        document.body.classList.add('is-printing-receipt');
+
+        const clearPrintArea = function () {
+            document.body.classList.remove('is-printing-receipt');
+            printArea.innerHTML = '';
+            window.removeEventListener('afterprint', clearPrintArea);
+        };
+
+        window.addEventListener('afterprint', clearPrintArea);
+        window.print();
     }, 350);
 
-    function cleanupReceiptModal() {
-        if (cleanupTimer !== null) {
-            window.clearTimeout(cleanupTimer);
-            cleanupTimer = null;
+    /* Clean the receipt modal after the browser finishes printing. */
+    const cleanupAfterPrint = function () {
+        if (window.bootstrap && bootstrap.Modal) {
+            const instance = bootstrap.Modal.getInstance(modalElement);
+            if (instance) {
+                instance.hide();
+            }
+        } else {
+            modalElement.classList.remove('show');
+            modalElement.style.display = 'none';
+            modalElement.setAttribute('aria-hidden', 'true');
+            modalElement.removeAttribute('aria-modal');
         }
-
-        modalElement.classList.remove('show');
-        modalElement.style.display = 'none';
-        modalElement.setAttribute('aria-hidden', 'true');
-        modalElement.removeAttribute('aria-modal');
-        modalElement.removeAttribute('role');
 
         document.querySelectorAll(
             '.modal-backdrop, [data-localitea-modal-backdrop]'
@@ -9477,43 +9214,13 @@ function printReceipt(modalId) {
         document.body.style.removeProperty('padding-right');
         document.body.style.removeProperty('overflow');
 
-        /*
-         * Reset Bootstrap's instance if one exists, without requiring
-         * Bootstrap to be present.
-         */
-        if (window.bootstrap && bootstrap.Modal) {
-            try {
-                const instance = bootstrap.Modal.getInstance(modalElement);
-                if (instance) {
-                    instance.dispose();
-                }
-            } catch (error) {
-                console.warn('Receipt modal cleanup warning:', error);
-            }
-        }
-    }
-
-    const cleanupAfterPrint = function () {
-        cleanupReceiptModal();
         window.removeEventListener('afterprint', cleanupAfterPrint);
     };
 
     window.addEventListener('afterprint', cleanupAfterPrint);
-
-    /*
-     * Some browsers do not reliably fire afterprint when the print
-     * dialog is cancelled.  Keep a delayed safety cleanup, but only
-     * after enough time for the print dialog to be used.
-     */
-    cleanupTimer = window.setTimeout(function () {
-        if (printStarted) {
-            cleanupReceiptModal();
-            window.removeEventListener('afterprint', cleanupAfterPrint);
-        }
-    }, 120000);
 }
-</script>
 
+</script>
 
 <!-- =========================================================
      SCRIPT 3
@@ -9524,7 +9231,6 @@ function printReceipt(modalId) {
 document.addEventListener(
     'DOMContentLoaded',
     function () {
-
 
         /* =====================================================
            UPDATE WORKFLOW COUNT
@@ -9539,29 +9245,24 @@ document.addEventListener(
                 return;
             }
 
-
             const card =
                 document.querySelector(
                     '.workflow-card.workflow-' +
                     status
                 );
 
-
             if (!card) {
                 return;
             }
-
 
             const countElement =
                 card.querySelector(
                     '.workflow-count'
                 );
 
-
             if (!countElement) {
                 return;
             }
-
 
             const currentCount =
                 parseInt(
@@ -9569,178 +9270,166 @@ document.addEventListener(
                     10
                 ) || 0;
 
-
             const newCount =
                 Math.max(
                     0,
                     currentCount + change
                 );
 
-
             countElement.textContent =
                 newCount;
 
         }
 
-
         /* =====================================================
-           AJAX TOAST
+           AJAX TOASTS - INDEPENDENT STACK
         ===================================================== */
+        /*
+         * Each successful action gets its own toast immediately when its
+         * request succeeds. Toasts stack vertically and have independent
+         * timers; no toast waits for another toast to close.
+         * Preparing actions reserve a sequence at click time so their visual
+         * order remains consistent when multiple requests finish close together.
+         */
+        let staffAjaxOrderToastSequence = 0;
 
-        function showAjaxOrderToast(
-            message
-        ) {
+        function getStaffAjaxToastStack() {
+            let stack = document.getElementById('staffAjaxToastStack');
 
-            const existingToast =
-                document.getElementById(
-                    'ajaxOrdersToast'
-                );
-
-
-            if (existingToast) {
-
-                const existingWrap =
-                    existingToast.closest(
-                        '.orders-toast-wrap'
-                    );
-
-
-                if (existingWrap) {
-                    existingWrap.remove();
-                }
-
+            if (!stack) {
+                stack = document.createElement('div');
+                stack.id = 'staffAjaxToastStack';
+                stack.className = 'orders-toast-stack';
+                stack.setAttribute('aria-live', 'polite');
+                stack.setAttribute('aria-relevant', 'additions');
+                document.body.appendChild(stack);
             }
 
-
-            const wrap =
-                document.createElement(
-                    'div'
-                );
-
-
-            wrap.className =
-                'orders-toast-wrap';
-
-
-            wrap.setAttribute(
-                'aria-live',
-                'polite'
-            );
-
-
-            wrap.setAttribute(
-                'aria-atomic',
-                'true'
-            );
-
-
-            wrap.innerHTML = `
-
-                <div
-                    class="orders-toast orders-toast-success"
-                    id="ajaxOrdersToast"
-                    role="status"
-                >
-
-                    <span
-                        class="orders-toast-icon"
-                    >
-
-                        <i
-                            class="bi bi-check-circle"
-                        ></i>
-
-                    </span>
-
-
-                    <span
-                        class="orders-toast-message"
-                    >
-                        ${message}
-                    </span>
-
-
-                    <button
-                        type="button"
-                        class="orders-toast-close"
-                        aria-label="Close notification"
-                    >
-
-                        <i
-                            class="bi bi-x-lg"
-                        ></i>
-
-                    </button>
-
-
-                    <span
-                        class="orders-toast-progress"
-                        aria-hidden="true"
-                    ></span>
-
-                </div>
-
-            `;
-
-
-            document.body.appendChild(
-                wrap
-            );
-
-
-            const toast =
-                wrap.querySelector(
-                    '.orders-toast'
-                );
-
-
-            const closeButton =
-                wrap.querySelector(
-                    '.orders-toast-close'
-                );
-
-
-            function removeToast() {
-
-                if (!wrap.isConnected) {
-                    return;
-                }
-
-
-                toast.classList.add(
-                    'orders-toast-is-closing'
-                );
-
-
-                setTimeout(
-                    function () {
-
-                        wrap.remove();
-
-                    },
-                    180
-                );
-
-            }
-
-
-            if (closeButton) {
-
-                closeButton.addEventListener(
-                    'click',
-                    removeToast
-                );
-
-            }
-
-
-            setTimeout(
-                removeToast,
-                3500
-            );
-
+            return stack;
         }
 
+        function escapeStaffAjaxToastText(value) {
+            return String(value ?? '').replace(/[&<>"']/g, function (character) {
+                return {
+                    '&': '&amp;',
+                    '<': '&lt;',
+                    '>': '&gt;',
+                    '"': '&quot;',
+                    "'": '&#039;'
+                }[character];
+            });
+        }
+
+        function displayStaffAjaxOrderToast(message, title, sequence) {
+            const stack = getStaffAjaxToastStack();
+            const toast = document.createElement('div');
+            const safeTitle = escapeStaffAjaxToastText(title || 'Order Processed');
+            const safeMessage = escapeStaffAjaxToastText(
+                message || 'The order was processed successfully.'
+            );
+            const toastSequence = Number(sequence) || (++staffAjaxOrderToastSequence);
+
+            toast.className = 'orders-toast orders-toast-success';
+            toast.dataset.actionSequence = String(toastSequence);
+            toast.setAttribute('role', 'status');
+            toast.innerHTML = `
+                <span class="orders-toast-icon">
+                    <i class="bi bi-check-circle"></i>
+                </span>
+                <span class="orders-toast-copy">
+                    <strong class="orders-toast-title">${safeTitle}</strong>
+                    <span class="orders-toast-message">${safeMessage}</span>
+                </span>
+                <button type="button" class="orders-toast-close" aria-label="Close notification">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+                <span class="orders-toast-progress" aria-hidden="true"></span>
+            `;
+
+            /* Insert by click/reservation order where possible, without waiting. */
+            const nextToast = Array.from(stack.children).find(function (existingToast) {
+                return Number(existingToast.dataset.actionSequence || 0) > toastSequence;
+            });
+            stack.insertBefore(toast, nextToast || null);
+
+            let isClosing = false;
+            let closeTimer = null;
+
+            function closeThisToast() {
+                if (isClosing) {
+                    return;
+                }
+                isClosing = true;
+
+                if (closeTimer !== null) {
+                    window.clearTimeout(closeTimer);
+                }
+
+                toast.classList.add('is-closing');
+                window.setTimeout(function () {
+                    toast.remove();
+                    const currentStack = document.getElementById('staffAjaxToastStack');
+                    if (currentStack && currentStack.childElementCount === 0) {
+                        currentStack.remove();
+                    }
+                }, 190);
+            }
+
+            const closeButton = toast.querySelector('.orders-toast-close');
+            if (closeButton) {
+                closeButton.addEventListener('click', closeThisToast);
+            }
+
+            closeTimer = window.setTimeout(closeThisToast, 3500);
+        }
+
+        /* Reserve only a sequence number, not a blocking FIFO queue slot. */
+        window.reserveAjaxOrderToast = function () {
+            return {
+                sequence: ++staffAjaxOrderToastSequence,
+                resolved: false,
+                cancelled: false
+            };
+        };
+
+        window.completeAjaxOrderToast = function (ticket, message, title = 'Order Processed') {
+            if (!ticket || ticket.cancelled || ticket.resolved) {
+                return;
+            }
+
+            ticket.resolved = true;
+            displayStaffAjaxOrderToast(message, title, ticket.sequence);
+        };
+
+        window.cancelAjaxOrderToast = function (ticket) {
+            if (!ticket || ticket.resolved) {
+                return;
+            }
+
+            ticket.cancelled = true;
+        };
+
+        /* Ordinary action confirmations also appear immediately and independently. */
+        window.showAjaxOrderToast = function (message, title = 'Order Processed') {
+            displayStaffAjaxOrderToast(
+                message,
+                title,
+                ++staffAjaxOrderToastSequence
+            );
+        };
+
+        /* Restore the one-time GCash success toast after its automatic page reload. */
+        try {
+            const storedGcashToast = sessionStorage.getItem('localiteaStaffGcashVerifiedToast');
+            if (storedGcashToast) {
+                sessionStorage.removeItem('localiteaStaffGcashVerifiedToast');
+                window.setTimeout(function () {
+                    window.showAjaxOrderToast(storedGcashToast, 'Payment Verified');
+                }, 250);
+            }
+        } catch (storageError) {
+            console.warn('Unable to restore the GCash success toast:', storageError);
+        }
 
        /* =====================================================
    REMOVE ORDER CARD
@@ -9752,7 +9441,6 @@ function removeOrderCard(form) {
 
     let orderCard =
         form.closest('.order-card');
-
 
     /*
      * Cancel modal is outside the order card.
@@ -9800,35 +9488,28 @@ function removeOrderCard(form) {
         }
     }
 
-
     if (!orderCard) {
         return;
     }
-
 
     const ordersGrid =
         orderCard.closest(
             '.orders-grid'
         );
 
-
     orderCard.style.transition =
         'opacity .20s ease, transform .20s ease';
-
 
     orderCard.style.opacity =
         '0';
 
-
     orderCard.style.transform =
         'translateY(-4px)';
-
 
     setTimeout(
         function () {
 
             orderCard.remove();
-
 
             /*
              * Show empty state if there are
@@ -9852,7 +9533,6 @@ function removeOrderCard(form) {
                             class="bi bi-inbox fs-1 d-block mb-2"
                         ></i>
 
-
                         <div>
                             No orders found in this category.
                         </div>
@@ -9869,7 +9549,6 @@ function removeOrderCard(form) {
 
 }
 
-
         /* =====================================================
            HIDE CANCELLATION MODAL
         ===================================================== */
@@ -9883,11 +9562,9 @@ function removeOrderCard(form) {
                     '.modal'
                 );
 
-
             if (!modal) {
                 return;
             }
-
 
             if (
                 window.bootstrap
@@ -9904,13 +9581,11 @@ function removeOrderCard(form) {
                         modal
                     );
 
-
                 instance.hide();
 
             }
 
         }
-
 
         /* =====================================================
            AJAX ORDER STATUS PROCESSING
@@ -9922,7 +9597,6 @@ function removeOrderCard(form) {
                 'form[data-localitea-ajax-order-action="1"]:has(button[name="update_status"])'
             );
 
-
         statusForms.forEach(
             function (form) {
 
@@ -9932,60 +9606,56 @@ function removeOrderCard(form) {
 
                         event.preventDefault();
 
-
                         const submitButton =
                             form.querySelector(
                                 'button[name="update_status"]'
                             );
 
-
                         if (!submitButton) {
                             return;
                         }
 
-
-                        if (submitButton.disabled) {
+                        if (
+                            submitButton.disabled ||
+                            form.dataset.processing === '1'
+                        ) {
                             return;
                         }
-
-
-                        const originalButtonHTML =
-                            submitButton.innerHTML;
-
-
-                        submitButton.disabled =
-                            true;
-
-
-                        submitButton.innerHTML = `
-
-                            <span
-                                class="spinner-border spinner-border-sm me-1"
-                                aria-hidden="true"
-                            ></span>
-
-                            Processing...
-
-                        `;
-
 
                         const formData =
                             new FormData(
                                 form
                             );
 
+                        const isPreparingFallback =
+                            String(formData.get('status') || '') === 'preparing';
+
+                        form.dataset.processing = '1';
+
+                        const originalButtonHTML =
+                            submitButton.innerHTML;
+
+                        if (isPreparingFallback) {
+                            submitButton.disabled = true;
+                            submitButton.setAttribute('aria-busy', 'true');
+                            submitButton.innerHTML = `
+                                <span
+                                    class="spinner-border spinner-border-sm me-1"
+                                    aria-hidden="true"
+                                ></span>
+                                Starting...
+                            `;
+                        }
 
                         formData.set(
                             'update_status',
                             '1'
                         );
 
-
                         formData.set(
                             'ajax',
                             '1'
                         );
-
 
                         try {
 
@@ -10005,7 +9675,6 @@ function removeOrderCard(form) {
                                     }
                                 );
 
-
                             if (!response.ok) {
 
                                 throw new Error(
@@ -10015,10 +9684,8 @@ function removeOrderCard(form) {
 
                             }
 
-
                             const data =
                                 await response.json();
-
 
                             if (!data.success) {
 
@@ -10030,28 +9697,26 @@ function removeOrderCard(form) {
 
                             }
 
-
                             updateWorkflowCount(
                                 data.previous_status,
                                 -1
                             );
-
 
                             updateWorkflowCount(
                                 data.new_status,
                                 1
                             );
 
+                            delete form.dataset.processing;
 
                             removeOrderCard(
                                 form
                             );
 
-
-                            showAjaxOrderToast(
-                                data.message
+                            window.showAjaxOrderToast(
+                                data.message,
+                                'Order Processed'
                             );
-
 
                         } catch (error) {
 
@@ -10060,20 +9725,19 @@ function removeOrderCard(form) {
                                 error
                             );
 
-
                             alert(
                                 error.message
                                 ||
                                 'Unable to update the order.'
                             );
 
+                            if (isPreparingFallback) {
+                                submitButton.disabled = false;
+                                submitButton.innerHTML = originalButtonHTML;
+                                submitButton.removeAttribute('aria-busy');
+                            }
 
-                            submitButton.disabled =
-                                false;
-
-
-                            submitButton.innerHTML =
-                                originalButtonHTML;
+                            delete form.dataset.processing;
 
                         }
 
@@ -10082,7 +9746,6 @@ function removeOrderCard(form) {
 
             }
         );
-
 
         /* =====================================================
            AJAX CANCEL ORDER
@@ -10094,7 +9757,6 @@ function removeOrderCard(form) {
                 'form[data-localitea-ajax-order-action="1"]:has(input[name="cancel_order"])'
             );
 
-
         cancelForms.forEach(
             function (form) {
 
@@ -10104,52 +9766,28 @@ function removeOrderCard(form) {
 
                         event.preventDefault();
 
-
                         const submitButton =
                             form.querySelector(
                                 'button[type="submit"]'
                             );
 
-
                         if (!submitButton) {
                             return;
                         }
 
-
-                        if (submitButton.disabled) {
+                        if (
+                            submitButton.disabled ||
+                            form.dataset.processing === '1'
+                        ) {
                             return;
                         }
 
-
-                        const originalButtonHTML =
-                            submitButton.innerHTML;
-
-
-                        /* -----------------------------------------
-                           SHOW LOADING INDICATOR
-                        ----------------------------------------- */
-
-                        submitButton.disabled =
-                            true;
-
-
-                        submitButton.innerHTML = `
-
-                            <span
-                                class="spinner-border spinner-border-sm me-1"
-                                aria-hidden="true"
-                            ></span>
-
-                            Cancelling...
-
-                        `;
-
+                        form.dataset.processing = '1';
 
                         const formData =
                             new FormData(
                                 form
                             );
-
 
                         /* Form contains cancel_order as hidden input,
                            but set it explicitly for reliability. */
@@ -10158,12 +9796,10 @@ function removeOrderCard(form) {
                             '1'
                         );
 
-
                         formData.set(
                             'ajax',
                             '1'
                         );
-
 
                         try {
 
@@ -10183,7 +9819,6 @@ function removeOrderCard(form) {
                                     }
                                 );
 
-
                             if (!response.ok) {
 
                                 throw new Error(
@@ -10193,10 +9828,8 @@ function removeOrderCard(form) {
 
                             }
 
-
                             const data =
                                 await response.json();
-
 
                             if (!data.success) {
 
@@ -10208,7 +9841,6 @@ function removeOrderCard(form) {
 
                             }
 
-
                             /* -------------------------------------
                                CLOSE MODAL FIRST
                             ------------------------------------- */
@@ -10216,7 +9848,6 @@ function removeOrderCard(form) {
                             hideCancellationModal(
                                 form
                             );
-
 
                             /* -------------------------------------
                                UPDATE WORKFLOW COUNTER
@@ -10229,15 +9860,24 @@ function removeOrderCard(form) {
 
                             if (data.refund_status === 'pending') {
                                 const refundCountElement =
-                                    document.querySelector('.pending-refunds-count');
+                                    document.querySelector('.staff-refund-count-value');
 
                                 if (refundCountElement) {
                                     const currentRefundCount =
                                         parseInt(refundCountElement.textContent.trim(), 10) || 0;
-                                    refundCountElement.textContent = currentRefundCount + 1;
+                                    const nextRefundCount = currentRefundCount + 1;
+                                    refundCountElement.textContent = nextRefundCount;
+
+                                    const refundCountMessage =
+                                        document.getElementById('staffRefundCountMessage');
+
+                                    if (refundCountMessage) {
+                                        refundCountMessage.textContent = nextRefundCount === 1
+                                            ? '1 GCash refund awaiting Admin review.'
+                                            : nextRefundCount + ' GCash refunds awaiting Admin review.';
+                                    }
                                 }
                             }
-
 
                             /* -------------------------------------
                                REMOVE ORDER CARD
@@ -10247,17 +9887,14 @@ function removeOrderCard(form) {
                                 form
                             );
 
-
                             /* -------------------------------------
                                SUCCESS TOAST
                             ------------------------------------- */
 
-                            showAjaxOrderToast(
-                                data.message
-                                ||
-                                'Order cancelled successfully.'
+                            window.showAjaxOrderToast(
+                                data.message || 'Order cancelled successfully.',
+                                'Order Cancelled'
                             );
-
 
                         } catch (error) {
 
@@ -10266,20 +9903,13 @@ function removeOrderCard(form) {
                                 error
                             );
 
-
                             alert(
                                 error.message
                                 ||
                                 'Unable to cancel the order.'
                             );
 
-
-                            submitButton.disabled =
-                                false;
-
-
-                            submitButton.innerHTML =
-                                originalButtonHTML;
+                            delete form.dataset.processing;
 
                         }
 
@@ -10298,22 +9928,32 @@ function removeOrderCard(form) {
 
 <script>
 /* =========================================================
-   ADMIN AJAX WORKFLOW NAVIGATION + ORDER ACTIONS
+   STAFF AJAX WORKFLOW NAVIGATION + ORDER ACTIONS
 ========================================================= */
 
 document.addEventListener(
     'DOMContentLoaded',
     function () {
 
-        const adminOrdersContent =
+        const staffOrdersContent =
             document.querySelector(
-                '.admin-content'
+                '.staff-content'
             );
 
-        if (!adminOrdersContent) {
+        if (!staffOrdersContent) {
             return;
         }
 
+        /* Safe bridge to the helper defined in the modal script. */
+        function resetGcashVerifyAction() {
+            try {
+                if (typeof window.resetGcashVerifyAction === 'function') {
+                    window.resetGcashVerifyAction();
+                }
+            } catch (e) {
+                console.warn('GCash reset failed:', e);
+            }
+        }
 
         /* =====================================================
            SYNC WORKFLOW CARDS
@@ -10386,7 +10026,6 @@ document.addEventListener(
 
         }
 
-
         /* =====================================================
            SYNC SEARCH FORM
         ===================================================== */
@@ -10412,7 +10051,6 @@ document.addEventListener(
                 return;
             }
 
-
             const currentSearch =
                 currentForm.querySelector(
                     'input[name="q"]'
@@ -10433,7 +10071,6 @@ document.addEventListener(
 
             }
 
-
             const currentStatus =
                 currentForm.querySelector(
                     'input[name="status"]'
@@ -10453,7 +10090,6 @@ document.addEventListener(
                     newStatus.value;
 
             }
-
 
             const currentActions =
                 currentForm.querySelector(
@@ -10477,7 +10113,6 @@ document.addEventListener(
 
         }
 
-
         /* =====================================================
            BOOTSTRAP MODAL / BACKDROP CLEANUP
            Active Orders can contain View Details / receipt /
@@ -10486,7 +10121,7 @@ document.addEventListener(
            behind even though the modal itself was removed.
         ===================================================== */
 
-        function cleanupAdminBootstrapModalState() {
+        function cleanupStaffBootstrapModalState() {
 
             /*
              * Ask any currently open Bootstrap modal to close first.
@@ -10518,7 +10153,7 @@ document.addEventListener(
                     } catch (modalError) {
 
                         console.warn(
-                            'Admin modal cleanup warning:',
+                            'Staff modal cleanup warning:',
                             modalError
                         );
 
@@ -10544,13 +10179,20 @@ document.addEventListener(
 
         }
 
-
         /* =====================================================
            LOAD ONLY ACTIVE ORDERS
-           The Admin page itself does NOT reload.
+           The Staff page itself does NOT reload.
         ===================================================== */
 
-        async function loadAdminActiveOrders(
+        /*
+         * Multiple order actions may finish close together (for example,
+         * Staff starts Preparing on several orders). Only the newest list
+         * refresh is allowed to replace the Active Orders section. Older
+         * responses are ignored so they cannot restore stale order states.
+         */
+        let activeOrdersLoadSequence = 0;
+
+        async function loadStaffActiveOrders(
             targetUrl,
             pushHistory = true
         ) {
@@ -10561,9 +10203,11 @@ document.addEventListener(
                 );
 
             if (!activeSection) {
-                return;
+                return false;
             }
 
+            const thisLoadSequence = ++activeOrdersLoadSequence;
+            let loadSucceeded = false;
 
             const requestedUrl =
                 new URL(
@@ -10571,13 +10215,11 @@ document.addEventListener(
                     window.location.href
                 );
 
-
             const selectedStatus =
                 requestedUrl.searchParams.get(
                     'status'
                 ) ||
-                'pending_verification';
-
+                'order_queue';
 
             const searchValue =
                 (
@@ -10587,28 +10229,22 @@ document.addEventListener(
                     ''
                 ).trim();
 
-
             const hasSearch =
                 searchValue !== '';
-
 
             const previousHTML =
                 activeSection.innerHTML;
 
-
-            /* Subtle loading state */
-
+            /*
+             * Announce that the list is refreshing without dimming or
+             * disabling the Active Orders section. Staff must still be able
+             * to select text, open details, search, paginate, and start work
+             * on a different order while an earlier request completes.
+             */
             activeSection.setAttribute(
                 'aria-busy',
                 'true'
             );
-
-            activeSection.style.opacity =
-                '0.55';
-
-            activeSection.style.pointerEvents =
-                'none';
-
 
             try {
 
@@ -10630,7 +10266,6 @@ document.addEventListener(
                         }
                     );
 
-
                 if (!response.ok) {
 
                     throw new Error(
@@ -10640,14 +10275,16 @@ document.addEventListener(
 
                 }
 
-
                 const html =
                     await response.text();
 
+                /* A newer refresh has already been started; ignore this HTML. */
+                if (thisLoadSequence !== activeOrdersLoadSequence) {
+                    return true;
+                }
 
                 const parser =
                     new DOMParser();
-
 
                 const parsedDocument =
                     parser.parseFromString(
@@ -10655,12 +10292,10 @@ document.addEventListener(
                         'text/html'
                     );
 
-
                 const newActiveSection =
                     parsedDocument.querySelector(
                         '.active-orders-section'
                     );
-
 
                 if (!newActiveSection) {
 
@@ -10670,14 +10305,12 @@ document.addEventListener(
 
                 }
 
-
                 /*
                  * Close/clean any Bootstrap modal BEFORE replacing the
                  * live Active Orders DOM. Otherwise its backdrop can
                  * survive after the modal node is removed.
                  */
-                cleanupAdminBootstrapModalState();
-
+                cleanupStaffBootstrapModalState();
 
                 /* Replace only Active Orders */
 
@@ -10685,13 +10318,11 @@ document.addEventListener(
                     newActiveSection
                 );
 
-
                 /*
                  * Clean again after replacement in case Bootstrap
                  * queued backdrop cleanup from the modal hide call.
                  */
-                cleanupAdminBootstrapModalState();
-
+                cleanupStaffBootstrapModalState();
 
                 /*
                  * If this request came from View Order, focus the
@@ -10748,7 +10379,6 @@ document.addEventListener(
                     }
                 }
 
-
                 /* Update workflow counts */
 
                 syncWorkflowCards(
@@ -10757,13 +10387,13 @@ document.addEventListener(
                     hasSearch
                 );
 
-
                 /* Update search form */
 
                 syncSearchForm(
                     parsedDocument
                 );
 
+                loadSucceeded = true;
 
                 /* Update URL */
 
@@ -10780,7 +10410,7 @@ document.addEventListener(
 
                     window.history.pushState(
                         {
-                            adminOrdersAjax:
+                            staffOrdersAjax:
                                 true
                         },
                         '',
@@ -10795,18 +10425,20 @@ document.addEventListener(
 
                 }
 
-
             } catch (error) {
 
+                /* Ignore errors from an older refresh superseded by a newer one. */
+                if (thisLoadSequence !== activeOrdersLoadSequence) {
+                    return true;
+                }
+
                 console.error(
-                    'Admin Active Orders AJAX error:',
+                    'Staff Active Orders AJAX error:',
                     error
                 );
 
-
                 activeSection.innerHTML =
                     previousHTML;
-
 
                 alert(
                     'Unable to load orders. Please try again.'
@@ -10814,41 +10446,29 @@ document.addEventListener(
 
             }
 
+            /* Only the newest request may clear the busy state and clean up. */
+            if (thisLoadSequence === activeOrdersLoadSequence) {
+                const restoredSection =
+                    document.querySelector(
+                        '.active-orders-section'
+                    );
 
-            const restoredSection =
-                document.querySelector(
-                    '.active-orders-section'
-                );
+                if (restoredSection) {
+                    restoredSection.removeAttribute('aria-busy');
+                }
 
-
-            if (restoredSection) {
-
-                restoredSection.removeAttribute(
-                    'aria-busy'
-                );
-
-                restoredSection.style.opacity =
-                    '';
-
-                restoredSection.style.pointerEvents =
-                    '';
-
+                cleanupStaffBootstrapModalState();
             }
 
-            /*
-             * Final safety cleanup. The page must never remain
-             * dimmed or locked after an Active Orders AJAX request.
-             */
-            cleanupAdminBootstrapModalState();
+            return loadSucceeded;
 
         }
-
 
         /* =====================================================
            WORKFLOW TABS
         ===================================================== */
 
-        adminOrdersContent.addEventListener(
+        staffOrdersContent.addEventListener(
             'click',
             function (event) {
 
@@ -10857,11 +10477,9 @@ document.addEventListener(
                         '.workflow-card[data-status]'
                     );
 
-
                 if (!workflowLink) {
                     return;
                 }
-
 
                 if (
                     event.ctrlKey ||
@@ -10873,11 +10491,9 @@ document.addEventListener(
                     return;
                 }
 
-
                 event.preventDefault();
 
-
-                loadAdminActiveOrders(
+                loadStaffActiveOrders(
                     workflowLink.href,
                     true
                 );
@@ -10885,13 +10501,12 @@ document.addEventListener(
             }
         );
 
-
         /* =====================================================
            ACTIVE ORDER PAGINATION
            Cancelled-order pagination is left normal.
         ===================================================== */
 
-        adminOrdersContent.addEventListener(
+        staffOrdersContent.addEventListener(
             'click',
             function (event) {
 
@@ -10900,17 +10515,14 @@ document.addEventListener(
                         '.active-orders-section .pagination a.page-link[href]'
                     );
 
-
                 if (!paginationLink) {
                     return;
                 }
-
 
                 const pageItem =
                     paginationLink.closest(
                         '.page-item'
                     );
-
 
                 if (
                     pageItem &&
@@ -10925,7 +10537,6 @@ document.addEventListener(
 
                 }
 
-
                 if (
                     event.ctrlKey ||
                     event.metaKey ||
@@ -10936,11 +10547,9 @@ document.addEventListener(
                     return;
                 }
 
-
                 event.preventDefault();
 
-
-                loadAdminActiveOrders(
+                loadStaffActiveOrders(
                     paginationLink.href,
                     true
                 );
@@ -10948,12 +10557,11 @@ document.addEventListener(
             }
         );
 
-
         /* =====================================================
            ACTIVE ORDER SEARCH
         ===================================================== */
 
-        adminOrdersContent.addEventListener(
+        staffOrdersContent.addEventListener(
             'submit',
             function (event) {
 
@@ -10962,42 +10570,35 @@ document.addEventListener(
                         '.order-search-form'
                     );
 
-
                 if (!form) {
                     return;
                 }
 
-
                 event.preventDefault();
-
 
                 const formData =
                     new FormData(
                         form
                     );
 
-
                 const currentUrl =
                     new URL(
                         window.location.href
                     );
 
-
                 currentUrl.searchParams.set(
                     'status',
                     String(
                         formData.get('status') ||
-                        'pending_verification'
+                        'order_queue'
                     )
                 );
-
 
                 const searchValue =
                     String(
                         formData.get('q') ||
                         ''
                     ).trim();
-
 
                 if (searchValue !== '') {
 
@@ -11014,14 +10615,12 @@ document.addEventListener(
 
                 }
 
-
                 currentUrl.searchParams.set(
                     'page',
                     '1'
                 );
 
-
-                loadAdminActiveOrders(
+                loadStaffActiveOrders(
                     currentUrl.toString(),
                     true
                 );
@@ -11029,6 +10628,38 @@ document.addEventListener(
             }
         );
 
+        /* =====================================================
+           CLEAR ACTIVE-ORDER SEARCH WITH THE NATIVE X BUTTON
+
+           Browsers fire the `search` event when the native clear (X)
+           control on an input[type="search"] is used. Submit the empty
+           search through the existing AJAX handler so Staff returns
+           to the selected Active Orders workflow immediately.
+        ===================================================== */
+        staffOrdersContent.addEventListener(
+            'search',
+            function (event) {
+
+                const searchInput = event.target.closest(
+                    '.order-search-form input[type="search"][name="q"]'
+                );
+
+                if (!searchInput || searchInput.value.trim() !== '') {
+                    return;
+                }
+
+                const searchForm = searchInput.closest('.order-search-form');
+
+                if (searchForm && typeof searchForm.requestSubmit === 'function') {
+                    searchForm.requestSubmit();
+                } else if (searchForm) {
+                    searchForm.dispatchEvent(new Event('submit', {
+                        bubbles: true,
+                        cancelable: true
+                    }));
+                }
+            }
+        );
 
         /* =====================================================
            BROWSER BACK / FORWARD
@@ -11038,7 +10669,7 @@ document.addEventListener(
             'popstate',
             function () {
 
-                loadAdminActiveOrders(
+                loadStaffActiveOrders(
                     window.location.href,
                     false
                 );
@@ -11046,14 +10677,13 @@ document.addEventListener(
             }
         );
 
-
         /* =====================================================
            AJAX ORDER ACTIONS
            Capture phase prevents the older submit handlers
            already present in this file from submitting twice.
         ===================================================== */
 
-        adminOrdersContent.addEventListener(
+        staffOrdersContent.addEventListener(
             'submit',
             function (event) {
 
@@ -11062,23 +10692,19 @@ document.addEventListener(
                         'form'
                     );
 
-
                 if (!form) {
                     return;
                 }
-
 
                 const statusButton =
                     form.querySelector(
                         'button[name="update_status"]'
                     );
 
-
                 const cancelInput =
                     form.querySelector(
                         'input[name="cancel_order"]'
                     );
-
 
                 /*
                  * Active Orders is refreshed through AJAX, so this delegated
@@ -11091,7 +10717,7 @@ document.addEventListener(
                     event.preventDefault();
                     event.stopImmediatePropagation();
 
-                    handleAdminStatusUpdate(
+                    handleStaffStatusUpdate(
                         form
                     );
 
@@ -11099,13 +10725,12 @@ document.addEventListener(
 
                 }
 
-
                 if (cancelInput) {
 
                     event.preventDefault();
                     event.stopImmediatePropagation();
 
-                    handleAdminCancelOrder(
+                    handleStaffCancelOrder(
                         form
                     );
 
@@ -11115,12 +10740,49 @@ document.addEventListener(
             true
         );
 
+        /*
+         * The shared GCash review modal sits outside .staff-content.
+         * Handle the actual Verify button click in the capture phase so
+         * older delegated submit handlers cannot intercept it or submit
+         * the form through the browser's normal navigation path.
+         * The form.dataset.processing guard prevents duplicate requests.
+         */
+        document.addEventListener('click', function (event) {
+            const target = event.target instanceof Element
+                ? event.target.closest('#staffGcashVerifyButton')
+                : null;
+
+            if (!target) {
+                return;
+            }
+
+            event.preventDefault();
+            event.stopPropagation();
+            event.stopImmediatePropagation();
+
+            const reviewForm = target.closest('form#staffGcashReviewForm');
+            if (reviewForm) {
+                handleStaffStatusUpdate(reviewForm);
+            }
+        }, true);
+
+        /* Keep keyboard / Enter-key form submission working as well. */
+        document.addEventListener('submit', function (event) {
+            if (!event.target || event.target.id !== 'staffGcashReviewForm') {
+                return;
+            }
+
+            event.preventDefault();
+            event.stopPropagation();
+            event.stopImmediatePropagation();
+            handleStaffStatusUpdate(event.target);
+        }, true);
 
         /* =====================================================
            AJAX STATUS UPDATE
         ===================================================== */
 
-        async function handleAdminStatusUpdate(
+        async function handleStaffStatusUpdate(
             form
         ) {
 
@@ -11129,31 +10791,31 @@ document.addEventListener(
                     'button[name="update_status"]'
                 );
 
-
             if (
                 !button ||
-                button.disabled
+                button.disabled ||
+                form.dataset.processing === '1'
             ) {
                 return;
             }
 
+            /* Prevent repeated submits from this modal instance. */
+            form.dataset.processing = '1';
 
             const originalHTML =
                 button.innerHTML;
-
 
             const orderCard =
                 form.closest(
                     '.order-card'
                 );
 
-
             let processingOverlay =
                 null;
 
-            let screenProcessingOverlay =
-                null;
-
+            /* Keep the requested action local to this form. The Start Preparing
+             * button itself shows the spinner; no full-screen overlay or backdrop
+             * is added, so Staff can still select text and use the rest of the page. */
             const requestedStatus =
                 String(
                     new FormData(form).get('status') ||
@@ -11163,129 +10825,87 @@ document.addEventListener(
             const isPreparing =
                 requestedStatus === 'preparing';
 
+            /*
+             * Reserve the success toast now (not when the request finishes),
+             * so several quick Start Preparing clicks are confirmed in click order.
+             */
+            const preparingToastTicket = isPreparing
+                && typeof window.reserveAjaxOrderToast === 'function'
+                    ? window.reserveAjaxOrderToast()
+                    : null;
+            let preparingToastResolved = false;
 
-            /* Card-level processing overlay */
-
-            if (orderCard) {
-
-                orderCard.classList.add(
-                    'processing-order'
-                );
-
-
-                processingOverlay =
-                    document.createElement(
-                        'div'
-                    );
-
-
-                processingOverlay.className =
-                    'order-processing-overlay';
-
-
-                processingOverlay.innerHTML = `
-                    <div class="order-processing-box">
-
-                        <div
-                            class="order-processing-spinner"
-                            aria-hidden="true"
-                        ></div>
-
-                        <div class="order-processing-title">
-                            Processing Order
-                        </div>
-
-                        <div class="order-processing-text">
-                            Please wait...
-                        </div>
-
-                    </div>
-                `;
-
-
-                orderCard.appendChild(
-                    processingOverlay
-                );
-
-            }
-
-
-            /* Preparing also sends the customer's email in the same AJAX
-             * request, so give the Admin a clear page-level wait state. */
+            /*
+             * Only Start Preparing gets a visible loading state because that
+             * action also sends the customer's Preparing email. All other
+             * status actions run quietly in the background and must not dim,
+             * cover, disable, or replace their buttons with a spinner.
+             *
+             * form.dataset.processing above still blocks duplicate submissions
+             * from the same form without adding a visible loading indicator.
+             */
             if (isPreparing) {
-
-                screenProcessingOverlay =
-                    document.createElement('div');
-
-                screenProcessingOverlay.className =
-                    'admin-preparing-loading-overlay';
-
-                screenProcessingOverlay.setAttribute(
-                    'role',
-                    'status'
-                );
-
-                screenProcessingOverlay.setAttribute(
-                    'aria-live',
-                    'polite'
-                );
-
-                screenProcessingOverlay.innerHTML = `
-                    <div class="admin-preparing-loading-box">
-
-                        <div
-                            class="admin-preparing-loading-spinner"
-                            aria-hidden="true"
-                        ></div>
-
-                        <div class="admin-preparing-loading-title">
-                            Starting Preparation
-                        </div>
-
-                        <div class="admin-preparing-loading-text">
-                            Please wait while the order is updated and the customer notification is sent.
-                        </div>
-
-                    </div>
+                button.disabled = true;
+                button.setAttribute('aria-busy', 'true');
+                button.innerHTML = `
+                    <span
+                        class="spinner-border spinner-border-sm me-1"
+                        aria-hidden="true"
+                    ></span>
+                    Starting...
                 `;
-
-                document.body.appendChild(
-                    screenProcessingOverlay
-                );
-
             }
-
-
-            button.disabled =
-                true;
-
-
-            button.innerHTML = `
-                <span
-                    class="spinner-border spinner-border-sm me-1"
-                    aria-hidden="true"
-                ></span>
-                Processing...
-            `;
-
 
             const formData =
                 new FormData(
                     form
                 );
 
-
             formData.set(
                 'update_status',
                 '1'
             );
-
 
             formData.set(
                 'ajax',
                 '1'
             );
 
+            /* GCash review: close the modal immediately after Verify is clicked.
+             * Do not add a row-level loading state; only Start Preparing shows one. */
+            if (form.id === 'staffGcashReviewForm') {
+                try {
+                    const instantModal = document.getElementById('staffGcashReviewModal');
+                    if (instantModal) {
+                        /* No fade-out animation, so it disappears immediately. */
+                        instantModal.classList.remove('fade');
+
+                        if (window.bootstrap && bootstrap.Modal) {
+                            (bootstrap.Modal.getInstance(instantModal) ||
+                             bootstrap.Modal.getOrCreateInstance(instantModal)).hide();
+                        }
+
+                        if (instantModal.classList.contains('show') && typeof window.closeLocaliteaModal === 'function') {
+                            window.closeLocaliteaModal(instantModal);
+                        }
+
+                        document.querySelectorAll('.modal-backdrop, [data-localitea-modal-backdrop]')
+                            .forEach(function (b) { b.remove(); });
+                        document.body.classList.remove('modal-open');
+                        document.body.style.removeProperty('overflow');
+                        document.body.style.removeProperty('padding-right');
+
+                        /* Restore the fade animation for the next time it opens. */
+                        window.setTimeout(function () {
+                            instantModal.classList.add('fade');
+                        }, 50);
+                    }
+                } catch (instantCloseError) {
+                    console.warn('Instant modal close warning:', instantCloseError);
+                }
+            }
+
+            let serverConfirmedUpdate = false;
 
             try {
 
@@ -11308,7 +10928,6 @@ document.addEventListener(
                         }
                     );
 
-
                 if (!response.ok) {
 
                     throw new Error(
@@ -11318,12 +10937,40 @@ document.addEventListener(
 
                 }
 
-
                 const data =
                     await response.json();
 
-
                 if (!data.success) {
+
+                    if (data.stale_status) {
+                        /*
+                         * The order has already advanced in the database.
+                         * Do not show a stale-action error or a separate
+                         * synchronization toast. Restore this button and
+                         * quietly reload the Active Orders region in the
+                         * background so the current status is shown.
+                         */
+                        if (preparingToastTicket && !preparingToastResolved) {
+                            window.cancelAjaxOrderToast(preparingToastTicket);
+                            preparingToastResolved = true;
+                        }
+
+                        if (isPreparing) {
+                            button.disabled = false;
+                            button.innerHTML = originalHTML;
+                            button.removeAttribute('aria-busy');
+                        }
+
+                        delete form.dataset.processing;
+
+                        void loadStaffActiveOrders(window.location.href, false).then(function (refreshed) {
+                            if (!refreshed) {
+                                window.location.reload();
+                            }
+                        });
+
+                        return;
+                    }
 
                     throw new Error(
                         data.message ||
@@ -11332,15 +10979,180 @@ document.addEventListener(
 
                 }
 
+                /* From this point onward, the server confirms the transaction committed. */
+                serverConfirmedUpdate = true;
 
                 /*
-                 * Refresh only the active order section.
+                 * Update the workflow counts immediately from the committed
+                 * server response. The background list refresh below then
+                 * reconciles the cards and counts with the database.
                  */
-                await loadAdminActiveOrders(
-                    window.location.href,
-                    false
-                );
+                if (
+                    !data.already_processed &&
+                    data.previous_status &&
+                    data.new_status &&
+                    data.previous_status !== data.new_status
+                ) {
+                    updateWorkflowCount(data.previous_status, -1);
+                    updateWorkflowCount(data.new_status, 1);
+                }
 
+                /*
+                 * Remove this order from the visible list as soon as its own
+                 * update succeeds, rather than waiting for the newest shared
+                 * Active Orders refresh to replace the whole section. This is
+                 * important when Staff starts Preparing on several orders:
+                 * each committed order should leave the Confirmed tab on its
+                 * own response, even while other orders are still processing.
+                 *
+                 * A non-empty search spans all active workflow statuses, so
+                 * keep the row when the updated status is still part of that
+                 * active search. Completed orders leave the active search too.
+                 */
+                const submittedStatusFilter = String(
+                    formData.get('status_filter') ||
+                    new URL(window.location.href).searchParams.get('status') ||
+                    'order_queue'
+                );
+                const submittedSearchTerm = String(
+                    formData.get('q') || ''
+                ).trim();
+                const committedStatus = String(
+                    data.new_status || requestedStatus || ''
+                );
+                const activeSearchStatuses = [
+                    'order_queue',
+                    'pending_verification',
+                    'confirmed',
+                    'preparing',
+                    'ready'
+                ];
+                const remainsInCurrentOrderList = submittedSearchTerm !== ''
+                    ? activeSearchStatuses.includes(committedStatus)
+                    : committedStatus === submittedStatusFilter;
+
+                if (!remainsInCurrentOrderList) {
+                    removeOrderCard(form);
+                }
+
+                if (preparingToastTicket && !preparingToastResolved) {
+                    window.completeAjaxOrderToast(
+                        preparingToastTicket,
+                        data.message || 'The order is now being prepared.',
+                        'Order Preparing'
+                    );
+                    preparingToastResolved = true;
+                }
+
+                /*
+                 * GCash verification moves this order out of Pending Verification.
+                 * Refresh the existing Active Orders region through its AJAX loader
+                 * so the verified order disappears and the workflow counts update
+                 * immediately, while any other pending GCash orders remain visible.
+                 * Do this before optional modal cleanup: a Bootstrap modal error must
+                 * never prevent the committed order list from being refreshed.
+                 */
+                if (form.id === 'staffGcashReviewForm') {
+
+                    const refreshUrl = new URL(window.location.href);
+                    const submittedReviewData = new FormData(form);
+                    const reviewStatus = String(
+                        submittedReviewData.get('status_filter') || 'pending_verification'
+                    );
+                    const reviewSearch = String(
+                        submittedReviewData.get('q') || ''
+                    ).trim();
+                    const reviewPage = String(
+                        submittedReviewData.get('page') || '1'
+                    );
+
+                    refreshUrl.searchParams.set('status', reviewStatus);
+                    refreshUrl.searchParams.set('page', reviewPage);
+                    refreshUrl.searchParams.delete('order_id');
+                    refreshUrl.searchParams.delete('notification_id');
+
+                    if (reviewSearch !== '') {
+                        refreshUrl.searchParams.set('q', reviewSearch);
+                    } else {
+                        refreshUrl.searchParams.delete('q');
+                    }
+
+                    /* Release the modal's one-order submission lock. */
+                    resetGcashVerifyAction();
+
+                    /* Close the GCash review modal now that the server confirmed success. */
+                    try {
+                        const gcashModalEl = document.getElementById('staffGcashReviewModal');
+                        if (gcashModalEl) {
+                            if (window.bootstrap && bootstrap.Modal) {
+                                (bootstrap.Modal.getInstance(gcashModalEl) ||
+                                 bootstrap.Modal.getOrCreateInstance(gcashModalEl)).hide();
+                            }
+                            /* Force-close if Bootstrap did not (stale instance / fallback modal). */
+                            window.setTimeout(function () {
+                                if (gcashModalEl.classList.contains('show')) {
+                                    if (typeof window.closeLocaliteaModal === 'function') {
+                                        window.closeLocaliteaModal(gcashModalEl);
+                                    } else {
+                                        gcashModalEl.classList.remove('show');
+                                        gcashModalEl.style.display = 'none';
+                                        gcashModalEl.setAttribute('aria-hidden', 'true');
+                                        gcashModalEl.removeAttribute('aria-modal');
+                                    }
+                                }
+                                document.querySelectorAll('.modal-backdrop, [data-localitea-modal-backdrop]')
+                                    .forEach(function (b) { b.remove(); });
+                                document.body.classList.remove('modal-open');
+                                document.body.style.removeProperty('overflow');
+                                document.body.style.removeProperty('padding-right');
+                            }, 400);
+                        }
+                    } catch (modalCloseError) {
+                        console.warn('GCash modal close warning:', modalCloseError);
+                    }
+
+                    const refreshed = await loadStaffActiveOrders(
+                        refreshUrl.toString(),
+                        false
+                    );
+
+                    if (!refreshed) {
+                        /* Last-resort recovery only if the AJAX region refresh fails. */
+                        try {
+                            sessionStorage.setItem(
+                                'localiteaStaffGcashVerifiedToast',
+                                data.message || 'GCash payment was verified and moved to Order Queue.'
+                            );
+                        } catch (storageError) {
+                            console.warn('Unable to preserve the GCash success toast:', storageError);
+                        }
+                        window.location.assign(refreshUrl.toString());
+                        return;
+                    }
+
+                    if (typeof window.showAjaxOrderToast === 'function') {
+                        window.showAjaxOrderToast(
+                            data.message || 'GCash payment was verified and the order moved to Order Queue.',
+                            'Payment Verified'
+                        );
+                    }
+
+                    return;
+                }
+
+                /*
+                 * The order update is already committed. Stop the Start Preparing
+                 * spinner as soon as the POST (including its email attempt) returns.
+                 * Reconcile the list in the background; do not make the button wait
+                 * for a second GET request before finishing the action.
+                 */
+                if (isPreparing) {
+                    button.disabled = false;
+                    button.innerHTML = originalHTML;
+                    button.removeAttribute('aria-busy');
+                }
+
+                delete form.dataset.processing;
 
                 const emailFailureMessage =
                     data.email_sent === false
@@ -11348,22 +11160,12 @@ document.addEventListener(
                           (data.email_error || 'unknown error')
                         : '';
 
-
-                if (screenProcessingOverlay) {
-
-                    screenProcessingOverlay.remove();
-                    screenProcessingOverlay = null;
-
-                }
-
-
                 if (processingOverlay) {
 
                     processingOverlay.remove();
                     processingOverlay = null;
 
                 }
-
 
                 if (orderCard) {
 
@@ -11373,19 +11175,17 @@ document.addEventListener(
 
                 }
 
-
                 if (
-                    typeof showAjaxOrderToast ===
-                    'function'
+                    !preparingToastTicket &&
+                    typeof window.showAjaxOrderToast === 'function'
                 ) {
-
-                    showAjaxOrderToast(
-                        data.message ||
-                        'Order status updated successfully.'
+                    window.showAjaxOrderToast(
+                        data.message || 'Order status updated successfully.',
+                        form.id === 'staffGcashReviewForm'
+                            ? 'Payment Verified'
+                            : 'Order Processed'
                     );
-
                 }
-
 
                 if (emailFailureMessage) {
 
@@ -11398,14 +11198,85 @@ document.addEventListener(
 
                 }
 
+                /*
+                 * Refresh cards and workflow totals without blocking this
+                 * successful action or its button. The loader discards older
+                 * overlapping responses, so the newest request wins.
+                 */
+                void loadStaffActiveOrders(window.location.href, false).then(function (refreshed) {
+                    if (!refreshed) {
+                        window.location.reload();
+                    }
+                });
 
             } catch (error) {
 
                 console.error(
-                    'AJAX Admin order status update failed:',
+                    'AJAX Staff order status update failed:',
                     error
                 );
 
+                /*
+                 * The database may already have committed before a client-side
+                 * UI helper fails. In that case, report the actual successful
+                 * action, release the Preparing button, and quietly refresh the
+                 * list. Never replace the normal success message with a
+                 * "synchronizing" message or a Payment Not Verified alert.
+                 */
+                if (serverConfirmedUpdate) {
+
+                    if (processingOverlay) {
+                        processingOverlay.remove();
+                        processingOverlay = null;
+                    }
+
+                    if (orderCard) {
+                        orderCard.classList.remove('processing-order');
+                    }
+
+                    if (isPreparing) {
+                        button.disabled = false;
+                        button.innerHTML = originalHTML;
+                        button.removeAttribute('aria-busy');
+                    }
+
+                    delete form.dataset.processing;
+
+                    if (preparingToastTicket && !preparingToastResolved) {
+                        window.completeAjaxOrderToast(
+                            preparingToastTicket,
+                            'The order is now being prepared.',
+                            'Order Preparing'
+                        );
+                        preparingToastResolved = true;
+                    } else if (!preparingToastTicket && typeof window.showAjaxOrderToast === 'function') {
+                        window.showAjaxOrderToast(
+                            form.id === 'staffGcashReviewForm'
+                                ? 'Payment was verified and the order was moved to Order Queue.'
+                                : 'The order was updated successfully.',
+                            form.id === 'staffGcashReviewForm'
+                                ? 'Payment Verified'
+                                : 'Order Processed'
+                        );
+                    }
+
+                    if (form.id === 'staffGcashReviewForm') {
+                        resetGcashVerifyAction();
+                    }
+
+                    void loadStaffActiveOrders(window.location.href, false).then(function (refreshed) {
+                        if (!refreshed) {
+                            window.location.reload();
+                        }
+                    });
+
+                    return;
+                }
+
+                if (preparingToastTicket && !preparingToastResolved) {
+                    window.cancelAjaxOrderToast(preparingToastTicket);
+                    preparingToastResolved = true;
+                }
 
                 if (processingOverlay) {
 
@@ -11413,15 +11284,6 @@ document.addEventListener(
                     processingOverlay = null;
 
                 }
-
-
-                if (screenProcessingOverlay) {
-
-                    screenProcessingOverlay.remove();
-                    screenProcessingOverlay = null;
-
-                }
-
 
                 if (orderCard) {
 
@@ -11431,30 +11293,38 @@ document.addEventListener(
 
                 }
 
+                if (isPreparing) {
+                    button.disabled = false;
+                    button.innerHTML = originalHTML;
+                    button.removeAttribute('aria-busy');
+                }
 
-                button.disabled =
-                    false;
+                delete form.dataset.processing;
 
-
-                button.innerHTML =
-                    originalHTML;
-
-
-                alert(
-                    error.message ||
-                    'Unable to update the order.'
-                );
+                if (
+                    form.id === 'staffGcashReviewForm'
+                    && typeof window.showAjaxOrderToast === 'function'
+                ) {
+                    window.showAjaxOrderToast(
+                        error.message || 'Unable to verify the GCash payment.',
+                        'Payment Not Verified'
+                    );
+                } else {
+                    alert(
+                        error.message ||
+                        'Unable to update the order.'
+                    );
+                }
 
             }
 
         }
 
-
         /* =====================================================
            AJAX CANCEL ORDER
         ===================================================== */
 
-        async function handleAdminCancelOrder(
+        async function handleStaffCancelOrder(
             form
         ) {
 
@@ -11463,12 +11333,10 @@ document.addEventListener(
                     'select[name="cancellation_reason"]'
                 );
 
-
             const otherWrap =
                 form.querySelector(
                     '[data-other-reason]'
                 );
-
 
             const textarea =
                 otherWrap
@@ -11476,7 +11344,6 @@ document.addEventListener(
                         'textarea[name="other_cancellation_reason"]'
                     )
                     : null;
-
 
             /* Convert Other into a submitted option */
 
@@ -11490,7 +11357,6 @@ document.addEventListener(
                         ? textarea.value.trim()
                         : '';
 
-
                 if (reason === '') {
 
                     if (textarea) {
@@ -11500,7 +11366,6 @@ document.addEventListener(
                     return;
 
                 }
-
 
                 let customOption =
                     Array.from(
@@ -11516,7 +11381,6 @@ document.addEventListener(
                         }
                     );
 
-
                 if (!customOption) {
 
                     customOption =
@@ -11524,18 +11388,14 @@ document.addEventListener(
                             'option'
                         );
 
-
                     customOption.value =
                         reason;
-
 
                     customOption.textContent =
                         reason;
 
-
                     customOption.selected =
                         true;
-
 
                     select.appendChild(
                         customOption
@@ -11543,61 +11403,41 @@ document.addEventListener(
 
                 }
 
-
                 select.value =
                     reason;
 
             }
-
 
             const button =
                 form.querySelector(
                     'button[type="submit"]'
                 );
 
-
             if (
                 !button ||
-                button.disabled
+                button.disabled ||
+                form.dataset.processing === '1'
             ) {
                 return;
             }
 
-
-            const originalHTML =
-                button.innerHTML;
-
-
-            button.disabled =
-                true;
-
-
-            button.innerHTML = `
-                <span
-                    class="spinner-border spinner-border-sm me-1"
-                    aria-hidden="true"
-                ></span>
-                Cancelling...
-            `;
-
+            /* Block duplicate cancellation requests without showing a loader. */
+            form.dataset.processing = '1';
 
             const formData =
                 new FormData(
                     form
                 );
 
-
             formData.set(
                 'cancel_order',
                 '1'
             );
 
-
             formData.set(
                 'ajax',
                 '1'
             );
-
 
             try {
 
@@ -11620,7 +11460,6 @@ document.addEventListener(
                         }
                     );
 
-
                 if (!response.ok) {
 
                     throw new Error(
@@ -11630,10 +11469,8 @@ document.addEventListener(
 
                 }
 
-
                 const data =
                     await response.json();
-
 
                 if (!data.success) {
 
@@ -11644,6 +11481,7 @@ document.addEventListener(
 
                 }
 
+                delete form.dataset.processing;
 
                 /* Close cancellation modal */
 
@@ -11651,7 +11489,6 @@ document.addEventListener(
                     form.closest(
                         '.modal'
                     );
-
 
                 if (modal) {
 
@@ -11663,48 +11500,38 @@ document.addEventListener(
                             modal
                         );
 
-
                     modalInstance.hide();
 
                 }
 
-
                 /* Refresh only Active Orders */
 
-                await loadAdminActiveOrders(
+                await loadStaffActiveOrders(
                     window.location.href,
                     false
                 );
 
-
                 if (
-                    typeof showAjaxOrderToast ===
+                    typeof window.showAjaxOrderToast ===
                     'function'
                 ) {
 
-                    showAjaxOrderToast(
+                    window.showAjaxOrderToast(
                         data.message ||
-                        'Order cancelled successfully.'
+                        'Order cancelled successfully.',
+                        'Order Cancelled'
                     );
 
                 }
 
-
             } catch (error) {
 
                 console.error(
-                    'AJAX Admin order cancellation failed:',
+                    'AJAX Staff order cancellation failed:',
                     error
                 );
 
-
-                button.disabled =
-                    false;
-
-
-                button.innerHTML =
-                    originalHTML;
-
+                delete form.dataset.processing;
 
                 alert(
                     error.message ||
@@ -11727,14 +11554,13 @@ document.addEventListener(
 <script>
 document.addEventListener('DOMContentLoaded', function () {
 
-    const adminOrdersContent =
-        document.querySelector('.admin-content');
+    const staffOrdersContent =
+        document.querySelector('.staff-content');
 
-    if (!adminOrdersContent) {
+    if (!staffOrdersContent) {
         return;
     }
 
-    let cancelledSearchTimer = null;
     let cancelledRequestId = 0;
 
     function cancelledSearchFormDataFromUrl(targetUrl) {
@@ -11865,6 +11691,17 @@ document.addEventListener('DOMContentLoaded', function () {
                 );
             }
 
+            /* Drop detached modals from the previous result page before replacing its section. */
+            document.querySelectorAll('[data-cancelled-order-modal-detached="true"]').forEach(function (modalElement) {
+                if (window.bootstrap && window.bootstrap.Modal) {
+                    const instance = bootstrap.Modal.getInstance(modalElement);
+                    if (instance) {
+                        instance.dispose();
+                    }
+                }
+                modalElement.remove();
+            });
+
             cancelledSection.replaceWith(
                 newCancelledSection
             );
@@ -11877,7 +11714,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
                 window.history.pushState(
                     {
-                        adminOrdersCancelledAjax: true
+                        staffOrdersCancelledAjax: true
                     },
                     '',
                     cleanUrl.pathname +
@@ -11893,7 +11730,7 @@ document.addEventListener('DOMContentLoaded', function () {
         } catch (error) {
 
             console.error(
-                'Admin Cancelled Orders AJAX error:',
+                'Staff Cancelled Orders AJAX error:',
                 error
             );
 
@@ -11959,6 +11796,17 @@ document.addEventListener('DOMContentLoaded', function () {
             url.searchParams.get('cancelled_page') ??
             '1';
 
+        const historyStatus =
+            overrides.history_status ??
+            url.searchParams.get('history_status') ??
+            'all';
+
+        if (historyStatus && historyStatus !== 'all') {
+            url.searchParams.set('history_status', historyStatus);
+        } else {
+            url.searchParams.delete('history_status');
+        }
+
         url.searchParams.set(
             'cancelled_period',
             period || 'today'
@@ -11997,9 +11845,23 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     /* Cancelled section search/filter controls */
-    adminOrdersContent.addEventListener(
+    staffOrdersContent.addEventListener(
         'change',
         function (event) {
+
+            const historyStatusSelect =
+                event.target.closest('[data-history-status]');
+
+            if (historyStatusSelect) {
+                loadCancelledOrders(
+                    buildCancelledUrl({
+                        history_status: historyStatusSelect.value || 'all',
+                        cancelled_page: 1
+                    }),
+                    true
+                );
+                return;
+            }
 
             const periodSelect =
                 event.target.closest(
@@ -12103,7 +11965,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     );
 
-    adminOrdersContent.addEventListener(
+    staffOrdersContent.addEventListener(
         'submit',
         function (event) {
 
@@ -12147,6 +12009,10 @@ document.addEventListener('DOMContentLoaded', function () {
                         search
                             ? search.value
                             : '',
+                    history_status:
+                        form.querySelector('[data-history-status]')
+                            ? form.querySelector('[data-history-status]').value
+                            : 'all',
                     cancelled_page: 1
                 });
 
@@ -12157,91 +12023,33 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     );
 
-    /* Live search: no whole-page refresh. */
-    adminOrdersContent.addEventListener(
-        'input',
+    /* Cancelled Orders search runs on Enter, matching Active Orders. */
+    staffOrdersContent.addEventListener(
+        'search',
         function (event) {
-
             const searchInput =
-                event.target.closest(
-                    '[data-cancelled-search]'
-                );
+                event.target.closest('[data-cancelled-search]');
 
-            if (!searchInput) {
+            if (!searchInput || searchInput.value.trim() !== '') {
                 return;
             }
 
-            clearTimeout(
-                cancelledSearchTimer
-            );
+            const searchForm =
+                searchInput.closest('[data-cancelled-filter-form]');
 
-            cancelledSearchTimer =
-                setTimeout(
-                    function () {
-
-                        const period =
-                            document.querySelector(
-                                '[data-cancelled-period]'
-                            );
-
-                        const month =
-                            document.querySelector(
-                                '[data-cancelled-month]'
-                            );
-
-                        const targetUrl =
-                            buildCancelledUrl({
-                                cancelled_period:
-                                    period
-                                        ? period.value
-                                        : 'today',
-                                cancelled_month:
-                                    month
-                                        ? month.value
-                                        : '',
-                                cancelled_q:
-                                    searchInput.value,
-                                cancelled_page: 1
-                            });
-
-                        /*
-                         * Live search should not create a new history
-                         * entry for every keystroke, but the current URL
-                         * must still track the active cancelled search so
-                         * pagination and Back/Forward keep the same filter.
-                         */
-                        const cleanUrl =
-                            new URL(
-                                targetUrl.toString()
-                            );
-
-                        window.history.replaceState(
-                            {
-                                adminOrdersCancelledAjax: true
-                            },
-                            '',
-                            cleanUrl.pathname +
-                            (
-                                cleanUrl.search
-                                    ? cleanUrl.search
-                                    : ''
-                            ) +
-                            cleanUrl.hash
-                        );
-
-                        loadCancelledOrders(
-                            targetUrl,
-                            false
-                        );
-
-                    },
-                    300
-                );
+            if (searchForm && typeof searchForm.requestSubmit === 'function') {
+                searchForm.requestSubmit();
+            } else if (searchForm) {
+                searchForm.dispatchEvent(new Event('submit', {
+                    bubbles: true,
+                    cancelable: true
+                }));
+            }
         }
     );
 
     /* Clear only Cancelled Orders filters. */
-    adminOrdersContent.addEventListener(
+    staffOrdersContent.addEventListener(
         'click',
         function (event) {
 
@@ -12371,7 +12179,6 @@ document.addEventListener('DOMContentLoaded', function () {
 });
 </script>
 
-
 <script>
 /* =========================================================
    VIEW ORDER TARGET
@@ -12396,7 +12203,6 @@ document.addEventListener('DOMContentLoaded', function () {
             : 0;
     }
 
-
     function clearViewOrderTargetFromUrl() {
 
         const url =
@@ -12420,7 +12226,6 @@ document.addEventListener('DOMContentLoaded', function () {
             url.hash
         );
     }
-
 
     window.LocaliteaFocusViewOrderTarget =
         function (targetId, removeUrlTarget = false) {
@@ -12499,7 +12304,6 @@ document.addEventListener('DOMContentLoaded', function () {
             return true;
         };
 
-
     function initializeViewOrderTarget() {
 
         const targetId =
@@ -12521,7 +12325,6 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-
     if (document.readyState === 'loading') {
 
         document.addEventListener(
@@ -12541,377 +12344,265 @@ document.addEventListener('DOMContentLoaded', function () {
 
 <script>
 /*
- * Cancellation reason dropdown.
- *
- * The existing Admin cancellation flow still submits
- * cancellation_reason to PHP. "Other" uses the marker __other__
- * and sends its actual text through other_cancellation_reason.
+ * Staff cancellation reason dropdown.
+ * The options menu is temporarily moved to the modal root and positioned
+ * against the viewport. This prevents .modal-body / .modal-content overflow
+ * from clipping the list while keeping the menu inside the Bootstrap modal
+ * for its focus trap.
  */
 document.addEventListener('DOMContentLoaded', function () {
+    const reasonInput = document.getElementById('staffCancelReason');
+    const dropdown = document.getElementById('staffCancelReasonDropdown');
+    const toggle = document.getElementById('staffCancelReasonToggle');
+    const label = document.getElementById('staffCancelReasonLabel');
+    const menu = document.getElementById('staffCancelReasonMenu');
+    const otherWrap = document.getElementById('staffOtherCancellationReasonWrap');
+    const otherInput = document.getElementById('staffOtherCancellationReason');
+    const form = document.getElementById('staffCancelOrderForm');
+    const modal = document.getElementById('staffCancelOrderModal');
+    const orderStatusInput = document.getElementById('staffCancelOrderStatus');
+    const orderPaymentMethodInput = document.getElementById('staffCancelOrderPaymentMethod');
 
-    const reasonSelect =
-        document.getElementById('adminCancelReason');
-
-    const otherWrap =
-        document.getElementById(
-            'adminOtherCancellationReasonWrap'
-        );
-
-    const otherInput =
-        document.getElementById(
-            'adminOtherCancellationReason'
-        );
-
-    const form =
-        document.getElementById('adminCancelOrderForm');
-
-    if (
-        !reasonSelect ||
-        !otherWrap ||
-        !otherInput
-    ) {
+    if (!reasonInput || !dropdown || !toggle || !label || !menu || !otherWrap || !otherInput || !modal) {
         return;
     }
 
-    function syncOtherReasonField() {
+    const placeholder = 'Select a cancellation reason';
+    const menuHome = document.createComment('staff cancellation reason menu home');
+    menu.parentNode.insertBefore(menuHome, menu);
+    let menuIsOpen = false;
 
-        const isOther =
-            reasonSelect.value === '__other__';
+    function positionMenu() {
+        if (!menuIsOpen) return;
 
-        otherWrap.style.display =
-            isOther ? '' : 'none';
+        const rect = toggle.getBoundingClientRect();
+        const viewportHeight = window.visualViewport
+            ? window.visualViewport.height
+            : window.innerHeight;
+        const viewportWidth = window.visualViewport
+            ? window.visualViewport.width
+            : window.innerWidth;
 
-        otherInput.required =
-            isOther;
+        const left = Math.max(8, Math.min(rect.left, viewportWidth - rect.width - 8));
+        const width = Math.max(160, Math.min(rect.width, viewportWidth - 16));
+        const availableBelow = Math.max(56, viewportHeight - rect.bottom - 12);
+        const maxHeight = Math.min(360, availableBelow);
+
+        menu.style.position = 'fixed';
+        menu.style.top = `${Math.round(rect.bottom + 5)}px`;
+        menu.style.left = `${Math.round(left)}px`;
+        menu.style.right = 'auto';
+        menu.style.width = `${Math.round(width)}px`;
+        menu.style.maxHeight = `${Math.floor(maxHeight)}px`;
+        menu.style.zIndex = '2000';
+    }
+
+    function closeMenu() {
+        menu.hidden = true;
+        menuIsOpen = false;
+        toggle.setAttribute('aria-expanded', 'false');
+
+        menu.style.removeProperty('position');
+        menu.style.removeProperty('top');
+        menu.style.removeProperty('left');
+        menu.style.removeProperty('right');
+        menu.style.removeProperty('width');
+        menu.style.removeProperty('max-height');
+        menu.style.removeProperty('z-index');
+
+        // Restore the menu to its original position in the dropdown.
+        if (menuHome.parentNode && menu.parentNode !== menuHome.parentNode) {
+            menuHome.parentNode.insertBefore(menu, menuHome.nextSibling);
+        }
+    }
+
+    function openMenu() {
+        if (menuIsOpen) {
+            positionMenu();
+            return;
+        }
+
+        // Move outside .modal-body so its scroll/overflow cannot crop the list.
+        // Keeping it inside the modal root preserves Bootstrap's focus trap.
+        modal.appendChild(menu);
+        menu.hidden = false;
+        menuIsOpen = true;
+        toggle.setAttribute('aria-expanded', 'true');
+        positionMenu();
+    }
+
+    function syncReasonChoicesForOrder() {
+        const isReadyOrder = (
+            orderStatusInput
+            && orderStatusInput.value === 'ready'
+        );
+
+        menu.querySelectorAll('[data-standard-reason]').forEach(option => {
+            option.hidden = isReadyOrder;
+        });
+        menu.querySelectorAll('[data-standard-reason-group]').forEach(group => {
+            group.hidden = isReadyOrder;
+        });
+        menu.querySelectorAll('[data-no-show-reason], [data-no-show-reason-group]').forEach(element => {
+            element.hidden = !isReadyOrder;
+        });
+
+        const selectedOption = Array.from(menu.querySelectorAll('[data-value]'))
+            .find(option => option.getAttribute('data-value') === reasonInput.value);
+
+        if (selectedOption && selectedOption.hidden) {
+            reasonInput.value = '';
+        }
+    }
+
+    function syncSelectedReason() {
+        syncReasonChoicesForOrder();
+
+        const selected = Array.from(menu.querySelectorAll('[data-value]:not([hidden])'))
+            .find(option => option.getAttribute('data-value') === reasonInput.value);
+
+        label.textContent = selected ? selected.textContent.trim() : placeholder;
+
+        menu.querySelectorAll('[data-value]').forEach(option => {
+            const isSelected = option === selected;
+            option.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+            option.classList.toggle('is-selected', isSelected);
+        });
+
+        const isOther = reasonInput.value === '__other__';
+        otherWrap.style.display = isOther ? '' : 'none';
+        otherInput.required = isOther;
 
         if (!isOther) {
             otherInput.value = '';
         }
     }
 
-    reasonSelect.addEventListener(
-        'change',
-        syncOtherReasonField
-    );
+    toggle.addEventListener('click', function () {
+        if (menuIsOpen) {
+            closeMenu();
+        } else {
+            openMenu();
+        }
+    });
 
-    if (form) {
+    menu.addEventListener('click', function (event) {
+        const option = event.target.closest('[data-value]');
+        if (!option) return;
 
-        form.addEventListener(
-            'submit',
-            function (event) {
+        reasonInput.value = option.getAttribute('data-value') || '';
+        reasonInput.dispatchEvent(new Event('change', { bubbles: true }));
+        closeMenu();
+        toggle.focus();
+    });
 
-                if (
-                    reasonSelect.value === '__other__'
-                ) {
+    document.addEventListener('click', function (event) {
+        if (menuIsOpen && !dropdown.contains(event.target) && !menu.contains(event.target)) {
+            closeMenu();
+        }
+    });
 
-                    const customReason =
-                        otherInput.value.trim();
+    toggle.addEventListener('keydown', function (event) {
+        if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            openMenu();
+            const firstOption = menu.querySelector('[data-value]:not([hidden])');
+            if (firstOption) firstOption.focus();
+        } else if (event.key === 'Escape') {
+            closeMenu();
+        }
+    });
 
-                    if (customReason === '') {
+    menu.addEventListener('keydown', function (event) {
+        const options = Array.from(menu.querySelectorAll('[data-value]:not([hidden])'));
+        const currentIndex = options.indexOf(document.activeElement);
 
-                        event.preventDefault();
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            closeMenu();
+            toggle.focus();
+            return;
+        }
 
-                        otherInput.focus();
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            event.preventDefault();
+            const step = event.key === 'ArrowDown' ? 1 : -1;
+            const nextIndex = Math.max(0, Math.min(options.length - 1, currentIndex + step));
+            if (options[nextIndex]) options[nextIndex].focus();
+        }
+    });
 
-                        otherInput.reportValidity();
+    reasonInput.addEventListener('change', syncSelectedReason);
+    window.addEventListener('resize', positionMenu);
+    window.addEventListener('scroll', positionMenu, true);
 
-                        return;
-                    }
-                }
-            }
-        );
+    if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', positionMenu);
+        window.visualViewport.addEventListener('scroll', positionMenu);
     }
 
-    syncOtherReasonField();
+    modal.addEventListener('hide.bs.modal', closeMenu);
 
+    if (form) {
+        form.addEventListener('submit', function (event) {
+            if (!reasonInput.value.trim()) {
+                event.preventDefault();
+                openMenu();
+                toggle.focus();
+                return;
+            }
+
+            if (reasonInput.value === '__other__' && otherInput.value.trim() === '') {
+                event.preventDefault();
+                otherInput.focus();
+                otherInput.reportValidity();
+            }
+        });
+    }
+
+    syncSelectedReason();
+    closeMenu();
 });
 </script>
 
 <script>
-/* =========================================================
-   PENDING REFUND FILTERS
-   Status/date/search changes refresh ONLY the Pending Refunds
-   dropdown. The rest of Admin Orders stays on the page.
-========================================================= */
-document.addEventListener('DOMContentLoaded', function () {
+/*
+ * Enable No-show controls when their server-calculated deadline arrives.
+ * The endpoint rechecks eligibility under a database row lock, so this
+ * client-side timer is only a usability improvement, never authorization.
+ */
+(function () {
+    function updateNoShowActionButtons() {
+        const nowSeconds = Date.now() / 1000;
 
-    const content = document.querySelector('.admin-content');
+        document.querySelectorAll('button[data-no-show-only="1"][data-no-show-eligible-at]').forEach(function (button) {
+            const eligibleAt = Number(button.getAttribute('data-no-show-eligible-at') || 0);
+            const eligible = eligibleAt > 0 && nowSeconds >= eligibleAt;
 
-    if (!content) return;
-
-    let refundRequest = null;
-
-    function buildRefundUrl(form) {
-        const url = new URL(
-            form.getAttribute('action') || window.location.href,
-            window.location.href
-        );
-
-        const formData = new FormData(form);
-
-        /* Start from the current page query so unrelated Orders state
-           (active tab, search, pagination, etc.) stays intact. */
-        formData.forEach(function (value, key) {
-            url.searchParams.set(key, value);
+            button.disabled = !eligible;
+            button.setAttribute('aria-disabled', eligible ? 'false' : 'true');
+            button.title = eligible
+                ? 'The pickup time and collection grace period have passed. Confirm that the customer did not collect the order.'
+                : 'Available 30 minutes after the later of the scheduled pickup time and the time the order was marked Ready.';
         });
-
-        url.searchParams.set('refund_open', '1');
-        return url;
     }
 
-    async function refreshPendingRefunds(form, pushHistory = true) {
-        if (!form) return;
-
-        const currentSection = document.querySelector('#pending-refunds');
-        if (!currentSection) return;
-
-        if (refundRequest) {
-            refundRequest.abort();
-        }
-
-        const requestedUrl = buildRefundUrl(form);
-        const controller = new AbortController();
-        refundRequest = controller;
-
-        currentSection.setAttribute('aria-busy', 'true');
-        currentSection.style.opacity = '.65';
-        currentSection.style.pointerEvents = 'none';
-
-        try {
-            /* Fetch the normal page, then replace ONLY the Pending Refunds
-               <details> element. The browser never navigates away. */
-            const response = await fetch(requestedUrl.toString(), {
-                method: 'GET',
-                headers: {
-                    'X-Requested-With': 'XMLHttpRequest',
-                    'Accept': 'text/html'
-                },
-                cache: 'no-store',
-                signal: controller.signal
-            });
-
-            if (!response.ok) {
-                throw new Error('Unable to refresh Pending Refunds.');
-            }
-
-            const html = await response.text();
-            const parser = new DOMParser();
-            const parsedDocument = parser.parseFromString(
-                html,
-                'text/html'
-            );
-
-            const newSection =
-                parsedDocument.querySelector('#pending-refunds');
-
-            if (!newSection) {
-                throw new Error(
-                    'Pending Refunds section was not found.'
-                );
-            }
-
-            /* Keep the dropdown open after every filter refresh. */
-            if (currentSection.hasAttribute('open')) {
-                newSection.setAttribute('open', '');
-            }
-
-            currentSection.replaceWith(newSection);
-
-            if (pushHistory) {
-                window.history.pushState(
-                    { adminOrdersRefundAjax: true },
-                    '',
-                    requestedUrl.pathname +
-                    (requestedUrl.search ? requestedUrl.search : '') +
-                    requestedUrl.hash
-                );
-            }
-
-        } catch (error) {
-
-            if (error.name !== 'AbortError') {
-                console.error(
-                    'Admin Pending Refunds AJAX error:',
-                    error
-                );
-
-                alert(
-                    error.message ||
-                    'Unable to load Pending Refunds.'
-                );
-            }
-
-        } finally {
-
-            if (refundRequest === controller) {
-                refundRequest = null;
-            }
-
-            const restoredSection =
-                document.querySelector('#pending-refunds');
-
-            if (restoredSection) {
-                restoredSection.removeAttribute('aria-busy');
-                restoredSection.style.opacity = '';
-                restoredSection.style.pointerEvents = '';
-            }
-        }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', updateNoShowActionButtons, { once: true });
+    } else {
+        updateNoShowActionButtons();
     }
 
-    /* Status dropdown: AJAX-refresh Pending Refunds only. */
-    content.addEventListener('change', function (event) {
-
-        const statusSelect =
-            event.target.closest('[data-refund-status]');
-
-        if (statusSelect) {
-
-            const form =
-                statusSelect.closest('[data-refund-filter-form]');
-
-            if (form) {
-                refreshPendingRefunds(form);
-            }
-
-            return;
-        }
-
-        /* Date-period dropdown: AJAX-refresh immediately except when
-           the Admin needs to choose a specific date first. */
-        const periodSelect =
-            event.target.closest('[data-refund-period]');
-
-        if (periodSelect) {
-
-            const form =
-                periodSelect.closest('[data-refund-filter-form]');
-
-            const dateWrap =
-                form
-                    ? form.querySelector('[data-refund-date-wrap]')
-                    : null;
-
-            const dateInput =
-                form
-                    ? form.querySelector('[data-refund-date]')
-                    : null;
-
-            if (periodSelect.value === 'specific_date') {
-
-                if (dateWrap) {
-                    dateWrap.style.display = '';
-                }
-
-                if (dateInput) {
-                    dateInput.focus();
-                }
-
-                return;
-            }
-
-            if (dateWrap) {
-                dateWrap.style.display = 'none';
-            }
-
-            if (form) {
-                refreshPendingRefunds(form);
-            }
-
-            return;
-        }
-
-        /* Specific date: AJAX-refresh when the date is selected. */
-        const dateInput =
-            event.target.closest('[data-refund-date]');
-
-        if (dateInput) {
-
-            const form =
-                dateInput.closest('[data-refund-filter-form]');
-
-            const periodSelect =
-                form
-                    ? form.querySelector('[data-refund-period]')
-                    : null;
-
-            if (
-                form &&
-                periodSelect &&
-                periodSelect.value === 'specific_date' &&
-                dateInput.value
-            ) {
-                refreshPendingRefunds(form);
-            }
-        }
-    });
-
-    /* Search button: AJAX-refresh Pending Refunds only. Typing itself
-       never triggers a request, so the input keeps its normal focus. */
-    content.addEventListener('submit', function (event) {
-
-        const form =
-            event.target.closest('[data-refund-filter-form]');
-
-        if (!form) return;
-
-        event.preventDefault();
-        refreshPendingRefunds(form);
-    });
-
-    /* Clear filters without refreshing the entire Orders page. */
-    content.addEventListener('click', function (event) {
-
-        const clearLink =
-            event.target.closest('[data-refund-clear]');
-
-        if (!clearLink) return;
-
-        event.preventDefault();
-
-        const form =
-            document.querySelector('[data-refund-filter-form]');
-
-        if (!form) return;
-
-        const statusSelect =
-            form.querySelector('[data-refund-status]');
-        const periodSelect =
-            form.querySelector('[data-refund-period]');
-        const dateInput =
-            form.querySelector('[data-refund-date]');
-        const dateWrap =
-            form.querySelector('[data-refund-date-wrap]');
-        const searchInput =
-            form.querySelector('[data-refund-search]');
-
-        if (statusSelect) statusSelect.value = 'pending';
-        if (periodSelect) periodSelect.value = 'today';
-        if (dateInput) dateInput.value = '<?= date('Y-m-d') ?>';
-        if (dateWrap) dateWrap.style.display = 'none';
-        if (searchInput) searchInput.value = '';
-
-        refreshPendingRefunds(form);
-    });
-
-    /* Browser Back/Forward also refreshes only the Pending Refunds
-       dropdown, rather than navigating the entire Orders page. */
-    window.addEventListener('popstate', function () {
-        const form =
-            document.querySelector('[data-refund-filter-form]');
-
-        if (form) {
-            refreshPendingRefunds(form, false);
-        }
-    });
-
-});
+    window.setInterval(updateNoShowActionButtons, 15000);
+    window.addEventListener('focus', updateNoShowActionButtons);
+})();
 </script>
 
 
 
-<style id="admin-order-action-hover-fix">
+<style id="staff-order-action-hover-fix">
 /* =========================================================
-   KEEP ADMIN ORDER ACTION BUTTONS COLORED ON HOVER/FOCUS
+   KEEP STAFF ORDER ACTION BUTTONS COLORED ON HOVER/FOCUS
    Bootstrap's default .btn:hover styles can override custom
    button backgrounds. Keep each workflow button consistent.
 ========================================================= */
@@ -12975,3 +12666,1957 @@ document.addEventListener('DOMContentLoaded', function () {
     background: inherit;
 }
 </style>
+<style id="staff-order-table-action-polish">
+    /* Compact actions on desktop/tablet; phone cards keep full-width tap targets. */
+    @media (min-width: 576px) {
+        .staff-orders-table .order-table-next-action-form { width: auto; }
+        .staff-orders-table .btn-table-next-action {
+            width: auto;
+            min-width: 0;
+            max-width: 164px;
+            min-height: 36px;
+            padding: 7px 10px;
+            white-space: nowrap;
+        }
+        .staff-orders-table .btn-view-details {
+            width: auto;
+            min-width: 112px;
+            min-height: 36px;
+            padding: 6px 10px;
+            white-space: nowrap;
+        }
+        .staff-orders-table .order-table-next-action-cell,
+        .staff-orders-table .order-table-details-cell {
+            text-align: center !important;
+        }
+    }
+
+    .staff-orders-table .btn-table-next-action.btn-pending-action {
+        background: #FFF1D6 !important; border-color: #D8B56A !important; color: #8A5A00 !important;
+    }
+    .staff-orders-table .btn-table-next-action.btn-confirm {
+        background: #DCEEFF !important; border-color: #7FA9D0 !important; color: #286090 !important;
+    }
+    .staff-orders-table .btn-table-next-action.btn-preparing {
+        background: #EEE0FF !important; border-color: #AA88C9 !important; color: #7040A0 !important;
+    }
+    .staff-orders-table .btn-table-next-action.btn-ready {
+        background: #DFF4E3 !important; border-color: #83B88E !important; color: #28763B !important;
+    }
+    .staff-orders-table .btn-table-next-action.btn-complete {
+        background: #23733D !important; border-color: #1E6535 !important; color: #FFFFFF !important;
+    }
+    .staff-orders-table .btn-table-next-action.btn-pending-action:hover { background: #F9E5B7 !important; }
+    .staff-orders-table .btn-table-next-action.btn-confirm:hover { background: #C7E2FB !important; }
+    .staff-orders-table .btn-table-next-action.btn-preparing:hover { background: #E1D0FA !important; }
+    .staff-orders-table .btn-table-next-action.btn-ready:hover { background: #C8EBD0 !important; }
+    .staff-orders-table .btn-table-next-action.btn-complete:hover { background: #1D6535 !important; }
+
+    /* Align the action headings with the centered controls beneath them.
+       Keep phone-card labels left-aligned when the real table header is hidden. */
+    @media (min-width: 576px) {
+        .staff-orders-table thead th:nth-child(9),
+        .staff-orders-table thead th:nth-child(10) {
+            text-align: center !important;
+            vertical-align: middle;
+        }
+
+        .staff-orders-table tbody td.order-table-next-action-cell,
+        .staff-orders-table tbody td.order-table-details-cell {
+            text-align: center !important;
+            vertical-align: middle;
+        }
+
+        .staff-orders-table .order-table-next-action-form {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            margin: 0;
+        }
+
+        .staff-orders-table .btn-table-next-action,
+        .staff-orders-table .btn-view-details {
+            margin-left: auto;
+            margin-right: auto;
+        }
+    }
+
+</style>
+
+<style id="staff-order-table-proportion-tune">
+    /*
+     * Final table proportions: dedicate less horizontal space to the two
+     * action columns and return it to the order/customer/pick-up details.
+     * Keep touch-friendly full-width actions in the existing phone-card view.
+     */
+    @media (min-width: 1400px) {
+        .staff-orders-table th:nth-child(1), .staff-orders-table td:nth-child(1) { width: 14%; }
+        .staff-orders-table th:nth-child(2), .staff-orders-table td:nth-child(2) { width: 8%; }
+        .staff-orders-table th:nth-child(3), .staff-orders-table td:nth-child(3) { width: 14%; }
+        .staff-orders-table th:nth-child(4), .staff-orders-table td:nth-child(4) { width: 11%; }
+        .staff-orders-table th:nth-child(5), .staff-orders-table td:nth-child(5) { width: 7%; }
+        .staff-orders-table th:nth-child(6), .staff-orders-table td:nth-child(6) { width: 8%; }
+        .staff-orders-table th:nth-child(7), .staff-orders-table td:nth-child(7) { width: 7%; }
+        .staff-orders-table th:nth-child(8), .staff-orders-table td:nth-child(8) { width: 11%; }
+        .staff-orders-table th:nth-child(9), .staff-orders-table td:nth-child(9) { width: 11%; }
+        .staff-orders-table th:nth-child(10), .staff-orders-table td:nth-child(10) { width: 9%; }
+
+        .staff-orders-table thead th { padding: 10px 8px; }
+        .staff-orders-table tbody td { padding: 8px 8px; }
+        .staff-orders-table .order-table-date { line-height: 1.2; }
+    }
+
+    /* Tablet and compact-laptop tables scroll within their own container. */
+    @media (min-width: 576px) and (max-width: 1399.98px) {
+        .staff-orders-table th:nth-child(1), .staff-orders-table td:nth-child(1) { width: 13%; }
+        .staff-orders-table th:nth-child(2), .staff-orders-table td:nth-child(2) { width: 8%; }
+        .staff-orders-table th:nth-child(3), .staff-orders-table td:nth-child(3) { width: 14%; }
+        .staff-orders-table th:nth-child(4), .staff-orders-table td:nth-child(4) { width: 10%; }
+        .staff-orders-table th:nth-child(5), .staff-orders-table td:nth-child(5) { width: 7%; }
+        .staff-orders-table th:nth-child(6), .staff-orders-table td:nth-child(6) { width: 8%; }
+        .staff-orders-table th:nth-child(7), .staff-orders-table td:nth-child(7) { width: 7%; }
+        .staff-orders-table th:nth-child(8), .staff-orders-table td:nth-child(8) { width: 11%; }
+        .staff-orders-table th:nth-child(9), .staff-orders-table td:nth-child(9) { width: 12%; }
+        .staff-orders-table th:nth-child(10), .staff-orders-table td:nth-child(10) { width: 10%; }
+
+        .staff-orders-table thead th { padding: 9px 6px; }
+        .staff-orders-table tbody td { padding: 8px 6px; }
+    }
+
+    /* Compact natural-width buttons and tighten the gap between the controls. */
+    @media (min-width: 576px) {
+        .staff-orders-table .btn-table-next-action {
+            max-width: 145px;
+            min-height: 34px;
+            padding: 6px 7px;
+            gap: 4px;
+            font-size: .68rem;
+        }
+
+        .staff-orders-table .btn-view-details {
+            min-width: 100px;
+            min-height: 34px;
+            padding: 6px 7px;
+            font-size: .68rem;
+        }
+
+        .staff-orders-table thead th:nth-child(9),
+        .staff-orders-table thead th:nth-child(10),
+        .staff-orders-table tbody td.order-table-next-action-cell,
+        .staff-orders-table tbody td.order-table-details-cell {
+            text-align: center !important;
+        }
+    }
+
+    /* In a single selected workflow, Status is already clear from the
+       highlighted workflow card. Reclaim that space for the remaining columns. */
+    .staff-orders-table.without-status-column {
+        min-width: 980px;
+    }
+
+    @media (min-width: 1400px) {
+        .staff-orders-table.without-status-column th:nth-child(1),
+        .staff-orders-table.without-status-column td:nth-child(1) { width: 15%; }
+        .staff-orders-table.without-status-column th:nth-child(2),
+        .staff-orders-table.without-status-column td:nth-child(2) { width: 8%; }
+        .staff-orders-table.without-status-column th:nth-child(3),
+        .staff-orders-table.without-status-column td:nth-child(3) { width: 15%; }
+        .staff-orders-table.without-status-column th:nth-child(4),
+        .staff-orders-table.without-status-column td:nth-child(4) { width: 11%; }
+        .staff-orders-table.without-status-column th:nth-child(5),
+        .staff-orders-table.without-status-column td:nth-child(5) { width: 8%; }
+        .staff-orders-table.without-status-column th:nth-child(6),
+        .staff-orders-table.without-status-column td:nth-child(6) { width: 8%; }
+        .staff-orders-table.without-status-column th:nth-child(7),
+        .staff-orders-table.without-status-column td:nth-child(7) { width: 7%; }
+        .staff-orders-table.without-status-column th:nth-child(8),
+        .staff-orders-table.without-status-column td:nth-child(8) { width: 14%; }
+        .staff-orders-table.without-status-column th:nth-child(9),
+        .staff-orders-table.without-status-column td:nth-child(9) { width: 14%; }
+    }
+
+    @media (min-width: 576px) and (max-width: 1399.98px) {
+        .staff-orders-table.without-status-column { min-width: 1000px; }
+        .staff-orders-table.without-status-column th:nth-child(1),
+        .staff-orders-table.without-status-column td:nth-child(1) { width: 14%; }
+        .staff-orders-table.without-status-column th:nth-child(2),
+        .staff-orders-table.without-status-column td:nth-child(2) { width: 8%; }
+        .staff-orders-table.without-status-column th:nth-child(3),
+        .staff-orders-table.without-status-column td:nth-child(3) { width: 14%; }
+        .staff-orders-table.without-status-column th:nth-child(4),
+        .staff-orders-table.without-status-column td:nth-child(4) { width: 10%; }
+        .staff-orders-table.without-status-column th:nth-child(5),
+        .staff-orders-table.without-status-column td:nth-child(5) { width: 7%; }
+        .staff-orders-table.without-status-column th:nth-child(6),
+        .staff-orders-table.without-status-column td:nth-child(6) { width: 8%; }
+        .staff-orders-table.without-status-column th:nth-child(7),
+        .staff-orders-table.without-status-column td:nth-child(7) { width: 7%; }
+        .staff-orders-table.without-status-column th:nth-child(8),
+        .staff-orders-table.without-status-column td:nth-child(8) { width: 16%; }
+        .staff-orders-table.without-status-column th:nth-child(9),
+        .staff-orders-table.without-status-column td:nth-child(9) { width: 16%; }
+    }
+
+    @media (min-width: 576px) {
+        .staff-orders-table.without-status-column thead th:nth-child(8),
+        .staff-orders-table.without-status-column thead th:nth-child(9) {
+            text-align: center !important;
+        }
+    }
+</style>
+
+
+
+<style id="staff-orders-mobile-no-status-fix">
+/*
+ * Fix the phone card layout after hiding Status in a single workflow.
+ * The no-status table has 9 cells; mixed search results have 10 cells.
+ * Keep their mobile labels and full-width action rows mapped separately.
+ */
+@media (max-width: 575.98px) {
+    .staff-orders-table-wrap {
+        width: 100%;
+        max-width: 100%;
+        overflow: visible;
+    }
+
+    .staff-orders-table,
+    .staff-orders-table tbody {
+        display: block;
+        width: 100%;
+        min-width: 0 !important;
+        max-width: 100%;
+        table-layout: auto;
+    }
+
+    .staff-orders-table tbody tr.order-card {
+        display: grid !important;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        width: 100%;
+        max-width: 100%;
+        box-sizing: border-box;
+        gap: 10px 12px;
+        margin: 0 0 12px;
+        padding: 14px;
+    }
+
+    .staff-orders-table tbody tr.order-card td {
+        display: block;
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
+        overflow-wrap: anywhere;
+    }
+
+    /* A clear label for the customer name/contact block. */
+    .staff-orders-table tbody tr.order-card td:nth-child(3)::before {
+        content: "Customer" !important;
+    }
+
+    /* Filtered workflow: Order, Claim, Customer, Pick-up, Payment,
+       Discount, Total, Next Action, Details (9 cells). */
+    .staff-orders-table.without-status-column tbody tr.order-card td:nth-child(1),
+    .staff-orders-table.without-status-column tbody tr.order-card td:nth-child(3),
+    .staff-orders-table.without-status-column tbody tr.order-card td:nth-child(8),
+    .staff-orders-table.without-status-column tbody tr.order-card td:nth-child(9) {
+        grid-column: 1 / -1;
+    }
+
+    .staff-orders-table.without-status-column tbody tr.order-card td:nth-child(8)::before {
+        content: "Next Action" !important;
+    }
+
+    .staff-orders-table.without-status-column tbody tr.order-card td:nth-child(9)::before {
+        content: "Details" !important;
+    }
+
+    /* Search results: Status remains because several statuses may be mixed
+       (10 cells total). */
+    .staff-orders-table.with-status-column tbody tr.order-card td:nth-child(1),
+    .staff-orders-table.with-status-column tbody tr.order-card td:nth-child(3),
+    .staff-orders-table.with-status-column tbody tr.order-card td:nth-child(9),
+    .staff-orders-table.with-status-column tbody tr.order-card td:nth-child(10) {
+        grid-column: 1 / -1;
+    }
+
+    .staff-orders-table.with-status-column tbody tr.order-card td:nth-child(8)::before {
+        content: "Status" !important;
+    }
+
+    .staff-orders-table.with-status-column tbody tr.order-card td:nth-child(9)::before {
+        content: "Next Action" !important;
+    }
+
+    .staff-orders-table.with-status-column tbody tr.order-card td:nth-child(10)::before {
+        content: "Details" !important;
+    }
+
+    /* Keep action forms and buttons inside the card at every phone width. */
+    .staff-orders-table tbody tr.order-card td.order-table-next-action-cell,
+    .staff-orders-table tbody tr.order-card td.order-table-actions-cell,
+    .staff-orders-table tbody tr.order-card td.order-table-details-cell {
+        grid-column: 1 / -1;
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+    }
+
+    .staff-orders-table .order-table-next-action-form {
+        display: block;
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        margin: 0;
+    }
+
+    .staff-orders-table .btn-table-next-action,
+    .staff-orders-table .btn-view-details {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+        min-height: 44px;
+        box-sizing: border-box;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+}
+
+@media (max-width: 380px) {
+    .staff-orders-table tbody tr.order-card {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 10px;
+        padding: 12px;
+    }
+}
+</style>
+
+<style id="staff-history-tables-responsive">
+/* History sections use real tables like Active Orders. Keep scrolling local
+   to each table on phones/tablets so the page itself never overflows. */
+.history-orders-table-wrap {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto !important;
+    overflow-y: visible;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    border: 1px solid #E6DCCF;
+    border-radius: 10px;
+    background: #FFFFFF;
+}
+.history-orders-table {
+    width: 100%;
+    min-width: 1120px;
+    table-layout: auto;
+    margin: 0;
+}
+.history-orders-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding: 12px 10px;
+    background: #F3ECE5;
+    color: #5A3D2B;
+    border-bottom: 1px solid #D8C9BD;
+    font-size: .69rem;
+    font-weight: 700;
+    letter-spacing: .25px;
+    white-space: nowrap;
+}
+.history-orders-table tbody tr.history-order-row {
+    display: table-row !important;
+    width: auto !important;
+    padding: 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    background: #FFFFFF;
+}
+.history-orders-table tbody tr.history-order-row:hover { background: #FDF8F2; }
+.history-orders-table tbody td {
+    padding: 11px 10px;
+    vertical-align: middle;
+    border-bottom: 1px solid #E6DCCF;
+    color: #4A3525;
+    font-size: .76rem;
+    background: inherit;
+}
+.history-orders-table tbody tr:last-child td { border-bottom: 0; }
+.history-orders-table .order-table-primary { white-space: normal; overflow-wrap: anywhere; font-weight: 650; }
+.history-orders-table .order-table-date { white-space: normal; overflow-wrap: anywhere; line-height: 1.35; }
+.history-orders-table .order-table-total { white-space: nowrap; font-weight: 700; }
+.history-orders-table .status-badge { display: inline-flex; margin-top: 5px; }
+.history-orders-table .history-actions-cell { min-width: 190px; }
+.history-orders-table .history-details-cell { min-width: 120px; }
+.history-small-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-height: 34px;
+    margin: 3px 0;
+    padding: 6px 8px;
+    border-radius: 7px;
+    font-size: .68rem;
+    line-height: 1.2;
+    white-space: normal;
+}
+.history-orders-table .pending-refund-btn[disabled] { opacity: .6; cursor: not-allowed; }
+.history-inline-link { display: inline-block; margin-top: 4px; color: #6F4E37; font-size: .68rem; text-decoration: underline; }
+.history-state-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    border-radius: 7px;
+    padding: 5px 8px;
+    font-size: .66rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+.history-state-verified { color: #23663C; background: #E4F4E8; border: 1px solid #A8D0B2; }
+.history-state-review { color: #855600; background: #FFF3D8; border: 1px solid #E5C77E; }
+.history-state-rejected { color: #9B3434; background: #FCE8E8; border: 1px solid #E1ADAD; }
+.history-rejection-note { max-width: 220px; margin-top: 4px; color: #9B3434; }
+.history-reason-cell { min-width: 170px; max-width: 260px; white-space: normal; overflow-wrap: anywhere; color: #874040; }
+.history-orders-table .btn-view-details { min-width: 0; min-height: 36px; }
+.history-orders-table tbody tr.view-order-target { outline: 2px solid #C69C6D; outline-offset: -2px; background: #FFF8E9; }
+.history-orders-table tbody td::before { content: none !important; display: none !important; }
+.history-table-scroll-hint { color: #806E5E; font-size: .68rem; margin: 0 0 8px; }
+
+@media (min-width: 1400px) {
+    .history-orders-table { min-width: 0; }
+    .cancelled-history-table { table-layout: fixed; }
+    .cancelled-history-table th:nth-child(1) { width: 13%; }
+    .cancelled-history-table th:nth-child(2) { width: 14%; }
+    .cancelled-history-table th:nth-child(3) { width: 10%; }
+    .cancelled-history-table th:nth-child(4) { width: 8%; }
+    .cancelled-history-table th:nth-child(5) { width: 8%; }
+    .cancelled-history-table th:nth-child(6) { width: 19%; }
+    .cancelled-history-table th:nth-child(7) { width: 16%; }
+    .cancelled-history-table th:nth-child(8) { width: 12%; }
+    .refund-history-table { table-layout: fixed; }
+    .refund-history-table th:nth-child(1) { width: 12%; }
+    .refund-history-table th:nth-child(2) { width: 13%; }
+    .refund-history-table th:nth-child(3) { width: 15%; }
+    .refund-history-table th:nth-child(4) { width: 12%; }
+    .refund-history-table th:nth-child(5) { width: 12%; }
+    .refund-history-table th:nth-child(6) { width: 8%; }
+    .refund-history-table th:nth-child(7) { width: 10%; }
+    .refund-history-table th:nth-child(8) { width: 18%; }
+}
+@media (max-width: 767.98px) {
+    .history-orders-table-wrap { margin-right: 0; border-radius: 8px; }
+    .history-orders-table { min-width: 1060px; }
+    .history-orders-table thead th { padding: 10px 8px; font-size: .64rem; }
+    .history-orders-table tbody td { padding: 9px 8px; font-size: .7rem; }
+    .history-orders-table .history-actions-cell { min-width: 170px; }
+    .history-orders-table .history-small-button { min-height: 40px; font-size: .72rem; }
+}
+@media (max-width: 575.98px) {
+    /* Explicitly override Active Orders' small-phone card transformation. */
+    .history-orders-table-wrap { display: block !important; overflow-x: auto !important; }
+    .history-orders-table { display: table !important; width: max-content !important; min-width: 1060px !important; }
+    .history-orders-table thead { display: table-header-group !important; }
+    .history-orders-table tbody { display: table-row-group !important; }
+    .history-orders-table tr { display: table-row !important; }
+    .history-orders-table th,
+    .history-orders-table td { display: table-cell !important; }
+    .history-orders-table tbody tr.history-order-row { grid-template-columns: none !important; }
+    .cancelled-section-content { min-width: 0; }
+    .pending-refunds-content { min-width: 0; }
+}
+@media (max-width: 380px) {
+    .history-orders-table { min-width: 1000px !important; }
+}
+
+
+/* =========================================================
+   STAFF ORDER DETAILS — SCREENSHOT-INSPIRED LAYOUT
+   Applies to Active Orders View Details modals.
+========================================================= */
+.order-details-modal-dialog {
+    width: min(820px, calc(100vw - 32px));
+    max-width: 820px;
+    margin: 68px auto 16px;
+    max-height: calc(100vh - 84px);
+}
+.order-details-modal-dialog .order-modal-content {
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100vh - 84px);
+    min-height: 0;
+    overflow: hidden;
+    border: 1px solid #D8C8B8;
+    border-radius: 22px;
+    background: #FFFCF9;
+    box-shadow: 0 20px 55px rgba(45, 30, 20, .22);
+}
+.order-details-modal-dialog .order-modal-header {
+    position: relative;
+    display: block;
+    flex: 0 0 auto;
+    padding: 22px 26px 16px;
+    border-bottom: 1px solid #E8DCCF;
+    background: #FFFCF9;
+}
+.order-modal-heading { min-width: 0; padding-right: 38px; }
+.order-modal-title-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    min-width: 0;
+}
+.order-details-modal-dialog .order-modal-title {
+    margin: 0;
+    color: #2C1C13 !important;
+    font-size: 1.22rem !important;
+    font-weight: 800 !important;
+    line-height: 1.2;
+}
+.order-modal-status-pill {
+    display: inline-flex;
+    align-items: center;
+    min-height: 25px;
+    padding: 4px 11px;
+    border-radius: 999px;
+    background: #F3E6D5;
+    color: #754728;
+    font-size: .68rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+.order-modal-status-pill.status-pending_verification { background: #FFF0D6; color: #8A5A17; }
+.order-modal-status-pill.status-order_queue,
+.order-modal-status-pill.status-confirmed { background: #F3E6D5; color: #754728; }
+.order-modal-status-pill.status-preparing { background: #E9E7F4; color: #5C4A8A; }
+.order-modal-status-pill.status-ready { background: #E4F1E6; color: #2E6B42; }
+.order-modal-status-pill.status-completed { background: #E5EFEA; color: #326B54; }
+.order-details-modal-dialog .order-modal-subtitle {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 5px;
+    color: #78695E;
+    font-size: .76rem;
+    line-height: 1.45;
+}
+.order-modal-close {
+    position: absolute;
+    top: 22px;
+    right: 24px;
+    margin: 0 !important;
+}
+.order-modal-progress {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 17px;
+}
+.order-modal-progress-step {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+    color: #8B7B70;
+    font-size: .72rem;
+    line-height: 1.2;
+}
+.order-modal-progress-step:not(:last-child)::after {
+    content: "";
+    position: absolute;
+    z-index: 0;
+    top: 50%;
+    left: 27px;
+    right: -5px;
+    height: 2px;
+    background: #E4D4C3;
+    transform: translateY(-50%);
+}
+.order-modal-progress-marker {
+    position: relative;
+    z-index: 1;
+    display: inline-flex;
+    flex: 0 0 21px;
+    width: 21px;
+    height: 21px;
+    align-items: center;
+    justify-content: center;
+    border: 2px solid #D7C2AD;
+    border-radius: 50%;
+    background: #FFFCF9;
+    color: #79563D;
+    font-size: .65rem;
+    font-weight: 700;
+}
+.order-modal-progress-label {
+    position: relative;
+    z-index: 1;
+    padding-right: 5px;
+    background: #FFFCF9;
+    white-space: nowrap;
+}
+.order-modal-progress-step.is-complete,
+.order-modal-progress-step.is-current { color: #4A3525; font-weight: 700; }
+.order-modal-progress-step.is-complete .order-modal-progress-marker,
+.order-modal-progress-step.is-current .order-modal-progress-marker {
+    border-color: #87512F;
+    background: #87512F;
+    color: #FFF;
+}
+.order-modal-pending-note {
+    margin-top: 12px;
+    color: #8A641F;
+    font-size: .74rem;
+}
+.order-details-modal-dialog .order-modal-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 20px 26px 22px !important;
+    overflow-y: auto;
+    background: #FFFCF9;
+}
+.order-modal-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1.35fr) minmax(245px, .95fr);
+    align-items: start;
+    gap: 18px;
+}
+.order-modal-items-column,
+.order-modal-side-column { min-width: 0; }
+.order-modal-section-heading {
+    margin: 0 0 10px;
+    color: #6D5948;
+    font-size: .68rem;
+    font-weight: 800;
+    letter-spacing: .55px;
+    line-height: 1.3;
+}
+.order-modal-section-heading span { padding: 0 2px; color: #A58C77; }
+.order-modal-item-list { display: grid; gap: 8px; }
+.order-modal-item {
+    display: grid;
+    grid-template-columns: 39px minmax(0, 1fr) minmax(75px, auto);
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    padding: 10px 11px;
+    border: 1px solid #E8D9C9;
+    border-radius: 12px;
+    background: #FFFCF9;
+}
+.order-modal-item-quantity {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    min-height: 38px;
+    border-radius: 10px;
+    background: #F8E5B8;
+    color: #76512E;
+    font-size: .78rem;
+    font-weight: 800;
+}
+.order-modal-item-main { min-width: 0; }
+.order-modal-item-name {
+    overflow-wrap: anywhere;
+    color: #261A13;
+    font-size: .86rem;
+    font-weight: 700;
+    line-height: 1.25;
+}
+.order-modal-item-tags,
+.order-modal-item-addons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 4px;
+}
+.order-modal-item-tags span,
+.order-modal-item-addons span {
+    display: inline-flex;
+    max-width: 100%;
+    padding: 3px 7px;
+    border-radius: 6px;
+    background: #F3E7D9;
+    color: #75553D;
+    font-size: .62rem;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+}
+.order-modal-item-addons span { background: #F7F1E8; color: #776A5F; }
+.order-modal-item-price {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    min-width: 0;
+    text-align: right;
+    white-space: nowrap;
+}
+.order-modal-item-price strong { color: #241811; font-size: .83rem; font-weight: 800; }
+.order-modal-item-price small { color: #77695F; font-size: .64rem; }
+.order-modal-empty-items {
+    padding: 14px;
+    border: 1px dashed #D8C8B8;
+    border-radius: 12px;
+    color: #8A7A6E;
+    font-size: .82rem;
+}
+.order-modal-total-card {
+    margin-top: 14px;
+    padding: 16px 17px;
+    border: 1px solid #372318;
+    border-radius: 14px;
+    background: #2F1E14;
+    color: #FFF8F0;
+}
+.order-modal-total-line {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 7px;
+    color: #F4E8DD;
+    font-size: .76rem;
+}
+.order-modal-total-line span { min-width: 0; overflow-wrap: anywhere; }
+.order-modal-total-line strong { flex: 0 0 auto; color: #FFF8F0; font-weight: 600; white-space: nowrap; }
+.order-modal-total-divider { height: 1px; margin: 12px 0; background: rgba(255,255,255,.2); }
+.order-modal-total-final {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 12px;
+}
+.order-modal-total-final > div { display: flex; flex-direction: column; min-width: 0; }
+.order-modal-total-final strong { color: #FFF; font-size: .78rem; }
+.order-modal-total-final small { margin-top: 3px; color: #E0CFC1; font-size: .63rem; }
+.order-modal-total-final > span {
+    flex: 0 0 auto;
+    color: #FFF;
+    font-size: 1.45rem;
+    font-weight: 800;
+    line-height: 1.1;
+    white-space: nowrap;
+}
+.order-modal-side-column { display: grid; gap: 14px; }
+.order-modal-info-section { min-width: 0; }
+.order-modal-info-section .order-modal-section-heading { margin-bottom: 10px; }
+.order-modal-info-card {
+    min-width: 0;
+    padding: 14px 15px;
+    border: 1px solid #E8D9C9;
+    border-radius: 13px;
+    background: #FFFCF9;
+}
+.order-modal-customer-name { color: #291B13; font-size: .9rem; font-weight: 700; overflow-wrap: anywhere; }
+.order-modal-contact {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    color: #805638;
+    font-size: .78rem;
+    overflow-wrap: anywhere;
+}
+.order-modal-contact i { flex: 0 0 auto; }
+.order-modal-pickup-card,
+.order-modal-payment-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+.order-modal-pickup-card > div { display: flex; flex-direction: column; min-width: 0; }
+.order-modal-pickup-card small { color: #89786B; font-size: .67rem; }
+.order-modal-pickup-card strong { margin-top: 3px; color: #2D1F16; font-size: .82rem; font-weight: 700; overflow-wrap: anywhere; }
+.order-modal-payment-badge {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    padding: 4px 9px;
+    border-radius: 7px;
+    background: #E4F0E5;
+    color: #356A43;
+    font-size: .65rem;
+    font-weight: 800;
+    white-space: nowrap;
+}
+.order-modal-payment-badge.is-gcash { background: #E8E6FA; color: #4B4A91; }
+.order-modal-discount-short {
+    color: #89786B;
+    font-size: .69rem;
+    text-align: right;
+    overflow-wrap: anywhere;
+}
+.order-modal-proof-button {
+    display: inline-flex;
+    align-items: center;
+    margin-top: 11px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: #805638;
+    font-size: .72rem;
+    font-weight: 700;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+.order-modal-proof-button:hover,
+.order-modal-proof-button:focus-visible { color: #4A2C19; }
+.order-modal-proof-preview {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 12px;
+    padding: 10px;
+    border: 1px solid #EAD8C8;
+    border-radius: 10px;
+    background: #FFFEFC;
+    min-width: 0;
+}
+.order-modal-proof-preview-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 6px;
+    color: #5B4535;
+    font-size: .7rem;
+    font-weight: 800;
+}
+.order-modal-proof-pending-label {
+    padding: 3px 7px;
+    border-radius: 999px;
+    background: #FFF1D6;
+    color: #8A5A12;
+    font-size: .62rem;
+    font-weight: 700;
+}
+.order-modal-proof-image {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    max-height: 270px;
+    height: auto;
+    object-fit: contain;
+    object-position: center;
+    border: 1px solid #EFE5DB;
+    border-radius: 7px;
+    background: #F7F3EE;
+}
+.order-modal-payment-note { margin-top: 9px; color: #8A641F; font-size: .69rem; }
+.order-modal-discount-card { display: flex; flex-direction: column; gap: 3px; }
+.order-modal-discount-card strong { color: #3E2D20; font-size: .8rem; }
+.order-modal-discount-card small { color: #867568; font-size: .69rem; }
+.order-details-modal-dialog .order-modal-footer {
+    display: flex;
+    flex: 0 0 auto;
+    justify-content: flex-end;
+    padding: 13px 25px;
+    border-top: 1px solid #E8DCCF;
+    background: #FBF6F0;
+}
+.order-modal-footer-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 9px;
+    width: 100%;
+}
+.order-modal-footer-actions .btn {
+    display: inline-flex;
+    min-height: 42px;
+    align-items: center;
+    justify-content: center;
+    padding: 9px 17px;
+    border-radius: 9px;
+    font-size: .78rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+.order-modal-cancel-button {
+    border: 1px solid #B42318;
+    background: #DC3545;
+    color: #FFFFFF;
+}
+.order-modal-cancel-button:hover,
+.order-modal-cancel-button:focus-visible {
+    border-color: #A61B29;
+    background: #B02A37;
+    color: #FFFFFF;
+}
+.order-modal-print-button {
+    border: 1px solid #242424;
+    background: #FFFFFF;
+    color: #242424;
+}
+.order-modal-print-button:hover,
+.order-modal-print-button:focus-visible {
+    border-color: #242424;
+    background: #242424;
+    color: #FFFFFF;
+}
+
+@media (max-width: 767.98px) {
+    .order-details-modal-dialog {
+        width: calc(100vw - 20px);
+        max-width: none;
+        margin: 58px auto 10px;
+        max-height: calc(100vh - 68px);
+    }
+    .order-details-modal-dialog .order-modal-content {
+        max-height: calc(100vh - 68px);
+        border-radius: 17px;
+    }
+    .order-details-modal-dialog .order-modal-header { padding: 17px 17px 13px; }
+    .order-modal-heading { padding-right: 30px; }
+    .order-details-modal-dialog .order-modal-title { font-size: 1.08rem !important; }
+    .order-details-modal-dialog .order-modal-subtitle { font-size: .68rem; }
+    .order-modal-close { top: 17px; right: 16px; }
+    .order-modal-progress { gap: 4px; margin-top: 14px; }
+    .order-modal-progress-step { gap: 4px; font-size: .62rem; }
+    .order-modal-progress-step:not(:last-child)::after { left: 22px; right: -4px; }
+    .order-modal-progress-marker { flex-basis: 19px; width: 19px; height: 19px; font-size: .6rem; }
+    .order-modal-progress-label { padding-right: 2px; }
+    .order-details-modal-dialog .order-modal-body { padding: 16px !important; }
+    .order-modal-proof-image { max-height: 240px; }
+    .order-modal-layout { grid-template-columns: minmax(0, 1fr); gap: 18px; }
+    .order-modal-side-column { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+    .order-details-modal-dialog .order-modal-footer { padding: 11px 15px; }
+    .order-modal-footer-actions .btn { min-height: 44px; }
+}
+@media (max-width: 420px) {
+    .order-modal-progress-label { font-size: .56rem; }
+    .order-modal-item {
+        grid-template-columns: 34px minmax(0, 1fr) 74px;
+        gap: 7px;
+        padding: 9px 8px;
+    }
+    .order-modal-item-quantity { width: 33px; min-height: 35px; font-size: .7rem; }
+    .order-modal-item-name { font-size: .78rem; }
+    .order-modal-item-price strong { font-size: .74rem; }
+    .order-modal-item-price small { font-size: .59rem; }
+    .order-modal-total-card { padding: 14px 13px; }
+    .order-modal-total-final > span { font-size: 1.2rem; }
+    .order-modal-footer-actions { gap: 7px; }
+    .order-modal-footer-actions .btn { flex: 1 1 auto; padding: 9px 10px; font-size: .72rem; }
+}
+
+
+
+/* =========================================================
+   ORDER DETAILS MODAL — GUARANTEED GAP BELOW FIXED STAFF NAVBAR
+   Reserve space on the modal overlay itself. This avoids relying
+   on dialog margins that can be affected by Bootstrap's centered
+   and scrollable dialog sizing rules.
+========================================================= */
+.modal.show.order-details-modal {
+    box-sizing: border-box !important;
+    padding-top: 96px !important;
+    padding-bottom: 16px !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+}
+
+.modal.show.order-details-modal .modal-dialog.order-details-modal-dialog,
+.modal.show.order-details-modal .modal-dialog.order-details-modal-dialog.modal-dialog-centered,
+.modal.show.order-details-modal .modal-dialog.order-details-modal-dialog.modal-dialog-scrollable {
+    width: min(820px, calc(100vw - 32px)) !important;
+    max-width: 820px !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: calc(100vh - 112px) !important;
+    max-height: calc(100dvh - 112px) !important;
+    margin: 0 auto !important;
+    align-items: stretch !important;
+}
+
+.modal.show.order-details-modal .modal-dialog.order-details-modal-dialog .order-modal-content {
+    display: flex !important;
+    flex-direction: column !important;
+    min-height: 0 !important;
+    max-height: calc(100vh - 112px) !important;
+    max-height: calc(100dvh - 112px) !important;
+    overflow: hidden !important;
+}
+
+.modal.show.order-details-modal .modal-dialog.order-details-modal-dialog .order-modal-body {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    overflow-y: auto !important;
+    overscroll-behavior: contain;
+}
+
+@media (max-width: 767.98px) {
+    .modal.show.order-details-modal {
+        padding-top: 84px !important;
+        padding-bottom: 12px !important;
+    }
+
+    .modal.show.order-details-modal .modal-dialog.order-details-modal-dialog,
+    .modal.show.order-details-modal .modal-dialog.order-details-modal-dialog.modal-dialog-centered,
+    .modal.show.order-details-modal .modal-dialog.order-details-modal-dialog.modal-dialog-scrollable {
+        width: calc(100vw - 20px) !important;
+        max-width: none !important;
+        max-height: calc(100vh - 96px) !important;
+        max-height: calc(100dvh - 96px) !important;
+    }
+
+    .modal.show.order-details-modal .modal-dialog.order-details-modal-dialog .order-modal-content {
+        max-height: calc(100vh - 96px) !important;
+        max-height: calc(100dvh - 96px) !important;
+    }
+}
+
+@media (max-height: 600px) and (min-width: 768px) {
+    .modal.show.order-details-modal {
+        padding-top: 82px !important;
+        padding-bottom: 10px !important;
+    }
+
+    .modal.show.order-details-modal .modal-dialog.order-details-modal-dialog,
+    .modal.show.order-details-modal .modal-dialog.order-details-modal-dialog.modal-dialog-centered,
+    .modal.show.order-details-modal .modal-dialog.order-details-modal-dialog.modal-dialog-scrollable {
+        max-height: calc(100vh - 92px) !important;
+    }
+
+    .modal.show.order-details-modal .modal-dialog.order-details-modal-dialog .order-modal-content {
+        max-height: calc(100vh - 92px) !important;
+    }
+}
+
+
+
+/* =========================================================
+   STAFF CANCEL REASON — VIEWPORT-ANCHORED MENU
+   JavaScript temporarily portals the menu to the modal root and positions it
+   below the toggle, outside the scroll-clipped modal body.
+========================================================= */
+#staffCancelReasonDropdown {
+    position: relative;
+    width: 100%;
+}
+
+#staffCancelReasonToggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+    min-height: 44px;
+    padding: 10px 13px;
+    border: 1px solid #d7c4b1;
+    border-radius: 8px;
+    background-color: #fff;
+    background-image: none !important;
+    color: #75685d;
+    text-align: left;
+    font-size: .9rem;
+    white-space: normal;
+}
+
+#staffCancelReasonToggle::after {
+    display: none;
+}
+
+#staffCancelReasonToggle:focus,
+#staffCancelReasonToggle[aria-expanded="true"] {
+    border-color: #8a5938;
+    box-shadow: 0 0 0 .18rem rgba(138, 89, 56, .14);
+    outline: 0;
+}
+
+#staffCancelReasonToggle i {
+    flex: 0 0 auto;
+    color: #795238;
+    transition: transform .15s ease;
+}
+
+#staffCancelReasonToggle[aria-expanded="true"] i {
+    transform: rotate(180deg);
+}
+
+#staffCancelReasonMenu {
+    position: fixed;
+    z-index: 2000;
+    max-height: 360px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 6px;
+    border: 1px solid #ddcbb9;
+    border-radius: 9px;
+    background: #fffdfa;
+    box-shadow: 0 10px 24px rgba(44, 29, 19, .2);
+    scrollbar-width: thin;
+    scrollbar-color: #c3a58d #f7f0e9;
+}
+
+#staffCancelReasonMenu[hidden],
+#staffCancelReasonMenu [hidden] {
+    display: none !important;
+}
+
+.staff-cancel-reason-group-label {
+    padding: 9px 10px 5px;
+    color: #795238;
+    font-size: .7rem;
+    font-weight: 800;
+    letter-spacing: .045em;
+    text-transform: uppercase;
+}
+
+.staff-cancel-reason-option {
+    display: block;
+    width: 100%;
+    min-height: 36px;
+    padding: 8px 10px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: #38291f;
+    text-align: left;
+    font-size: .86rem;
+    line-height: 1.35;
+    white-space: normal;
+    cursor: pointer;
+}
+
+.staff-cancel-reason-option:hover,
+.staff-cancel-reason-option:focus-visible {
+    background: #f4e8da;
+    outline: none;
+}
+
+.staff-cancel-reason-option.is-selected {
+    background: #eee0d1;
+    color: #5b3925;
+    font-weight: 700;
+}
+
+@media (max-width: 575.98px) {
+    #staffCancelReasonMenu {
+        max-height: 280px;
+    }
+
+    .staff-cancel-reason-option {
+        min-height: 40px;
+        padding: 9px 10px;
+        font-size: .82rem;
+    }
+}
+</style>
+
+<style id="staff-option-one-mobile-order-cards">
+/*
+ * Option 1: compact order cards for phones.
+ * Essential order information stays visible; Claim and Discount remain
+ * available in the existing View Details modal. The workflow action is
+ * the primary full-width control, with View Details as a lighter action.
+ */
+.order-table-mobile-header {
+    display: block;
+}
+.order-table-mobile-claim {
+    display: none;
+}
+
+/* Compact horizontal Staff refund counter, placed below Active Orders. */
+.staff-refund-count-notice {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: min(100%, 390px);
+    min-width: 0;
+    margin: 18px 0 24px;
+    padding: 10px 12px;
+    border: 1px solid #B99B82;
+    border-radius: 11px;
+    background: #FFFFFF;
+    box-shadow: 0 2px 8px rgba(74, 53, 37, .045);
+}
+.staff-refund-count-icon {
+    flex: 0 0 34px;
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
+    font-size: 1rem;
+}
+.staff-refund-count-copy strong {
+    font-size: .82rem;
+    line-height: 1.2;
+}
+.staff-refund-count-copy p {
+    margin-top: 2px;
+    font-size: .7rem;
+    line-height: 1.3;
+}
+.staff-refund-count-value {
+    flex: 0 0 32px;
+    min-width: 32px;
+    height: 32px;
+    padding: 0 6px;
+    font-size: .82rem;
+}
+
+@media (max-width: 575.98px) {
+    .staff-refund-count-notice {
+        width: min(100%, 390px);
+        margin: 14px 0 20px;
+        padding: 9px 10px;
+        gap: 9px;
+    }
+
+    .staff-refund-count-icon {
+        flex-basis: 32px;
+        width: 32px;
+        height: 32px;
+        font-size: .92rem;
+    }
+
+    .staff-refund-count-copy strong { font-size: .78rem; }
+    .staff-refund-count-copy p { font-size: .66rem; }
+    .staff-refund-count-value {
+        flex-basis: 30px;
+        min-width: 30px;
+        height: 30px;
+        font-size: .78rem;
+    }
+
+    .staff-orders-table-wrap {
+        width: 100%;
+        max-width: 100%;
+        overflow: visible !important;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        box-shadow: none;
+    }
+
+    .staff-orders-table,
+    .staff-orders-table tbody {
+        display: block !important;
+        width: 100% !important;
+        min-width: 0 !important;
+        max-width: 100% !important;
+        table-layout: auto;
+    }
+
+    .staff-orders-table thead {
+        position: absolute !important;
+        width: 1px !important;
+        height: 1px !important;
+        padding: 0 !important;
+        margin: -1px !important;
+        overflow: hidden !important;
+        clip: rect(0, 0, 0, 0) !important;
+        white-space: nowrap !important;
+        border: 0 !important;
+    }
+
+    .staff-orders-table tbody tr.order-card {
+        display: grid !important;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-auto-flow: row;
+        align-items: start;
+        gap: 9px 8px;
+        width: 100% !important;
+        max-width: 100% !important;
+        min-width: 0 !important;
+        box-sizing: border-box;
+        margin: 0 0 11px !important;
+        padding: 12px !important;
+        border: 1px solid #A98A70 !important;
+        border-radius: 12px !important;
+        background: #FFFFFF !important;
+        box-shadow: 0 2px 9px rgba(74, 53, 37, .055) !important;
+    }
+
+    .staff-orders-table tbody tr.order-card.view-order-target {
+        background: #FFF8D8 !important;
+        outline: 3px solid #F1C40F;
+        outline-offset: 2px;
+    }
+
+    .staff-orders-table tbody tr.order-card td {
+        display: block !important;
+        width: auto !important;
+        max-width: 100% !important;
+        min-width: 0 !important;
+        box-sizing: border-box;
+        padding: 0 !important;
+        border: 0 !important;
+        background: transparent !important;
+        text-align: left !important;
+        overflow-wrap: anywhere;
+        word-break: normal;
+        font-size: .76rem;
+        line-height: 1.3;
+    }
+
+    .staff-orders-table tbody tr.order-card td::before {
+        display: block;
+        margin: 0 0 3px;
+        color: #806F62;
+        font-size: .61rem;
+        font-weight: 700;
+        line-height: 1.2;
+        letter-spacing: .035em;
+        text-transform: uppercase;
+    }
+
+    /* The order identity forms the card header. In mixed search results,
+       the status badge sits at the right of the order number. */
+    .staff-orders-table.without-status-column tbody tr.order-card td:nth-child(1) {
+        grid-column: 1 / -1;
+        padding-bottom: 8px !important;
+        border-bottom: 1px solid #E8DED4 !important;
+    }
+
+    .staff-orders-table.with-status-column tbody tr.order-card td:nth-child(1) {
+        grid-column: 1 / 3;
+        grid-row: 1;
+        padding-bottom: 8px !important;
+        border-bottom: 1px solid #E8DED4 !important;
+    }
+
+    .order-table-mobile-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 7px;
+        min-width: 0;
+    }
+
+    .order-table-mobile-identification {
+        flex: 1 1 auto;
+        min-width: 0;
+    }
+
+    .order-table-mobile-claim {
+        display: inline-flex;
+    }
+
+    .staff-orders-table .order-table-primary {
+        display: block;
+        max-width: 100%;
+        color: #38291F;
+        font-size: .78rem;
+        font-weight: 700;
+        line-height: 1.25;
+        white-space: normal !important;
+        overflow-wrap: anywhere;
+        text-overflow: clip;
+    }
+
+    .staff-orders-table .order-table-date {
+        margin-top: 2px;
+        color: #88796D;
+        font-size: .65rem;
+        line-height: 1.25;
+        white-space: normal !important;
+        overflow-wrap: anywhere;
+    }
+
+    .order-table-mobile-claim {
+        display: inline-flex;
+        flex: 0 0 auto;
+        align-items: center;
+        gap: 3px;
+        max-width: 46%;
+        margin-top: 1px;
+        padding: 4px 6px;
+        border: 1px solid #D5C1AF;
+        border-radius: 6px;
+        background: #FBF7F2;
+        color: #6F4E37;
+        font-size: .62rem;
+        font-weight: 700;
+        line-height: 1.2;
+        overflow-wrap: anywhere;
+    }
+
+    .order-table-mobile-claim-label {
+        color: #8B796A;
+        font-weight: 600;
+    }
+
+    /* Claim and discount remain available in View Details; avoid repeating
+       them on the compact card. */
+    .staff-orders-table tbody tr.order-card td:nth-child(2),
+    .staff-orders-table tbody tr.order-card td:nth-child(6) {
+        display: none !important;
+    }
+
+    /* Customer spans the card width. */
+    .staff-orders-table tbody tr.order-card td:nth-child(3) {
+        grid-column: 1 / -1;
+    }
+    .staff-orders-table tbody tr.order-card td:nth-child(3)::before {
+        content: "Customer";
+    }
+    .staff-orders-table tbody tr.order-card td:nth-child(3) .order-table-date {
+        font-size: .68rem;
+    }
+
+    /* Pickup, payment, and total form one compact information row. */
+    .staff-orders-table tbody tr.order-card td:nth-child(4) {
+        grid-column: 1;
+    }
+    .staff-orders-table tbody tr.order-card td:nth-child(4)::before {
+        content: "Pick-up";
+    }
+    .staff-orders-table tbody tr.order-card td:nth-child(5) {
+        grid-column: 2;
+    }
+    .staff-orders-table tbody tr.order-card td:nth-child(5)::before {
+        content: "Payment";
+    }
+    .staff-orders-table tbody tr.order-card td:nth-child(7) {
+        grid-column: 3;
+    }
+    .staff-orders-table tbody tr.order-card td:nth-child(7)::before {
+        content: "Total";
+    }
+
+    .staff-orders-table tbody tr.order-card td:nth-child(4) .order-table-primary {
+        font-size: .7rem;
+        line-height: 1.25;
+    }
+    .staff-orders-table tbody tr.order-card td:nth-child(4) .order-table-date {
+        font-size: .64rem;
+    }
+    .staff-orders-table .order-table-payment {
+        min-height: 24px;
+        padding: 4px 6px;
+        border-radius: 6px;
+        font-size: .62rem;
+        line-height: 1.2;
+    }
+    .staff-orders-table .order-table-total {
+        color: #38291F;
+        font-size: .72rem;
+        font-weight: 750;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+
+    /* Search results include a status cell; position it in the card header. */
+    .staff-orders-table.with-status-column tbody tr.order-card td:nth-child(8) {
+        grid-column: 3;
+        grid-row: 1;
+        justify-self: end;
+        align-self: start;
+        text-align: right !important;
+    }
+    .staff-orders-table.with-status-column tbody tr.order-card td:nth-child(8)::before {
+        display: none;
+        content: none;
+    }
+    .staff-orders-table .status-badge {
+        display: inline-flex;
+        max-width: 100%;
+        justify-content: center;
+        padding: 4px 6px;
+        border-radius: 7px;
+        font-size: .59rem;
+        line-height: 1.15;
+        white-space: normal;
+        text-align: center;
+    }
+
+    /* Next Action is the primary control and always spans the full card. */
+    .staff-orders-table tbody tr.order-card td.order-table-next-action-cell {
+        grid-column: 1 / -1 !important;
+        width: 100% !important;
+        margin-top: 1px;
+    }
+    .staff-orders-table tbody tr.order-card td.order-table-next-action-cell::before {
+        display: none;
+        content: none;
+    }
+    .staff-orders-table .order-table-next-action-form {
+        display: block !important;
+        width: 100% !important;
+        max-width: none !important;
+        min-width: 0 !important;
+        margin: 0 !important;
+    }
+    .staff-orders-table .btn-table-next-action {
+        display: inline-flex !important;
+        align-items: center;
+        justify-content: center;
+        width: 100% !important;
+        max-width: none !important;
+        min-width: 0 !important;
+        min-height: 46px !important;
+        padding: 10px 12px !important;
+        border-radius: 9px;
+        font-size: .78rem !important;
+        line-height: 1.2;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+
+    /* View Details stays available, but is visually secondary. */
+    .staff-orders-table tbody tr.order-card td.order-table-details-cell {
+        grid-column: 1 / -1 !important;
+        width: 100% !important;
+        padding-top: 1px !important;
+        border-top: 1px solid #EEE5DC !important;
+        text-align: center !important;
+    }
+    .staff-orders-table tbody tr.order-card td.order-table-details-cell::before {
+        display: none;
+        content: none;
+    }
+    .staff-orders-table .btn-view-details {
+        display: inline-flex !important;
+        align-items: center;
+        justify-content: center;
+        width: 100% !important;
+        max-width: none !important;
+        min-width: 0 !important;
+        min-height: 40px !important;
+        padding: 8px 10px !important;
+        border: 0 !important;
+        border-radius: 7px;
+        background: transparent !important;
+        color: #6F4E37 !important;
+        font-size: .73rem !important;
+        font-weight: 650;
+        text-decoration: underline;
+        text-underline-offset: 2px;
+        white-space: normal;
+    }
+
+    .staff-orders-table tbody tr.processing-order {
+        opacity: .78;
+    }
+}
+
+@media (max-width: 359.98px) {
+    .staff-orders-table tbody tr.order-card {
+        gap: 8px 6px;
+        padding: 10px !important;
+    }
+    .staff-orders-table .order-table-primary { font-size: .73rem; }
+    .order-table-mobile-claim { font-size: .58rem; padding: 4px 5px; }
+    .staff-orders-table tbody tr.order-card td:nth-child(4) .order-table-primary,
+    .staff-orders-table .order-table-total { font-size: .66rem; }
+    .staff-orders-table .order-table-payment { font-size: .58rem; padding: 4px 5px; }
+}
+
+/* Order History uses the neutral coffee palette (it holds completed AND cancelled orders). */
+details.order-history-section {
+    border-color: #D8C8BA !important;
+    border-left-color: #6F4E37 !important;
+    background: #FFFFFF !important;
+}
+details.order-history-section > .cancelled-section-summary:hover,
+details.order-history-section[open] > .cancelled-section-summary {
+    background: #FBF8F5 !important;
+    border-bottom-color: #E6DAD0 !important;
+}
+details.order-history-section .cancelled-summary-icon {
+    background: #F1E8E0 !important;
+    color: #6F4E37 !important;
+}
+details.order-history-section .cancelled-section-title {
+    color: #4A3525 !important;
+}
+details.order-history-section .cancelled-summary-count {
+    border-color: #D8C8BA !important;
+    background: #F5EEE7 !important;
+    color: #4A3525 !important;
+}
+details.order-history-section .cancelled-toggle {
+    border-color: #C9B3A2 !important;
+    color: #6F4E37 !important;
+}
+details.order-history-section select,
+details.order-history-section input[type="month"],
+details.order-history-section input[type="search"] {
+    border-color: #C9B3A2 !important;
+}
+
+/* Compact Cancelled Orders summary, matching the Staff refund-count panel. */
+.cancelled-orders-section {
+    width: min(100%, 390px);
+    margin: 16px 0 22px;
+    transition: width .18s ease;
+}
+
+.cancelled-orders-section[open] {
+    width: 100%;
+    margin-top: 18px;
+}
+
+.cancelled-section-summary {
+    display: flex;
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+    gap: 10px;
+    min-height: 56px;
+    padding: 10px 12px;
+}
+
+.cancelled-summary-icon {
+    display: grid;
+    place-items: center;
+    flex: 0 0 34px;
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
+    background: #FCE8E8;
+    color: #A33A3A;
+    font-size: 1rem;
+}
+
+.cancelled-summary-copy {
+    display: block;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.cancelled-section-title {
+    display: block;
+    margin: 0;
+    color: #8E2F2F;
+    font-size: .82rem;
+    line-height: 1.2;
+    font-weight: 700;
+    letter-spacing: 0;
+    text-transform: none;
+}
+
+.cancelled-section-description {
+    display: block;
+    margin: 2px 0 0;
+    color: #806F62;
+    font-size: .68rem;
+    line-height: 1.25;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.cancelled-summary-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    min-width: 30px;
+    height: 30px;
+    padding: 0 8px;
+    border: 1px solid #E4BABA;
+    border-radius: 999px;
+    background: #FCE3E3;
+    color: #8E2F2F;
+    font-size: .78rem;
+    font-weight: 750;
+    font-variant-numeric: tabular-nums;
+}
+
+.cancelled-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 28px;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid #D89A9A;
+    border-radius: 8px;
+    background: #FFFFFF;
+    color: #A33A3A;
+}
+
+.cancelled-toggle-label {
+    display: none !important;
+}
+
+.cancelled-section-content {
+    padding: 0 16px 18px;
+}
+
+.cancelled-search-field {
+    flex: 0 1 280px;
+    width: 280px;
+    min-width: 0;
+}
+
+.cancelled-search-box {
+    width: 100%;
+}
+
+.cancelled-search-box input.cancelled-filter-search {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    height: 38px;
+    padding: 6px 12px 6px 34px;
+    border: 1px solid #8B6F5A;
+    border-radius: 8px;
+    color: #4A3525;
+    background: #FFFFFF;
+    font-size: .82rem;
+    box-sizing: border-box;
+}
+
+.cancelled-search-box input.cancelled-filter-search:focus {
+    border-color: #6F4E37;
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(111, 78, 55, .10);
+}
+
+.cancelled-filter-form .search-actions {
+    display: flex;
+    gap: 8px;
+    margin-left: 0;
+}
+
+.cancelled-filter-form .search-actions .btn {
+    height: 38px;
+    padding: 7px 13px;
+    border-radius: 8px;
+    font-size: .82rem;
+    font-weight: 500;
+}
+
+@media (max-width: 768px) {
+    .cancelled-section-summary {
+        align-items: center !important;
+        padding: 10px 11px;
+    }
+
+    .cancelled-section-heading {
+        align-items: center;
+        flex-direction: row;
+        margin: 0;
+    }
+
+    .cancelled-section-content {
+        padding: 0 12px 14px;
+    }
+
+    .cancelled-filter-form {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .cancelled-search-field,
+    .cancelled-search-box {
+        width: 100%;
+        max-width: 100%;
+        flex: 1 1 auto;
+    }
+
+    .cancelled-filter-form .search-actions,
+    .cancelled-filter-form .search-actions .btn {
+        width: auto;
+    }
+}
+</style>
+
+<?php if ($walkinPlaced): ?>
+<!-- =========================================================
+     WALK-IN ORDER PLACED: shown once, right after checkout.
+     Self-contained overlay (this page does not load Bootstrap JS).
+========================================================= -->
+<div class="walkin-placed-overlay" id="walkinPlacedModal" role="dialog" aria-modal="true" aria-labelledby="walkinPlacedTitle">
+    <div class="walkin-placed-box">
+        <div class="walkin-placed-icon"><i class="bi bi-check-lg" aria-hidden="true"></i></div>
+        <h5 class="walkin-placed-title" id="walkinPlacedTitle">Walk-in order placed</h5>
+        <p class="walkin-placed-subtitle">The order is now in Confirmed.</p>
+
+        <div class="walkin-placed-details">
+            <div><span>Order</span><strong><?= htmlspecialchars((string)($walkinPlaced['order_number'] ?? ''), ENT_QUOTES, 'UTF-8') ?></strong></div>
+            <div><span>Claim No.</span><strong><?= htmlspecialchars((string)($walkinPlaced['claim_number'] ?? ''), ENT_QUOTES, 'UTF-8') ?></strong></div>
+            <div><span>Total</span><strong>₱<?= number_format((float)($walkinPlaced['total'] ?? 0), 2) ?></strong></div>
+            <div><span>Payment</span><strong><?= htmlspecialchars((string)($walkinPlaced['payment_method'] ?? ''), ENT_QUOTES, 'UTF-8') ?></strong></div>
+            <?php if (!empty($walkinPlaced['gcash_reference'])): ?>
+                <div><span>GCash Ref No.</span><strong><?= htmlspecialchars(staffFormatGcashReference((string)$walkinPlaced['gcash_reference']), ENT_QUOTES, 'UTF-8') ?></strong></div>
+            <?php endif; ?>
+        </div>
+
+        <div class="walkin-placed-actions">
+            <button type="button" class="walkin-placed-done" id="walkinPlacedDoneBtn">Done</button>
+            <button
+                type="button"
+                class="walkin-placed-print"
+                id="walkinPlacedPrintBtn"
+                data-receipt-modal="receiptModal<?= (int)($walkinPlaced['order_id'] ?? 0) ?>"
+            >
+                <i class="bi bi-printer me-1" aria-hidden="true"></i> Print Receipt
+            </button>
+        </div>
+    </div>
+</div>
+
+<style>
+.walkin-placed-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    background: rgba(44, 34, 30, .45);
+}
+
+.walkin-placed-overlay[hidden] {
+    display: none;
+}
+
+.walkin-placed-box {
+    width: min(400px, 100%);
+    max-height: calc(100vh - 32px);
+    overflow-y: auto;
+    padding: 24px;
+    border-radius: 18px;
+    background: #FFFFFF;
+    text-align: center;
+    box-shadow: 0 16px 40px rgba(44, 34, 30, .2);
+    box-sizing: border-box;
+}
+
+.walkin-placed-icon {
+    width: 56px;
+    height: 56px;
+    margin: 0 auto 12px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #E6F4EA;
+    color: #2E7D4F;
+    font-size: 1.6rem;
+}
+
+.walkin-placed-title {
+    margin: 0 0 4px;
+    color: #2C221E;
+    font-weight: 800;
+}
+
+.walkin-placed-subtitle {
+    margin: 0 0 16px;
+    color: #7B6D62;
+    font-size: .88rem;
+}
+
+.walkin-placed-details {
+    border: 1px solid #E6DEC9;
+    border-radius: 12px;
+    padding: 10px 14px;
+    text-align: left;
+    background: #FDF8F2;
+}
+
+.walkin-placed-details > div {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 5px 0;
+    font-size: .9rem;
+}
+
+.walkin-placed-details span {
+    color: #7B6D62;
+}
+
+.walkin-placed-details strong {
+    color: #2C221E;
+    text-align: right;
+    overflow-wrap: anywhere;
+}
+
+.walkin-placed-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 18px;
+}
+
+.walkin-placed-done,
+.walkin-placed-print {
+    flex: 1 1 0;
+    min-height: 46px;
+    border-radius: 10px;
+    font-weight: 700;
+    font-size: .92rem;
+    cursor: pointer;
+}
+
+.walkin-placed-done {
+    border: 1px solid #B8A08A;
+    background: #FFFFFF;
+    color: #4A3525;
+}
+
+.walkin-placed-done:hover {
+    background: #F7F1EA;
+}
+
+.walkin-placed-print {
+    border: 1px solid #6F4E37;
+    background: #6F4E37;
+    color: #FFFFFF;
+}
+
+.walkin-placed-print:hover {
+    border-color: #4A3525;
+    background: #4A3525;
+}
+
+.walkin-placed-done:focus-visible,
+.walkin-placed-print:focus-visible {
+    outline: 3px solid #C69C6D;
+    outline-offset: 2px;
+}
+</style>
+
+<script>
+(function () {
+    const overlay = document.getElementById('walkinPlacedModal');
+    if (!overlay) return;
+
+    document.body.appendChild(overlay);
+    document.body.style.overflow = 'hidden';
+
+    function close() {
+        overlay.hidden = true;
+        document.body.style.overflow = '';
+    }
+
+    document.getElementById('walkinPlacedDoneBtn').addEventListener('click', close);
+
+    document.getElementById('walkinPlacedPrintBtn').addEventListener('click', function () {
+        const receiptId = this.getAttribute('data-receipt-modal');
+        close();
+        if (document.getElementById(receiptId) && typeof printReceipt === 'function') {
+            printReceipt(receiptId);
+        }
+    });
+
+    overlay.addEventListener('click', function (event) {
+        if (event.target === overlay) close();
+    });
+
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && !overlay.hidden) close();
+    });
+
+    document.getElementById('walkinPlacedPrintBtn').focus({ preventScroll: true });
+})();
+</script>
+<?php endif; ?>

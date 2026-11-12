@@ -16,23 +16,60 @@ if (
 }
 
 /* =========================================================
-   MARK CUSTOMER FEEDBACK AS READ
+   CUSTOMER FEEDBACK: FILTERS + ACTIONS
+   The feedback dropdown keeps its own fb_* query values so the
+   rest of the dashboard is not affected.
 ========================================================= */
+
+$FEEDBACK_ARCHIVE_COL = 'is_archived';
+
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
+$fbView = ($_GET['fb_view'] ?? 'inbox') === 'archived' ? 'archived' : 'inbox';
+
+$fbRead = (string)($_GET['fb_read'] ?? 'all');
+if (!in_array($fbRead, ['all', 'unread', 'read'], true)) {
+    $fbRead = 'all';
+}
+
+$fbSearch = trim((string)($_GET['fb_q'] ?? ''));
+if (mb_strlen($fbSearch) > 100) {
+    $fbSearch = mb_substr($fbSearch, 0, 100);
+}
+
+$fbPage = max(1, (int)($_GET['fb_page'] ?? 1));
+$fbPerPage = 5;
+
+function dashboardFeedbackUrl(array $overrides = []): string
+{
+    $query = array_merge([
+        'fb_view' => $GLOBALS['fbView'],
+        'fb_read' => $GLOBALS['fbRead'],
+        'fb_q' => $GLOBALS['fbSearch'],
+        'fb_page' => $GLOBALS['fbPage'],
+    ], $overrides);
+
+    $defaults = ['fb_view' => 'inbox', 'fb_read' => 'all', 'fb_q' => '', 'fb_page' => 1];
+
+    foreach ($defaults as $key => $default) {
+        if ((string)$query[$key] === (string)$default) {
+            unset($query[$key]);
+        }
+    }
+
+    return 'dashboard.php' . ($query ? '?' . http_build_query($query) : '') . '#feedbackPanel';
+}
+
+/* Old links (dashboard.php?read_feedback=...) still work. */
 if (isset($_GET['read_feedback'])) {
     try {
         if ($_GET['read_feedback'] === 'all') {
             $pdo->exec("UPDATE order_feedback SET is_read = 1 WHERE is_read = 0");
-        } else {
-            $feedbackReadId = (int)$_GET['read_feedback'];
-
-            if ($feedbackReadId > 0) {
-                $markFeedbackStmt = $pdo->prepare("
-                    UPDATE order_feedback
-                    SET is_read = 1
-                    WHERE id = ?
-                ");
-                $markFeedbackStmt->execute([$feedbackReadId]);
-            }
+        } elseif ((int)$_GET['read_feedback'] > 0) {
+            $pdo->prepare("UPDATE order_feedback SET is_read = 1 WHERE id = ?")
+                ->execute([(int)$_GET['read_feedback']]);
         }
     } catch (Throwable $e) {
         error_log('dashboard.php feedback read: ' . $e->getMessage());
@@ -42,42 +79,41 @@ if (isset($_GET['read_feedback'])) {
     exit;
 }
 
-/* =========================================================
-   ARCHIVE / DELETE CUSTOMER FEEDBACK (POST + CSRF)
-   Archive column name: change here if different in your SQL.
-========================================================= */
-$FEEDBACK_ARCHIVE_COL = 'is_archived';
-
-if (empty($_SESSION['csrf_token'])) {
-    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
-}
-
 if (
     $_SERVER['REQUEST_METHOD'] === 'POST'
     && isset($_POST['feedback_action'])
 ) {
-    $postedToken = (string)($_POST['csrf_token'] ?? '');
+    $fbReturn = (string)($_POST['fb_return'] ?? '');
 
-    if (hash_equals($_SESSION['csrf_token'], $postedToken)) {
+    /* Only ever return to the dashboard. */
+    if (!preg_match('/^dashboard\.php(\?[^\r\n#]*)?#feedbackPanel$/', $fbReturn)) {
+        $fbReturn = 'dashboard.php#feedbackPanel';
+    }
+
+    if (hash_equals($_SESSION['csrf_token'], (string)($_POST['csrf_token'] ?? ''))) {
+        $feedbackAction = (string)$_POST['feedback_action'];
         $feedbackActionId = (int)($_POST['feedback_id'] ?? 0);
-        $feedbackAction   = (string)$_POST['feedback_action'];
 
-        if ($feedbackActionId > 0) {
-            try {
-                if ($feedbackAction === 'archive') {
-                    $pdo->prepare("
-                        UPDATE order_feedback
-                        SET {$FEEDBACK_ARCHIVE_COL} = 1, is_read = 1
-                        WHERE id = ?
-                    ")->execute([$feedbackActionId]);
-                }
-            } catch (Throwable $e) {
-                error_log('dashboard.php feedback action: ' . $e->getMessage());
+        $feedbackUpdates = [
+            'read' => 'is_read = 1',
+            'unread' => 'is_read = 0',
+            'archive' => "{$FEEDBACK_ARCHIVE_COL} = 1, is_read = 1",
+            'restore' => "{$FEEDBACK_ARCHIVE_COL} = 0",
+        ];
+
+        try {
+            if ($feedbackAction === 'read_all') {
+                $pdo->exec("UPDATE order_feedback SET is_read = 1 WHERE is_read = 0 AND {$FEEDBACK_ARCHIVE_COL} = 0");
+            } elseif (isset($feedbackUpdates[$feedbackAction]) && $feedbackActionId > 0) {
+                $pdo->prepare("UPDATE order_feedback SET {$feedbackUpdates[$feedbackAction]} WHERE id = ?")
+                    ->execute([$feedbackActionId]);
             }
+        } catch (Throwable $e) {
+            error_log('dashboard.php feedback action: ' . $e->getMessage());
         }
     }
 
-    header('Location: dashboard.php#feedbackPanel');
+    header('Location: ' . $fbReturn);
     exit;
 }
 
@@ -148,11 +184,13 @@ $readyCount = (int)($statusCounts['ready_count'] ?? 0);
    7-DAY SALES OVERVIEW
 ========================================================= */
 $salesByDay = [];
+$ordersByDay = [];
 
 $salesTrendStmt = $pdo->query("
     SELECT
         DATE(COALESCE(closed_at, created_at)) AS sales_day,
-        COALESCE(SUM(total_amount), 0) AS sales_total
+        COALESCE(SUM(total_amount), 0) AS sales_total,
+        COUNT(*) AS order_count
     FROM orders
     WHERE status = 'completed'
       AND DATE(COALESCE(closed_at, created_at))
@@ -163,6 +201,7 @@ $salesTrendStmt = $pdo->query("
 
 foreach ($salesTrendStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
     $salesByDay[$row['sales_day']] = (float)$row['sales_total'];
+    $ordersByDay[$row['sales_day']] = (int)$row['order_count'];
 }
 
 $salesTrend = [];
@@ -177,7 +216,8 @@ for ($i = 6; $i >= 0; $i--) {
         'date' => $dateKey,
         'label' => date('D', strtotime($dateKey)),
         'short_date' => date('M d', strtotime($dateKey)),
-        'amount' => $amount
+        'amount' => $amount,
+        'orders' => (int)($ordersByDay[$dateKey] ?? 0)
     ];
 
     $weeklySalesTotal += $amount;
@@ -207,6 +247,32 @@ $todayTransactions = $todayTransactionsStmt->fetch(PDO::FETCH_ASSOC) ?: [];
 $completedTransactionsToday = (int)($todayTransactions['completed_count'] ?? 0);
 $cancelledTransactionsToday = (int)($todayTransactions['cancelled_count'] ?? 0);
 
+/* Completed / Cancelled buttons filter the list (?tx_status=...). */
+$txStatus = (string)($_GET['tx_status'] ?? 'all');
+if (!in_array($txStatus, ['all', 'completed', 'cancelled'], true)) {
+    $txStatus = 'all';
+}
+
+$txCompletedSql = "(status = 'completed' AND DATE(COALESCE(closed_at, created_at)) = CURDATE())";
+$txCancelledSql = "(status = 'cancelled' AND DATE(created_at) = CURDATE())";
+$txWhereSql = [
+    'all' => "{$txCompletedSql} OR {$txCancelledSql}",
+    'completed' => $txCompletedSql,
+    'cancelled' => $txCancelledSql,
+][$txStatus];
+
+function dashboardTransactionsUrl(string $status): string
+{
+    $query = $_GET;
+    unset($query['tx_status']);
+
+    if ($status !== 'all') {
+        $query['tx_status'] = $status;
+    }
+
+    return 'dashboard.php' . ($query ? '?' . http_build_query($query) : '') . '#transactionsPanel';
+}
+
 $todayTransactionsStmt = $pdo->query("
     SELECT
         id,
@@ -219,18 +285,9 @@ $todayTransactionsStmt = $pdo->query("
         created_at,
         closed_at
     FROM orders
-    WHERE
-        (
-            status = 'completed'
-            AND DATE(COALESCE(closed_at, created_at)) = CURDATE()
-        )
-        OR
-        (
-            status = 'cancelled'
-            AND DATE(created_at) = CURDATE()
-        )
+    WHERE {$txWhereSql}
     ORDER BY COALESCE(closed_at, created_at) DESC, id DESC
-    LIMIT 8
+    LIMIT 50
 ");
 $todayTransactionsList = $todayTransactionsStmt->fetchAll(PDO::FETCH_ASSOC);
 
@@ -265,47 +322,85 @@ $unreadNotificationsStmt = $pdo->query("
 $unreadNotifications = (int)$unreadNotificationsStmt->fetchColumn();
 
 /* =========================================================
-   CUSTOMER FEEDBACK
+   CUSTOMER FEEDBACK LIST
 ========================================================= */
 $recentFeedback = [];
 $unreadFeedback = 0;
+$fbInboxCount = 0;
+$fbArchivedCount = 0;
+$fbTotal = 0;
+$fbPages = 1;
 
 try {
-    $recentFeedbackStmt = $pdo->query("
+    $fbWhere = ["f.{$FEEDBACK_ARCHIVE_COL} = ?"];
+    $fbParams = [$fbView === 'archived' ? 1 : 0];
+
+    if ($fbRead === 'unread') {
+        $fbWhere[] = 'f.is_read = 0';
+    } elseif ($fbRead === 'read') {
+        $fbWhere[] = 'f.is_read = 1';
+    }
+
+    if ($fbSearch !== '') {
+        $fbWhere[] = '(o.order_number LIKE ? OR o.claim_number LIKE ? OR c.full_name LIKE ? OR o.customer_name LIKE ? OR f.message LIKE ?)';
+        $fbLike = '%' . $fbSearch . '%';
+        array_push($fbParams, $fbLike, $fbLike, $fbLike, $fbLike, $fbLike);
+    }
+
+    $fbFromWhere = "
+        FROM order_feedback f
+        LEFT JOIN orders o ON o.id = f.order_id
+        LEFT JOIN customers c ON c.id = f.customer_id
+        WHERE " . implode(' AND ', $fbWhere);
+
+    $fbCountStmt = $pdo->prepare("SELECT COUNT(*) {$fbFromWhere}");
+    $fbCountStmt->execute($fbParams);
+    $fbTotal = (int)$fbCountStmt->fetchColumn();
+
+    $fbPages = max(1, (int)ceil($fbTotal / $fbPerPage));
+    $fbPage = min($fbPage, $fbPages);
+    $fbOffset = ($fbPage - 1) * $fbPerPage;
+
+    $recentFeedbackStmt = $pdo->prepare("
         SELECT
             f.id,
-            f.order_id,
             f.customer_id,
             f.message,
             f.is_read,
             f.created_at,
             o.order_number,
+            o.claim_number,
+            o.total_amount,
+            o.closed_at,
+            c.email AS customer_email,
+            COALESCE(NULLIF(TRIM(c.contact_number), ''), NULLIF(TRIM(o.contact_number), '')) AS customer_phone,
             COALESCE(
-                NULLIF(TRIM(u.name), ''),
+                NULLIF(TRIM(c.full_name), ''),
                 NULLIF(TRIM(o.customer_name), ''),
                 'Guest'
             ) AS display_name
-        FROM order_feedback f
-        LEFT JOIN orders o
-            ON o.id = f.order_id
-        LEFT JOIN users u
-            ON u.id = f.customer_id
-        WHERE f.{$FEEDBACK_ARCHIVE_COL} = 0
+        {$fbFromWhere}
         ORDER BY f.is_read ASC, f.created_at DESC, f.id DESC
-        LIMIT 30
+        LIMIT {$fbPerPage} OFFSET {$fbOffset}
     ");
+    $recentFeedbackStmt->execute($fbParams);
     $recentFeedback = $recentFeedbackStmt->fetchAll(PDO::FETCH_ASSOC);
 
-    $unreadFeedback = (int)$pdo->query("
-        SELECT COUNT(*)
+    $fbCounts = $pdo->query("
+        SELECT
+            COALESCE(SUM({$FEEDBACK_ARCHIVE_COL} = 0), 0) AS inbox_count,
+            COALESCE(SUM({$FEEDBACK_ARCHIVE_COL} = 1), 0) AS archived_count,
+            COALESCE(SUM({$FEEDBACK_ARCHIVE_COL} = 0 AND is_read = 0), 0) AS unread_count
         FROM order_feedback
-        WHERE is_read = 0
-          AND {$FEEDBACK_ARCHIVE_COL} = 0
-    ")->fetchColumn();
+    ")->fetch(PDO::FETCH_ASSOC) ?: [];
+
+    $fbInboxCount = (int)($fbCounts['inbox_count'] ?? 0);
+    $fbArchivedCount = (int)($fbCounts['archived_count'] ?? 0);
+    $unreadFeedback = (int)($fbCounts['unread_count'] ?? 0);
 } catch (Throwable $e) {
     /* Keep the dashboard working if the feedback table is not installed yet. */
+    error_log('dashboard.php feedback list: ' . $e->getMessage());
     $recentFeedback = [];
-    $unreadFeedback = 0;
 }
 
 /* =========================================================
@@ -544,51 +639,114 @@ require_once '../includes/header.php';
         margin-bottom: 0;
     }
 
+    /* Today's Transactions sets the row height; Recent Notifications
+       matches it and scrolls its list instead of adding space. */
+    @media (min-width: 561px) {
+        .dashboard-duo-notify > .dashboard-panel:first-child {
+            display: flex;
+            flex-direction: column;
+            contain: size;
+            min-height: 320px;
+        }
+
+        .dashboard-duo-notify > .dashboard-panel:first-child .notifications-list {
+            flex: 1 1 0;
+            min-height: 0;
+            overflow-y: auto;
+        }
+    }
+
     /* ---------- Sales overview ---------- */
     .sales-chart {
-        padding: 16px 18px 14px;
+        padding: 14px 18px 12px;
+    }
+
+    .panel-total-caption {
+        color: #8A7968;
+        font-size: .68rem;
+        font-weight: 500;
+        text-align: right;
+        margin-bottom: 2px;
     }
 
     .chart-bars {
+        --chart-h: 120px;
+        position: relative;
         display: flex;
         align-items: flex-end;
-        gap: 10px;
+        gap: 14px;
     }
 
     .chart-day {
+        position: relative;
         flex: 1;
         min-width: 0;
         display: flex;
         flex-direction: column;
         align-items: center;
         justify-content: flex-end;
-        gap: 8px;
+        gap: 6px;
     }
 
-    .chart-amount,
     .chart-date-label {
         display: none;
     }
 
+    /* Value above each bar */
+    .chart-amount {
+        color: #6F4E37;
+        font-size: .68rem;
+        font-weight: 600;
+        line-height: 1;
+        white-space: nowrap;
+    }
+
+    .chart-day.today .chart-amount {
+        color: #4A3525;
+    }
+
+    .chart-day.empty .chart-amount {
+        visibility: hidden;
+    }
+
+    /* Bar area with faint gridlines (25% / 50% / 75% / 100%) */
     .chart-bar-wrap {
         width: 100%;
-        max-width: 56px;
-        height: 155px;
+        height: var(--chart-h);
         display: flex;
         align-items: flex-end;
         justify-content: center;
+        background-image: repeating-linear-gradient(
+            to top,
+            transparent 0,
+            transparent calc(25% - 1px),
+            #EFE8E0 calc(25% - 1px),
+            #EFE8E0 25%
+        );
     }
 
     .chart-bar {
-        width: 100%;
+        width: 62%;
+        max-width: 44px;
         min-height: 4px;
-        border-radius: 8px 8px 3px 3px;
-        background: #6F4E37;
-        transition: height .2s ease;
+        border-radius: 7px 7px 2px 2px;
+        background: linear-gradient(180deg, #7D5A41 0%, #6F4E37 100%);
+        transition: height .2s ease, filter .15s ease, transform .15s ease;
+    }
+
+    .chart-day:hover .chart-bar {
+        filter: brightness(1.12);
+        transform: translateY(-2px);
     }
 
     .chart-day.today .chart-bar {
-        background: #4A3525;
+        background: linear-gradient(180deg, #5C402C 0%, #4A3525 100%);
+    }
+
+    /* Zero-sales days read as "no sales", not "broken" */
+    .chart-day.empty .chart-bar {
+        background: #E8DFD6;
+        min-height: 4px;
     }
 
     .chart-day-label {
@@ -602,6 +760,36 @@ require_once '../includes/header.php';
         font-weight: 700;
     }
 
+    /* Hover tooltip */
+    .chart-tooltip {
+        position: absolute;
+        bottom: calc(100% + 4px);
+        left: 50%;
+        transform: translateX(-50%) translateY(4px);
+        background: #3A2A1E;
+        color: #fff;
+        padding: 6px 9px;
+        border-radius: 8px;
+        font-size: .68rem;
+        line-height: 1.35;
+        text-align: center;
+        white-space: nowrap;
+        pointer-events: none;
+        opacity: 0;
+        z-index: 5;
+        transition: opacity .15s ease, transform .15s ease;
+    }
+
+    .chart-day:hover .chart-tooltip {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+    }
+
+    .chart-tooltip strong {
+        display: block;
+        font-size: .74rem;
+    }
+
     /* ---------- Order status ---------- */
     .status-panel-body {
         padding: 6px 18px 10px;
@@ -612,7 +800,7 @@ require_once '../includes/header.php';
         align-items: center;
         justify-content: space-between;
         gap: 12px;
-        padding: 12px 0;
+        padding: 9px 0;
         border-bottom: 1px solid #D8C9BD;
     }
 
@@ -729,62 +917,438 @@ require_once '../includes/header.php';
         text-align: center;
     }
 
-    /* ---------- Customer feedback ---------- */
-    .feedback-panel .dashboard-panel-header {
-        align-items: center;
-        flex-wrap: nowrap;
+    /* ---------- Customer feedback row: full width, cards in 2 columns ---------- */
+    .dashboard-duo.dashboard-duo-bottom {
+        grid-template-columns: 1fr;
+        align-items: start;
     }
 
-    .feedback-icon {
+    .feedback-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .feedback-grid > .feedback-item {
+        display: flex;
+        flex-direction: column;
+    }
+
+    /* Keep the buttons lined up at the bottom of each card */
+    .feedback-grid > .feedback-item .feedback-item-bottom {
+        margin-top: auto;
+        padding-top: 9px;
+    }
+
+    .feedback-grid > .feedback-item:nth-child(odd) {
+        border-right: 1px solid #D8C9BD;
+    }
+
+    @media (max-width: 900px) {
+        .feedback-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .feedback-grid > .feedback-item:nth-child(odd) {
+            border-right: 0;
+        }
+    }
+
+    /* ---------- Action toasts (copied from orders.php) ---------- */
+    .orders-toast-stack {
+        position: fixed;
+        top: 88px;
+        right: 24px;
+        z-index: 2001;
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 10px;
+        width: min(420px, calc(100vw - 32px));
+        max-height: calc(100vh - 108px);
+        overflow-y: auto;
+        padding: 2px;
+        pointer-events: none;
+    }
+
+    .orders-toast-stack .orders-toast {
+        width: 100%;
+        flex: 0 0 auto;
+        pointer-events: auto;
+    }
+
+    .orders-toast {
         position: relative;
-        width: 40px;
-        height: 40px;
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 13px 14px;
+        background: #ffffff;
+        border: 2px solid #6F4E37;
+        border-radius: 12px;
+        box-shadow: 0 10px 28px rgba(44,34,30,.18);
+        color: #2C221E;
+        pointer-events: auto;
+        overflow: hidden;
+        animation: ordersToastIn .22s ease-out;
+    }
+
+    .orders-toast-success { border-left: 6px solid #4A8B5A; }
+    .orders-toast-cancel { border-left: 6px solid #A33A3A; }
+
+    .orders-toast-icon {
+        flex: 0 0 30px;
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: #F3EADF;
+        color: #4A3525;
+        font-size: 15px;
+        margin-top: 1px;
+    }
+
+    .orders-toast-success .orders-toast-icon {
+        color: #2F6E3E;
+        background: #EAF6EE;
+    }
+
+    .orders-toast-cancel .orders-toast-icon {
+        color: #8E2F2F;
+        background: #FCE3E3;
+    }
+
+    .orders-toast-copy {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+
+    .orders-toast-title {
+        color: #2F6E3E;
+        font-size: .94rem;
+        line-height: 1.3;
+        font-weight: 700;
+    }
+
+    .orders-toast-message {
+        flex: 1;
+        padding-top: 1px;
+        font-size: .86rem;
+        line-height: 1.45;
+        font-weight: 500;
+    }
+
+    .orders-toast-close {
+        flex: 0 0 auto;
+        border: 0;
+        background: transparent;
+        color: #6F4E37;
+        width: 30px;
+        height: 30px;
+        border-radius: 8px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+    }
+
+    .orders-toast-close:hover {
+        background: #F0E6D6;
+        color: #2C221E;
+    }
+
+    .orders-toast-progress {
+        position: absolute;
+        left: 0;
+        bottom: 0;
+        height: 3px;
+        width: 100%;
+        background: #6F4E37;
+        transform-origin: left center;
+        animation: ordersToastProgress 3.5s linear forwards;
+    }
+
+    .orders-toast-cancel .orders-toast-title { color: #8E2F2F; }
+    .orders-toast-success .orders-toast-progress { background: #4A8B5A; }
+    .orders-toast-cancel .orders-toast-progress { background: #A33A3A; }
+    .orders-toast.is-restored { animation: none; }
+    .orders-toast.is-closing { animation: ordersToastOut .18s ease-in forwards; }
+
+    @keyframes ordersToastIn {
+        from { opacity: 0; transform: translateY(-8px) translateX(8px); }
+        to { opacity: 1; transform: translateY(0) translateX(0); }
+    }
+
+    @keyframes ordersToastOut {
+        from { opacity: 1; transform: translateY(0) translateX(0); }
+        to { opacity: 0; transform: translateY(-6px) translateX(8px); }
+    }
+
+    @keyframes ordersToastProgress {
+        from { transform: scaleX(1); }
+        to { transform: scaleX(0); }
+    }
+
+    @media (max-width: 768px) {
+        .orders-toast-stack {
+            top: 74px;
+            right: 14px;
+            width: min(420px, calc(100vw - 28px));
+            max-height: calc(100vh - 90px);
+        }
+    }
+
+    /* ---------- Customer feedback ---------- */
+    .feedback-summary {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 13px 18px;
+        border-bottom: 1px solid #B8A08A;
+    }
+
+    .feedback-summary-icon {
+        position: relative;
+        width: 36px;
+        height: 36px;
+        flex: 0 0 36px;
         display: flex;
         align-items: center;
         justify-content: center;
-        flex-shrink: 0;
-        border: 1px solid #B8A08A;
         border-radius: 10px;
-        background: #FBF7F3;
+        background: #F0E6D6;
         color: #6F4E37;
-        font-size: 1.05rem;
     }
 
-    .feedback-icon-badge {
+    .feedback-summary-badge {
         position: absolute;
-        top: -7px;
-        right: -7px;
+        top: -6px;
+        right: -6px;
         min-width: 18px;
         height: 18px;
         padding: 0 5px;
+        border-radius: 999px;
+        background: #B3261E;
+        color: #FFFFFF;
+        font-size: .6rem;
+        font-weight: 700;
+        line-height: 18px;
+        text-align: center;
+    }
+
+    .feedback-summary-text {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .feedback-toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px 10px;
+        padding: 12px 18px;
+        border-bottom: 1px solid #D8C9BD;
+        background: #FBF8F4;
+    }
+
+    .feedback-tab {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 12px;
+        border: 1px solid #B8A08A;
+        border-radius: 8px;
+        background: #FFFFFF;
+        color: #6F4E37;
+        font-size: .74rem;
+        font-weight: 600;
+        text-decoration: none;
+    }
+
+    .feedback-tab:hover {
+        background: #F7F1EA;
+        color: #4A3525;
+    }
+
+    .feedback-tab.active {
+        border-color: #6F4E37;
+        background: #6F4E37;
+        color: #FFFFFF;
+    }
+
+    .feedback-tab-count {
+        padding: 0 6px;
+        border-radius: 999px;
+        background: rgba(111, 78, 55, .12);
+        font-size: .64rem;
+    }
+
+    .feedback-tab.active .feedback-tab-count {
+        background: rgba(255, 255, 255, .22);
+    }
+
+    .feedback-filter {
+        display: flex;
+        flex: 0 1 auto;
+        gap: 8px;
+        margin: 0;
+    }
+
+    .feedback-filter select,
+    .feedback-filter input {
+        min-height: 34px;
+        padding: 5px 10px;
+        border: 1px solid #C9B3A2;
+        border-radius: 8px;
+        background: #FFFFFF;
+        color: #4A3525;
+        font-size: .74rem;
+    }
+
+    .feedback-filter input {
+        width: 200px;
+        min-width: 0;
+    }
+
+    /* Mark all read sits at the far right. */
+    .feedback-toolbar > form[method="POST"] {
+        margin-left: auto;
+    }
+
+    #feedbackContent {
+        transition: opacity .15s ease;
+    }
+
+    .feedback-panel.is-loading #feedbackContent {
+        opacity: .55;
+        pointer-events: none;
+    }
+
+    .feedback-filter select:focus,
+    .feedback-filter input:focus {
+        outline: none;
+        border-color: #6F4E37;
+        box-shadow: 0 0 0 3px rgba(111, 78, 55, .12);
+    }
+
+    .feedback-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 5px;
+        min-height: 34px;
+        padding: 5px 11px;
+        border: 1px solid #6F4E37;
+        border-radius: 8px;
+        background: #6F4E37;
+        color: #FFFFFF;
+        font-size: .72rem;
+        font-weight: 600;
+        text-decoration: none;
+        white-space: nowrap;
+        cursor: pointer;
+    }
+
+    .feedback-btn:hover {
+        background: #4A3525;
+        color: #FFFFFF;
+    }
+
+    .feedback-btn.outline {
+        background: #FFFFFF;
+        color: #6F4E37;
+    }
+
+    .feedback-btn.outline:hover {
+        background: #F7F1EA;
+        color: #4A3525;
+    }
+    .feedback-btn.danger-solid {
+        border-color: #A33A3A;
+        background: #A33A3A;
+        color: #FFFFFF;
+    }
+    .feedback-btn.danger-solid:hover {
+        background: #8E2F2F;
+        color: #FFFFFF;
+    }
+
+    /* ---------- Delete confirmation ---------- */
+    .fb-confirm-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 2100;
         display: flex;
         align-items: center;
         justify-content: center;
-        border-radius: 999px;
-        background: #6F4E37;
-        color: #FFFFFF;
-        font-size: .62rem;
-        font-weight: 700;
-        line-height: 1;
+        padding: 16px;
+        background: rgba(44, 34, 30, .45);
     }
 
-    .feedback-list.is-expanded {
-        max-height: 440px;
-        overflow-y: auto;
+    .fb-confirm-box {
+        width: min(400px, 100%);
+        padding: 22px 22px 18px;
+        background: #FFFFFF;
+        border: 2px solid #6F4E37;
+        border-radius: 14px;
+        box-shadow: 0 16px 40px rgba(44, 34, 30, .25);
+        color: #2C221E;
+    }
+
+    .fb-confirm-icon {
+        width: 42px;
+        height: 42px;
+        margin-bottom: 12px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        background: #FCE3E3;
+        color: #8E2F2F;
+        font-size: 19px;
+    }
+
+    .fb-confirm-title {
+        margin: 0 0 6px;
+        font-size: 1rem;
+        font-weight: 700;
+        color: #4A3525;
+    }
+
+    .fb-confirm-text {
+        margin: 0 0 18px;
+        font-size: .84rem;
+        line-height: 1.5;
+        color: #6B5B50;
+    }
+
+    .fb-confirm-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+    }
+
+    .feedback-btn.outline.danger {
+        border-color: #A33A3A;
+        color: #A33A3A;
+    }
+    .feedback-btn.outline.danger:hover {
+        background: #FCE3E3;
+        color: #8E2F2F;
+    }
+
+    .feedback-toolbar form {
+        margin: 0;
     }
 
     .feedback-item {
-        padding: 15px 18px 15px 15px;
+        padding: 13px 18px 13px 15px;
         border-left: 3px solid transparent;
         border-bottom: 1px solid #D8C9BD;
-    }
-
-    .feedback-item[hidden] {
-        display: none;
-    }
-
-    .feedback-item:last-child {
-        border-bottom: 0;
     }
 
     .feedback-item.unread {
@@ -795,54 +1359,77 @@ require_once '../includes/header.php';
     .feedback-item-top,
     .feedback-item-bottom {
         display: flex;
-        align-items: center;
+        align-items: flex-start;
         justify-content: space-between;
-        gap: 12px;
+        gap: 8px 12px;
+    }
+
+    .feedback-item-bottom {
+        flex-wrap: wrap;
+        align-items: center;
+        margin-top: 9px;
     }
 
     .feedback-name-wrap {
         display: flex;
-        align-items: center;
         flex-wrap: wrap;
-        gap: 8px;
+        align-items: center;
+        gap: 4px 8px;
         min-width: 0;
     }
 
     .feedback-name {
         color: #4A3525;
-        font-size: .88rem;
-        font-weight: 600;
+        font-size: .82rem;
+        font-weight: 700;
+        overflow-wrap: anywhere;
+    }
+
+    .feedback-contact,
+    .feedback-date,
+    .feedback-order {
+        color: #8A7D72;
+        font-size: .7rem;
+        overflow-wrap: anywhere;
     }
 
     .feedback-date {
-        color: #8A7D72;
-        font-size: .72rem;
         white-space: nowrap;
     }
 
     .feedback-message {
-        margin: 8px 0 0;
-        color: #4A3525;
-        font-size: .86rem;
+        margin: 7px 0 0;
+        color: #2C221E;
+        font-size: .8rem;
         line-height: 1.5;
         white-space: pre-line;
-        word-break: break-word;
-    }
-
-    .feedback-item-bottom {
-        margin-top: 8px;
+        overflow-wrap: anywhere;
     }
 
     .feedback-order {
-        color: #8A7D72;
-        font-size: .72rem;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 2px 10px;
+    }
+
+    .feedback-order strong {
+        color: #4A3525;
+    }
+
+    .feedback-order a {
+        color: #6F4E37;
+        font-weight: 600;
+        text-decoration: none;
+    }
+
+    .feedback-order a:hover {
+        text-decoration: underline;
     }
 
     .feedback-badge {
-        display: inline-block;
-        padding: 2px 8px;
+        padding: 1px 7px;
         border-radius: 999px;
-        font-size: .64rem;
+        font-size: .58rem;
         font-weight: 700;
         letter-spacing: .3px;
     }
@@ -859,7 +1446,7 @@ require_once '../includes/header.php';
 
     .feedback-actions {
         display: flex;
-        align-items: center;
+        flex-wrap: wrap;
         gap: 6px;
     }
 
@@ -867,136 +1454,158 @@ require_once '../includes/header.php';
         margin: 0;
     }
 
-    .feedback-icon-btn {
-        width: 30px;
-        height: 30px;
-        padding: 0;
-        display: inline-flex;
+    .feedback-footer {
+        display: flex;
+        flex-wrap: wrap;
         align-items: center;
-        justify-content: center;
-        border: 1px solid #6F4E37;
-        border-radius: 8px;
-        background: #FFFFFF;
-        color: #6F4E37;
-        font-size: .86rem;
-        line-height: 1;
-        text-decoration: none;
-        cursor: pointer;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 10px 18px;
+        color: #8A7D72;
+        font-size: .72rem;
     }
 
-    .feedback-icon-btn:hover {
+    .feedback-pages {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+    }
+
+    .feedback-page {
+        min-width: 32px;
+        padding: 5px 9px;
+        border: 1px solid #D8C9BD;
+        border-radius: 7px;
+        color: #4A3525;
+        font-size: .72rem;
+        font-weight: 600;
+        text-align: center;
+        text-decoration: none;
+    }
+
+    .feedback-page:hover {
+        background: #F7F1EA;
+        color: #4A3525;
+    }
+
+    .feedback-page.active {
+        border-color: #6F4E37;
         background: #6F4E37;
         color: #FFFFFF;
     }
 
-    .feedback-icon-btn.danger {
-        border-color: #A33A3A;
-        color: #A33A3A;
+    .feedback-page.disabled {
+        color: #B8A08A;
+        pointer-events: none;
     }
 
-    .feedback-icon-btn.danger:hover {
-        background: #A33A3A;
-        color: #FFFFFF;
-    }
+    @media (max-width: 560px) {
+        .feedback-filter {
+            flex-wrap: wrap;
+        }
 
-    .feedback-footer {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        padding: 13px 18px;
-        border-top: 1px solid #D8C9BD;
-    }
+        .feedback-filter {
+            flex: 1 1 100%;
+            flex-wrap: nowrap;
+        }
 
-    .feedback-view-all {
-        padding: 0;
-        border: 0;
-        background: none;
-        color: #6F4E37;
-        font-size: .8rem;
-        font-weight: 600;
-        cursor: pointer;
-    }
+        .feedback-filter input {
+            flex: 1;
+            width: auto;
+        }
 
-    .feedback-view-all:hover {
-        text-decoration: underline;
-    }
+        .feedback-item-top {
+            flex-direction: column;
+            gap: 2px;
+        }
 
-    .feedback-markall {
-        color: #8A7D72;
-        font-size: .74rem;
-        text-decoration: none;
-    }
+        .feedback-actions,
+        .feedback-actions form {
+            flex: 1 1 auto;
+        }
 
-    .feedback-markall:hover {
-        color: #6F4E37;
-        text-decoration: underline;
+        .feedback-actions .feedback-btn {
+            width: 100%;
+        }
     }
 
     /* ---------- Today's transactions ---------- */
     .transaction-summary {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 12px;
-        padding: 16px;
-        border-bottom: 1px solid #D8C9BD;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
     }
 
-    .transaction-summary-card {
-        display: flex;
+    .transaction-pill {
+        display: inline-flex;
         align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        padding: 13px 14px;
+        gap: 6px;
+        padding: 5px 10px;
         border: 1px solid #B8A08A;
-        border-radius: 10px;
+        border-radius: 999px;
         background: #FBF9F6;
-    }
-
-    .transaction-summary-label {
         color: #7B6D62;
-        font-size: .68rem;
-        font-weight: 500;
-        text-transform: uppercase;
-        letter-spacing: .35px;
+        font-size: .7rem;
+        white-space: nowrap;
     }
 
-    .transaction-summary-value {
-        margin-top: 3px;
+    .transaction-pill strong {
         color: #4A3525;
-        font-size: 1.18rem;
-        font-weight: 700;
-        line-height: 1;
+        font-size: .8rem;
     }
 
-    .transaction-summary-icon {
-        width: 34px;
-        height: 34px;
-        flex: 0 0 34px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        border-radius: 9px;
-        background: #F0E6D6;
-        color: #6F4E37;
+    .transaction-pill.completed i { color: #2E7D4F; }
+    .transaction-pill.cancelled i { color: #B3261E; }
+
+    a.transaction-pill {
+        text-decoration: none;
+        cursor: pointer;
+        transition: background .15s ease, border-color .15s ease;
     }
 
+    a.transaction-pill:hover {
+        border-color: #6F4E37;
+        background: #F3EBE3;
+        color: #4A3525;
+    }
+
+    a.transaction-pill.active {
+        border-color: #6F4E37;
+        background: #6F4E37;
+        color: #FFFFFF;
+    }
+
+    a.transaction-pill.active strong,
+    a.transaction-pill.active i {
+        color: #FFFFFF;
+    }
+
+    .transactions-panel.is-loading {
+        opacity: .6;
+        pointer-events: none;
+    }
+
+    /* About 8 rows visible, the rest scrolls inside the panel. */
     .transaction-table-wrap {
-        overflow-x: auto;
+        max-height: 340px;
+        overflow: auto;
     }
 
     .transaction-table {
         width: 100%;
-        min-width: 690px;
+        min-width: 440px;
         border-collapse: collapse;
     }
 
     .transaction-table th {
-        padding: 11px 16px;
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        padding: 8px 10px;
         border-bottom: 2px solid #8B6A55;
         background: #FBF8F4;
         color: #7B6D62;
-        font-size: .66rem;
+        font-size: .64rem;
         font-weight: 500;
         letter-spacing: .35px;
         text-align: left;
@@ -1005,11 +1614,17 @@ require_once '../includes/header.php';
     }
 
     .transaction-table td {
-        padding: 13px 16px;
-        border-bottom: 1px solid #D8C9BD;
+        padding: 6px 10px;
+        border-bottom: 1px solid #E6DAD0;
         color: #4B4038;
         font-size: .76rem;
         vertical-align: middle;
+    }
+
+    .transaction-table .order-number,
+    .transaction-table .status-badge,
+    .transaction-table strong {
+        white-space: nowrap;
     }
 
     .transaction-table tbody tr:last-child td {
@@ -1026,7 +1641,8 @@ require_once '../includes/header.php';
     }
 
     .claim-number {
-        margin-top: 2px;
+        display: block;
+        margin-top: 1px;
         color: #8A7D72;
         font-size: .65rem;
     }
@@ -1095,10 +1711,6 @@ require_once '../includes/header.php';
         .dashboard-header {
             flex-direction: column;
         }
-
-        .transaction-summary {
-            grid-template-columns: 1fr;
-        }
     }
 
     @media (max-width: 560px) {
@@ -1111,7 +1723,12 @@ require_once '../includes/header.php';
         }
 
         .chart-bars {
+            --chart-h: 100px;
             gap: 6px;
+        }
+
+        .chart-amount {
+            font-size: .6rem;
         }
 
         .feedback-item-top {
@@ -1204,6 +1821,11 @@ require_once '../includes/header.php';
             </div>
 
             <!-- =====================================================
+                 SALES OVERVIEW + ORDER STATUS (side by side)
+            ====================================================== -->
+            <div class="dashboard-duo">
+
+            <!-- =====================================================
                  SALES OVERVIEW
             ====================================================== -->
             <section class="dashboard-panel">
@@ -1221,6 +1843,8 @@ require_once '../includes/header.php';
                         </div>
 
                         <div>
+                            <div class="panel-total-caption">Total · last 7 days</div>
+
                             <div class="panel-total">
                                 ₱<?= number_format($weeklySalesTotal, 2) ?>
                             </div>
@@ -1241,13 +1865,19 @@ require_once '../includes/header.php';
 
                                 <?php
                                 $barHeight = $maxDailySales > 0
-                                    ? max(4, ($day['amount'] / $maxDailySales) * 155)
+                                    ? max(4, ($day['amount'] / $maxDailySales) * 120)
                                     : 4;
 
                                 $isToday = $day['date'] === date('Y-m-d');
                                 ?>
 
-                                <div class="chart-day <?= $isToday ? 'today' : '' ?>">
+                                <div class="chart-day <?= $isToday ? 'today' : '' ?> <?= $day['amount'] <= 0 ? 'empty' : '' ?>">
+
+                                    <div class="chart-tooltip">
+                                        <strong>₱<?= number_format($day['amount'], 2) ?></strong>
+                                        <?= htmlspecialchars($day['short_date']) ?> ·
+                                        <?= (int)$day['orders'] ?> order<?= $day['orders'] === 1 ? '' : 's' ?>
+                                    </div>
 
                                     <div class="chart-amount">
                                         ₱<?= number_format($day['amount'], 0) ?>
@@ -1258,7 +1888,6 @@ require_once '../includes/header.php';
                                         <div
                                             class="chart-bar"
                                             style="height: <?= number_format($barHeight, 2, '.', '') ?>px;"
-                                            title="<?= htmlspecialchars($day['short_date']) ?>: ₱<?= number_format($day['amount'], 2) ?>"
                                         ></div>
 
                                     </div>
@@ -1280,11 +1909,6 @@ require_once '../includes/header.php';
                     </div>
 
                 </section>
-
-            <!-- =====================================================
-                 ORDER STATUS + NOTIFICATIONS
-            ====================================================== -->
-            <div class="dashboard-duo">
 
                 <section class="dashboard-panel">
 
@@ -1351,6 +1975,13 @@ require_once '../includes/header.php';
                     </div>
 
                 </section>
+
+            </div>
+
+            <!-- =====================================================
+                 RECENT NOTIFICATIONS + TODAY'S TRANSACTIONS (side by side)
+            ====================================================== -->
+            <div class="dashboard-duo dashboard-duo-notify">
 
                 <section class="dashboard-panel">
 
@@ -1455,190 +2086,10 @@ require_once '../includes/header.php';
 
                 </section>
 
-            </div>
-
-            <!-- =====================================================
-                 CUSTOMER FEEDBACK
-            ====================================================== -->
-            <section class="dashboard-panel feedback-panel" id="feedbackPanel">
-
-                <div class="dashboard-panel-header">
-
-                    <div>
-                        <h2 class="panel-heading">
-                            Recent Customer Feedback
-                        </h2>
-
-                        <p class="panel-subheading">
-                            Latest comments from completed orders
-                        </p>
-                    </div>
-
-                    <div class="feedback-icon" title="<?= (int)$unreadFeedback ?> unread">
-                        <i class="bi bi-chat-left-text"></i>
-
-                        <?php if ($unreadFeedback > 0): ?>
-                            <span class="feedback-icon-badge">
-                                <?= $unreadFeedback > 99 ? '99+' : (int)$unreadFeedback ?>
-                            </span>
-                        <?php endif; ?>
-                    </div>
-
-                </div>
-
-                <div class="feedback-list">
-
-                    <?php if (empty($recentFeedback)): ?>
-
-                        <div class="empty-dashboard">
-                            No customer feedback yet.
-                        </div>
-
-                    <?php else: ?>
-
-                        <?php foreach ($recentFeedback as $feedbackIndex => $feedback): ?>
-
-                            <?php
-                            $feedbackIsUnread = ((int)$feedback['is_read'] === 0);
-                            $feedbackTime = !empty($feedback['created_at'])
-                                ? strtotime($feedback['created_at'])
-                                : false;
-                            $feedbackShortDate = $feedbackTime ? date('M d', $feedbackTime) : '';
-                            $feedbackFullDate  = $feedbackTime ? date('M d, Y • h:i A', $feedbackTime) : '';
-                            $feedbackHidden    = $feedbackIndex >= 3;
-                            ?>
-
-                            <div
-                                class="feedback-item<?= $feedbackIsUnread ? ' unread' : '' ?><?= $feedbackHidden ? ' feedback-extra' : '' ?>"
-                                <?= $feedbackHidden ? 'hidden' : '' ?>
-                            >
-
-                                <div class="feedback-item-top">
-
-                                    <div class="feedback-name-wrap">
-                                        <span class="feedback-name">
-                                            <?= htmlspecialchars((string)$feedback['display_name']) ?>
-                                        </span>
-
-                                        <?php if ($feedback['customer_id'] === null): ?>
-                                            <span class="feedback-badge guest">Guest</span>
-                                        <?php endif; ?>
-
-                                        <?php if ($feedbackIsUnread): ?>
-                                            <span class="feedback-badge new">NEW</span>
-                                        <?php endif; ?>
-                                    </div>
-
-                                    <span
-                                        class="feedback-date"
-                                        title="<?= htmlspecialchars($feedbackFullDate) ?>"
-                                    >
-                                        <?= htmlspecialchars($feedbackShortDate) ?>
-                                    </span>
-
-                                </div>
-
-                                <p class="feedback-message"><?= htmlspecialchars((string)$feedback['message']) ?></p>
-
-                                <div class="feedback-item-bottom">
-
-                                    <span class="feedback-order">
-                                        Order #<?= htmlspecialchars((string)($feedback['order_number'] ?? 'N/A')) ?>
-                                    </span>
-
-                                    <div class="feedback-actions">
-
-                                        <form method="post" action="dashboard.php#feedbackPanel">
-                                            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
-                                            <input type="hidden" name="feedback_id" value="<?= (int)$feedback['id'] ?>">
-                                            <input type="hidden" name="feedback_action" value="archive">
-                                            <button
-                                                type="submit"
-                                                class="feedback-icon-btn danger"
-                                                title="Archive"
-                                                aria-label="Archive feedback"
-                                            >
-                                                <i class="bi bi-archive"></i>
-                                            </button>
-                                        </form>
-
-                                    </div>
-
-                                </div>
-
-                            </div>
-
-                        <?php endforeach; ?>
-
-                    <?php endif; ?>
-
-                </div>
-
-                <?php if (!empty($recentFeedback)): ?>
-                    <div class="feedback-footer">
-
-                        <?php if (count($recentFeedback) > 3): ?>
-                            <button
-                                type="button"
-                                class="feedback-view-all"
-                                data-feedback-toggle
-                                data-total="<?= (int)count($recentFeedback) ?>"
-                            >
-                                View All Feedback (<?= (int)count($recentFeedback) ?>) &rarr;
-                            </button>
-                        <?php else: ?>
-                            <span class="feedback-order">
-                                Showing all <?= (int)count($recentFeedback) ?> feedback
-                            </span>
-                        <?php endif; ?>
-
-                        <?php if ($unreadFeedback > 0): ?>
-                            <a
-                                class="feedback-markall"
-                                href="dashboard.php?read_feedback=all#feedbackPanel"
-                            >
-                                Mark all as read
-                            </a>
-                        <?php endif; ?>
-
-                    </div>
-                <?php endif; ?>
-
-                <script>
-                (function () {
-                    var panel = document.getElementById('feedbackPanel');
-                    if (!panel) return;
-
-                    var button = panel.querySelector('[data-feedback-toggle]');
-                    if (!button) return;
-
-                    var list = panel.querySelector('.feedback-list');
-                    var extras = panel.querySelectorAll('.feedback-extra');
-                    var total = button.getAttribute('data-total');
-                    var open = false;
-
-                    button.addEventListener('click', function () {
-                        open = !open;
-
-                        extras.forEach(function (item) {
-                            item.hidden = !open;
-                        });
-
-                        list.classList.toggle('is-expanded', open);
-
-                        button.innerHTML = open
-                            ? 'Show less &uarr;'
-                            : 'View All Feedback (' + total + ') &rarr;';
-                    });
-                })();
-                </script>
-
-            </section>
-
             <!-- =====================================================
                  TODAY'S TRANSACTIONS
             ====================================================== -->
-            <section class="dashboard-panel">
+            <section class="dashboard-panel transactions-panel" id="transactionsPanel">
 
                     <div class="dashboard-panel-header">
 
@@ -1652,54 +2103,43 @@ require_once '../includes/header.php';
                             </p>
                         </div>
 
+                        <div class="transaction-summary">
+                            <?php /* Click to show only that status; click again to show all. */ ?>
+                            <a
+                                class="transaction-pill completed <?= $txStatus === 'completed' ? 'active' : '' ?>"
+                                href="<?= htmlspecialchars(dashboardTransactionsUrl($txStatus === 'completed' ? 'all' : 'completed')) ?>"
+                                aria-pressed="<?= $txStatus === 'completed' ? 'true' : 'false' ?>"
+                                title="<?= $txStatus === 'completed' ? 'Show all' : 'Show completed only' ?>"
+                            >
+                                <i class="bi bi-check2-circle"></i>
+                                Completed <strong><?= number_format($completedTransactionsToday) ?></strong>
+                            </a>
+
+                            <a
+                                class="transaction-pill cancelled <?= $txStatus === 'cancelled' ? 'active' : '' ?>"
+                                href="<?= htmlspecialchars(dashboardTransactionsUrl($txStatus === 'cancelled' ? 'all' : 'cancelled')) ?>"
+                                aria-pressed="<?= $txStatus === 'cancelled' ? 'true' : 'false' ?>"
+                                title="<?= $txStatus === 'cancelled' ? 'Show all' : 'Show cancelled only' ?>"
+                            >
+                                <i class="bi bi-x-circle"></i>
+                                Cancelled <strong><?= number_format($cancelledTransactionsToday) ?></strong>
+                            </a>
+                        </div>
+
                     </div>
 
                     <div class="dashboard-panel-body">
 
-                        <div class="transaction-summary">
-
-                            <div class="transaction-summary-card">
-
-                                <div>
-                                    <div class="transaction-summary-label">
-                                        Completed Today
-                                    </div>
-
-                                    <div class="transaction-summary-value">
-                                        <?= number_format($completedTransactionsToday) ?>
-                                    </div>
-                                </div>
-
-                                <div class="transaction-summary-icon">
-                                    <i class="bi bi-check2-circle"></i>
-                                </div>
-
-                            </div>
-
-                            <div class="transaction-summary-card">
-
-                                <div>
-                                    <div class="transaction-summary-label">
-                                        Cancelled Today
-                                    </div>
-
-                                    <div class="transaction-summary-value">
-                                        <?= number_format($cancelledTransactionsToday) ?>
-                                    </div>
-                                </div>
-
-                                <div class="transaction-summary-icon">
-                                    <i class="bi bi-x-circle"></i>
-                                </div>
-
-                            </div>
-
-                        </div>
-
                         <?php if (empty($todayTransactionsList)): ?>
 
                             <div class="empty-dashboard">
-                                No completed or cancelled transactions today.
+                                <?php if ($txStatus === 'completed'): ?>
+                                    No completed orders today.
+                                <?php elseif ($txStatus === 'cancelled'): ?>
+                                    No cancelled orders today.
+                                <?php else: ?>
+                                    No completed or cancelled transactions today.
+                                <?php endif; ?>
                             </div>
 
                         <?php else: ?>
@@ -1726,16 +2166,10 @@ require_once '../includes/header.php';
 
                                                 <td>
 
-                                                    <div class="order-number">
-                                                        <?= htmlspecialchars($order['order_number'] ?: 'Order #' . (int)$order['id']) ?>
-                                                    </div>
+                                                    <span class="order-number"><?= htmlspecialchars($order['order_number'] ?: 'Order #' . (int)$order['id']) ?></span>
 
                                                     <?php if (!empty($order['claim_number'])): ?>
-
-                                                        <div class="claim-number">
-                                                            <?= htmlspecialchars($order['claim_number']) ?>
-                                                        </div>
-
+                                                        <span class="claim-number"><?= htmlspecialchars($order['claim_number']) ?></span>
                                                     <?php endif; ?>
 
                                                 </td>
@@ -1787,6 +2221,567 @@ require_once '../includes/header.php';
                     </div>
 
                 </section>
+
+                <script>
+                /* Completed / Cancelled buttons update the list without a page refresh. */
+                (function () {
+                    var panel = document.getElementById('transactionsPanel');
+
+                    if (!panel || !window.fetch || !window.DOMParser) {
+                        return;
+                    }
+
+                    panel.addEventListener('click', function (event) {
+                        var pill = event.target.closest('a.transaction-pill');
+
+                        if (!pill) {
+                            return;
+                        }
+
+                        event.preventDefault();
+                        panel.classList.add('is-loading');
+
+                        fetch(pill.href, { credentials: 'same-origin' })
+                            .then(function (response) {
+                                if (!response.ok) {
+                                    throw new Error('Request failed');
+                                }
+
+                                return response.text();
+                            })
+                            .then(function (html) {
+                                var fresh = new DOMParser()
+                                    .parseFromString(html, 'text/html')
+                                    .getElementById('transactionsPanel');
+
+                                if (!fresh) {
+                                    throw new Error('Transactions not found');
+                                }
+
+                                panel.innerHTML = fresh.innerHTML;
+                                history.replaceState(null, '', pill.href.split('#')[0] + '#transactionsPanel');
+                            })
+                            .catch(function () {
+                                window.location.href = pill.href;
+                            })
+                            .finally(function () {
+                                panel.classList.remove('is-loading');
+                            });
+                    });
+                })();
+                </script>
+
+            </div>
+
+            <!-- =====================================================
+                 CUSTOMER FEEDBACK (full width, 2-column cards, bottom)
+            ====================================================== -->
+            <div class="dashboard-duo dashboard-duo-bottom">
+
+            <section class="dashboard-panel feedback-panel" id="feedbackPanel">
+
+                <div class="feedback-dropdown">
+
+                    <div class="feedback-summary">
+                        <span class="feedback-summary-icon">
+                            <i class="bi bi-chat-left-text"></i>
+
+                            <?php if ($unreadFeedback > 0): ?>
+                                <span class="feedback-summary-badge">
+                                    <?= $unreadFeedback > 99 ? '99+' : (int)$unreadFeedback ?>
+                                </span>
+                            <?php endif; ?>
+                        </span>
+
+                        <span class="feedback-summary-text">
+                            <span class="panel-heading d-block">Customer Feedback</span>
+                            <span class="panel-subheading d-block">
+                                <?= number_format($unreadFeedback) ?> unread
+                                &middot;
+                                <?= number_format($fbInboxCount) ?> in inbox
+                            </span>
+                        </span>
+
+                    </div>
+
+                    <?php $fbCurrentUrl = dashboardFeedbackUrl(); ?>
+
+                    <div id="feedbackContent">
+
+                    <div class="feedback-toolbar">
+
+                        <a class="feedback-tab <?= $fbView === 'inbox' ? 'active' : '' ?>" href="<?= htmlspecialchars(dashboardFeedbackUrl(['fb_view' => 'inbox', 'fb_page' => 1])) ?>">
+                            Inbox <span class="feedback-tab-count"><?= number_format($fbInboxCount) ?></span>
+                        </a>
+
+                        <a class="feedback-tab <?= $fbView === 'archived' ? 'active' : '' ?>" href="<?= htmlspecialchars(dashboardFeedbackUrl(['fb_view' => 'archived', 'fb_page' => 1])) ?>">
+                            Deleted <span class="feedback-tab-count"><?= number_format($fbArchivedCount) ?></span>
+                        </a>
+
+                        <form method="GET" action="dashboard.php#feedbackPanel" class="feedback-filter">
+                            <input type="hidden" name="fb_view" value="<?= htmlspecialchars($fbView) ?>">
+
+                            <select name="fb_read" aria-label="Read status">
+                                <option value="all" <?= $fbRead === 'all' ? 'selected' : '' ?>>All</option>
+                                <option value="unread" <?= $fbRead === 'unread' ? 'selected' : '' ?>>Unread</option>
+                                <option value="read" <?= $fbRead === 'read' ? 'selected' : '' ?>>Read</option>
+                            </select>
+
+                            <input
+                                type="text"
+                                name="fb_q"
+                                enterkeyhint="search"
+                                value="<?= htmlspecialchars($fbSearch) ?>"
+                                placeholder="Search feedback..."
+                                aria-label="Search feedback"
+                                autocomplete="off"
+                            >
+
+                        </form>
+
+                        <?php if ($fbView === 'inbox' && $unreadFeedback > 0): ?>
+                            <form method="POST" action="dashboard.php">
+                                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
+                                <input type="hidden" name="fb_return" value="<?= htmlspecialchars($fbCurrentUrl) ?>">
+                                <input type="hidden" name="feedback_action" value="read_all">
+                                <button type="submit" class="feedback-btn outline">
+                                    <i class="bi bi-check2-all"></i> Mark all read
+                                </button>
+                            </form>
+                        <?php endif; ?>
+
+                    </div>
+
+                    <?php if (empty($recentFeedback)): ?>
+
+                        <div class="empty-dashboard">
+                            <?php if ($fbSearch !== '' || $fbRead !== 'all'): ?>
+                                No feedback matched your search.
+                            <?php elseif ($fbView === 'archived'): ?>
+                                No deleted feedback.
+                            <?php else: ?>
+                                No customer feedback yet.
+                            <?php endif; ?>
+                        </div>
+
+                    <?php else: ?>
+
+                        <div class="feedback-grid">
+
+                        <?php foreach ($recentFeedback as $feedback): ?>
+                            <?php
+                            $feedbackId = (int)$feedback['id'];
+                            $feedbackIsUnread = (int)$feedback['is_read'] === 0;
+                            $feedbackTime = !empty($feedback['created_at']) ? strtotime((string)$feedback['created_at']) : false;
+                            $feedbackOrderNumber = (string)($feedback['order_number'] ?? '');
+                            /* Opens the order in Orders > Order History. */
+                            $feedbackOrderUrl = $feedbackOrderNumber !== ''
+                                ? 'orders.php?' . http_build_query([
+                                    'cancelled_open' => '1',
+                                    'history_status' => 'completed',
+                                    'cancelled_period' => 'specific_month',
+                                    'cancelled_month' => !empty($feedback['closed_at']) ? date('Y-m', strtotime((string)$feedback['closed_at'])) : date('Y-m'),
+                                    'cancelled_q' => $feedbackOrderNumber,
+                                ])
+                                : '';
+                            $feedbackButtons = $fbView === 'archived'
+                                ? [['restore', 'bi-arrow-counterclockwise', 'Restore']]
+                                : [
+                                    $feedbackIsUnread
+                                        ? ['read', 'bi-envelope-open', 'Mark read']
+                                        : ['unread', 'bi-envelope', 'Mark unread'],
+                                    ['archive', 'bi-trash', 'Delete'],
+                                ];
+                            ?>
+
+                            <article class="feedback-item<?= $feedbackIsUnread ? ' unread' : '' ?>">
+
+                                <div class="feedback-item-top">
+                                    <div>
+                                        <div class="feedback-name-wrap">
+                                            <span class="feedback-name"><?= htmlspecialchars((string)$feedback['display_name']) ?></span>
+
+                                            <?php if ($feedback['customer_id'] === null): ?>
+                                                <span class="feedback-badge guest">Guest</span>
+                                            <?php endif; ?>
+
+                                            <?php if ($feedbackIsUnread): ?>
+                                                <span class="feedback-badge new">NEW</span>
+                                            <?php endif; ?>
+                                        </div>
+
+                                        <?php if (!empty($feedback['customer_email']) || !empty($feedback['customer_phone'])): ?>
+                                            <div class="feedback-contact">
+                                                <?= htmlspecialchars(implode(' · ', array_filter([
+                                                    (string)($feedback['customer_email'] ?? ''),
+                                                    (string)($feedback['customer_phone'] ?? ''),
+                                                ]))) ?>
+                                            </div>
+                                        <?php endif; ?>
+                                    </div>
+
+                                    <span class="feedback-date">
+                                        <?= $feedbackTime ? htmlspecialchars(date('M d, Y · h:i A', $feedbackTime)) : '' ?>
+                                    </span>
+                                </div>
+
+                                <p class="feedback-message"><?= htmlspecialchars((string)$feedback['message']) ?></p>
+
+                                <div class="feedback-item-bottom">
+
+                                    <div class="feedback-order">
+                                        <span>Order <strong><?= htmlspecialchars($feedbackOrderNumber !== '' ? $feedbackOrderNumber : 'N/A') ?></strong></span>
+
+                                        <?php if (!empty($feedback['claim_number'])): ?>
+                                            <span>Claim <?= htmlspecialchars((string)$feedback['claim_number']) ?></span>
+                                        <?php endif; ?>
+
+                                        <?php if ($feedback['total_amount'] !== null): ?>
+                                            <span>₱<?= number_format((float)$feedback['total_amount'], 2) ?></span>
+                                        <?php endif; ?>
+
+                                        <?php if ($feedbackOrderUrl !== ''): ?>
+                                            <a href="<?= htmlspecialchars($feedbackOrderUrl) ?>">View order <i class="bi bi-arrow-right"></i></a>
+                                        <?php endif; ?>
+                                    </div>
+
+                                    <div class="feedback-actions">
+                                        <?php foreach ($feedbackButtons as [$fbAction, $fbIcon, $fbLabel]): ?>
+                                            <form method="POST" action="dashboard.php">
+                                                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
+                                                <input type="hidden" name="fb_return" value="<?= htmlspecialchars($fbCurrentUrl) ?>">
+                                                <input type="hidden" name="feedback_id" value="<?= $feedbackId ?>">
+                                                <input type="hidden" name="feedback_action" value="<?= $fbAction ?>">
+                                                <button type="submit" class="feedback-btn outline<?= $fbAction === 'archive' ? ' danger' : '' ?>" data-feedback-action="<?= $fbAction ?>">
+                                                    <i class="bi <?= $fbIcon ?>"></i> <?= $fbLabel ?>
+                                                </button>
+                                            </form>
+                                        <?php endforeach; ?>
+                                    </div>
+
+                                </div>
+
+                            </article>
+
+                        <?php endforeach; ?>
+
+                        </div>
+
+                    <?php endif; ?>
+
+                    <?php if ($fbTotal > 0): ?>
+                        <div class="feedback-footer">
+                            <span>
+                                Showing <?= (($fbPage - 1) * $fbPerPage) + 1 ?>–<?= min($fbPage * $fbPerPage, $fbTotal) ?>
+                                of <?= number_format($fbTotal) ?>
+                            </span>
+
+                            <?php if ($fbPages > 1): ?>
+                                <nav class="feedback-pages" aria-label="Feedback pages">
+                                    <a class="feedback-page <?= $fbPage <= 1 ? 'disabled' : '' ?>" href="<?= htmlspecialchars(dashboardFeedbackUrl(['fb_page' => max(1, $fbPage - 1)])) ?>" aria-label="Previous">&lsaquo;</a>
+
+                                    <?php for ($fbP = max(1, $fbPage - 2); $fbP <= min($fbPages, $fbPage + 2); $fbP++): ?>
+                                        <a class="feedback-page <?= $fbP === $fbPage ? 'active' : '' ?>" href="<?= htmlspecialchars(dashboardFeedbackUrl(['fb_page' => $fbP])) ?>"><?= $fbP ?></a>
+                                    <?php endfor; ?>
+
+                                    <a class="feedback-page <?= $fbPage >= $fbPages ? 'disabled' : '' ?>" href="<?= htmlspecialchars(dashboardFeedbackUrl(['fb_page' => min($fbPages, $fbPage + 1)])) ?>" aria-label="Next">&rsaquo;</a>
+                                </nav>
+                            <?php endif; ?>
+                        </div>
+                    <?php endif; ?>
+
+                    </div>
+
+                </div>
+
+                <script>
+                /* Feedback tabs, filter, search, pages and buttons load
+                   without refreshing the whole dashboard. */
+                (function () {
+                    var panel = document.getElementById('feedbackPanel');
+
+                    if (!panel || !window.fetch || !window.DOMParser) {
+                        return;
+                    }
+
+                    /* =====================================================
+                       ACTION TOAST (same toast used on orders.php)
+                    ===================================================== */
+                    var feedbackToastMessages = {
+                        read:    { title: 'Marked as read',    message: 'The feedback was marked as read.',          icon: 'bi-check-circle' },
+                        unread:  { title: 'Marked as unread',  message: 'The feedback was marked as unread.',        icon: 'bi-check-circle' },
+                        archive: { title: 'Feedback deleted',  message: 'The feedback was moved to Deleted.',        icon: 'bi-trash', type: 'cancel' },
+                        restore: { title: 'Feedback restored', message: 'The feedback was moved back to the inbox.', icon: 'bi-check-circle' },
+                        read_all:{ title: 'All marked as read',message: 'All unread feedback was marked as read.',   icon: 'bi-check-circle' }
+                    };
+
+                    function getToastStack() {
+                        var stack = document.getElementById('adminAjaxToastStack');
+
+                        if (!stack) {
+                            stack = document.createElement('div');
+                            stack.id = 'adminAjaxToastStack';
+                            stack.className = 'orders-toast-stack';
+                            stack.setAttribute('aria-live', 'polite');
+                            stack.setAttribute('aria-relevant', 'additions');
+                            document.body.appendChild(stack);
+                        }
+
+                        return stack;
+                    }
+
+                    function escapeToastText(value) {
+                        return String(value == null ? '' : value).replace(/[&<>"']/g, function (character) {
+                            return {
+                                '&': '&amp;',
+                                '<': '&lt;',
+                                '>': '&gt;',
+                                '"': '&quot;',
+                                "'": '&#039;'
+                            }[character];
+                        });
+                    }
+
+                    function showFeedbackToast(info) {
+                        if (!info) {
+                            return;
+                        }
+
+                        var stack = getToastStack();
+                        var toast = document.createElement('div');
+
+                        toast.className = 'orders-toast ' + (info.type === 'cancel' ? 'orders-toast-cancel' : 'orders-toast-success');
+                        toast.setAttribute('role', 'status');
+                        toast.innerHTML =
+                            '<span class="orders-toast-icon">' +
+                                '<i class="bi ' + escapeToastText(info.icon || 'bi-check-circle') + '"></i>' +
+                            '</span>' +
+                            '<span class="orders-toast-copy">' +
+                                '<strong class="orders-toast-title">' + escapeToastText(info.title) + '</strong>' +
+                                '<span class="orders-toast-message">' + escapeToastText(info.message) + '</span>' +
+                            '</span>' +
+                            '<button type="button" class="orders-toast-close" aria-label="Close notification">' +
+                                '<i class="bi bi-x-lg"></i>' +
+                            '</button>' +
+                            '<span class="orders-toast-progress" aria-hidden="true"></span>';
+
+                        stack.appendChild(toast);
+
+                        var isClosing = false;
+                        var closeTimer = null;
+
+                        function closeThisToast() {
+                            if (isClosing) {
+                                return;
+                            }
+                            isClosing = true;
+
+                            if (closeTimer !== null) {
+                                window.clearTimeout(closeTimer);
+                            }
+
+                            toast.classList.add('is-closing');
+                            window.setTimeout(function () {
+                                toast.remove();
+                                var currentStack = document.getElementById('adminAjaxToastStack');
+                                if (currentStack && currentStack.childElementCount === 0) {
+                                    currentStack.remove();
+                                }
+                            }, 190);
+                        }
+
+                        var closeButton = toast.querySelector('.orders-toast-close');
+                        if (closeButton) {
+                            closeButton.addEventListener('click', closeThisToast);
+                        }
+
+                        closeTimer = window.setTimeout(closeThisToast, 3500);
+                    }
+
+                    /* =====================================================
+                       DELETE CONFIRMATION
+                    ===================================================== */
+                    function confirmDelete(onConfirm) {
+                        var previousFocus = document.activeElement;
+                        var overlay = document.createElement('div');
+
+                        overlay.className = 'fb-confirm-overlay';
+                        overlay.innerHTML =
+                            '<div class="fb-confirm-box" role="alertdialog" aria-modal="true" ' +
+                                'aria-labelledby="fbConfirmTitle" aria-describedby="fbConfirmText">' +
+                                '<span class="fb-confirm-icon"><i class="bi bi-trash"></i></span>' +
+                                '<h3 class="fb-confirm-title" id="fbConfirmTitle">Delete this message?</h3>' +
+                                '<p class="fb-confirm-text" id="fbConfirmText">' +
+                                    'Are you sure you want to delete this message? ' +
+                                    'It will be moved to the Deleted tab, where you can restore it.' +
+                                '</p>' +
+                                '<div class="fb-confirm-actions">' +
+                                    '<button type="button" class="feedback-btn outline" data-confirm="cancel">Cancel</button>' +
+                                    '<button type="button" class="feedback-btn danger-solid" data-confirm="yes">' +
+                                        '<i class="bi bi-trash"></i> Delete' +
+                                    '</button>' +
+                                '</div>' +
+                            '</div>';
+
+                        function closeConfirm() {
+                            document.removeEventListener('keydown', onKey);
+                            overlay.remove();
+
+                            if (previousFocus && previousFocus.focus) {
+                                previousFocus.focus();
+                            }
+                        }
+
+                        function onKey(event) {
+                            if (event.key === 'Escape') {
+                                closeConfirm();
+                            }
+                        }
+
+                        overlay.addEventListener('click', function (event) {
+                            if (event.target === overlay || event.target.closest('[data-confirm="cancel"]')) {
+                                closeConfirm();
+                                return;
+                            }
+
+                            if (event.target.closest('[data-confirm="yes"]')) {
+                                closeConfirm();
+                                onConfirm();
+                            }
+                        });
+
+                        document.addEventListener('keydown', onKey);
+                        document.body.appendChild(overlay);
+                        overlay.querySelector('[data-confirm="cancel"]').focus();
+                    }
+
+                    var controller = null;
+                    var searchTimer = null;
+
+                    function load(url, options, toastInfo) {
+                        if (controller) {
+                            controller.abort();
+                        }
+
+                        controller = new AbortController();
+                        panel.classList.add('is-loading');
+
+                        var request = Object.assign({
+                            credentials: 'same-origin',
+                            signal: controller.signal
+                        }, options || {});
+
+                        fetch(url, request)
+                            .then(function (response) {
+                                if (!response.ok) {
+                                    throw new Error('Request failed');
+                                }
+
+                                return response.text().then(function (html) {
+                                    return { html: html, url: response.url };
+                                });
+                            })
+                            .then(function (result) {
+                                var doc = new DOMParser().parseFromString(result.html, 'text/html');
+                                var freshSummary = doc.querySelector('#feedbackPanel .feedback-summary');
+                                var freshContent = doc.getElementById('feedbackContent');
+
+                                if (!freshSummary || !freshContent) {
+                                    throw new Error('Feedback not found');
+                                }
+
+                                /* Keep typing in the search box while results update. */
+                                var search = panel.querySelector('input[name="fb_q"]');
+                                var keepFocus = search && document.activeElement === search;
+                                var caret = keepFocus ? search.selectionStart : 0;
+
+                                panel.querySelector('.feedback-summary').innerHTML = freshSummary.innerHTML;
+                                document.getElementById('feedbackContent').innerHTML = freshContent.innerHTML;
+
+                                if (keepFocus) {
+                                    var newSearch = panel.querySelector('input[name="fb_q"]');
+                                    newSearch.focus();
+                                    newSearch.setSelectionRange(caret, caret);
+                                }
+
+                                history.replaceState(null, '', result.url.split('#')[0] + '#feedbackPanel');
+
+                                /* Mark read / unread / delete / restore succeeded. */
+                                showFeedbackToast(toastInfo);
+                            })
+                            .catch(function (error) {
+                                if (error.name !== 'AbortError') {
+                                    window.location.href = 'dashboard.php#feedbackPanel';
+                                }
+                            })
+                            .finally(function () {
+                                panel.classList.remove('is-loading');
+                            });
+                    }
+
+                    function loadFilter(form) {
+                        var query = new URLSearchParams(new FormData(form)).toString();
+                        load('dashboard.php?' + query);
+                    }
+
+                    panel.addEventListener('click', function (event) {
+                        var link = event.target.closest('a.feedback-tab, a.feedback-page');
+
+                        if (!link) {
+                            return;
+                        }
+
+                        event.preventDefault();
+
+                        if (!link.classList.contains('disabled') && !link.classList.contains('active')) {
+                            load(link.href);
+                        }
+                    });
+
+                    panel.addEventListener('submit', function (event) {
+                        var form = event.target;
+
+                        if (!form.closest('#feedbackContent')) {
+                            return;
+                        }
+
+                        event.preventDefault();
+                        clearTimeout(searchTimer);
+
+                        if (form.method.toLowerCase() === 'post') {
+                            var actionField = form.elements['feedback_action'];
+
+                            var toastInfo = actionField ? feedbackToastMessages[actionField.value] : null;
+
+                            var formData = new FormData(form);
+                            var sendAction = function () {
+                                load('dashboard.php', { method: 'POST', body: formData }, toastInfo);
+                            };
+
+                            /* Deleting asks first; everything else goes straight through. */
+                            if (actionField && actionField.value === 'archive') {
+                                confirmDelete(sendAction);
+                            } else {
+                                sendAction();
+                            }
+                        } else {
+                            loadFilter(form);
+                        }
+                    });
+
+                    panel.addEventListener('change', function (event) {
+                        if (event.target.name === 'fb_read') {
+                            clearTimeout(searchTimer);
+                            loadFilter(event.target.form);
+                        }
+                    });
+
+                })();
+                </script>
+
+            </section>
+
+            </div>
 
         </div>
 

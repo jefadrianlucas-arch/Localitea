@@ -1,6 +1,29 @@
 <?php
 
 session_start();
+date_default_timezone_set('Asia/Manila');
+
+/* Session-bound request protection for cart edits and checkout. */
+if (empty($_SESSION['csrf_token']) || !is_string($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
+/* One-use checkout token: a successful checkout consumes this value. */
+if (
+    !empty($_SESSION['cart']) &&
+    (empty($_SESSION['checkout_request_token']) || !is_string($_SESSION['checkout_request_token']))
+) {
+    $_SESSION['checkout_request_token'] = bin2hex(random_bytes(32));
+}
+
+$cartCsrfToken = (string)$_SESSION['csrf_token'];
+$cartCheckoutRequestToken = (string)($_SESSION['checkout_request_token'] ?? '');
+
+$cartManilaNow = new DateTimeImmutable('now', new DateTimeZone('Asia/Manila'));
+$cartManilaNowTimestamp = $cartManilaNow->getTimestamp();
+$cartNowPickupMinute = ((int)$cartManilaNow->format('G') * 60) + (int)$cartManilaNow->format('i');
+$cartNowPickupAvailable = ($cartNowPickupMinute >= 600 && $cartNowPickupMinute <= 1320);
+
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
@@ -22,6 +45,16 @@ if (
     $_SERVER['REQUEST_METHOD'] === 'POST' &&
     ($_POST['cart_action'] ?? '') === 'edit_cart_item'
 ) {
+    $postedCsrfToken = $_POST['csrf_token'] ?? '';
+    if (
+        !is_string($postedCsrfToken) ||
+        empty($_SESSION['csrf_token']) ||
+        !hash_equals((string)$_SESSION['csrf_token'], $postedCsrfToken)
+    ) {
+        header('Location: cart.php?edit_error=' . urlencode('Your session expired. Please refresh the cart and try again.'));
+        exit;
+    }
+
     $cartKey = (string)($_POST['cart_key'] ?? '');
 
     if (
@@ -56,7 +89,8 @@ if (
         $discountIdName = trim(preg_replace('/\s+/', ' ', (string)($_POST['discount_id_name'] ?? '')));
         $discountIdNumber = strtoupper(trim((string)($_POST['discount_id_number'] ?? '')));
 
-        if ($discountIdName === '' || mb_strlen($discountIdName) > 100) {
+        $discountNameLength = preg_match_all('/./us', $discountIdName, $discountNameCharacters);
+        if ($discountIdName === '' || $discountNameLength === false || $discountNameLength > 100) {
             header('Location: cart.php?edit_error=' . urlencode('Please enter the name on your ID for the discount.'));
             exit;
         }
@@ -953,6 +987,20 @@ require_once '../includes/navbar.php';
         outline: 3px solid rgba(111, 78, 55, .35);
         outline-offset: 2px;
     }
+    .ck-choice.is-disabled .form-check-label {
+        background: #F7F2EB;
+        border-color: #D8C9BD;
+        color: #9A8B7D;
+        opacity: .72;
+        cursor: not-allowed;
+    }
+    .ck-choice.is-disabled .form-check-label i {
+        color: #A99A8C;
+    }
+    .ck-choice.is-disabled:hover .form-check-label {
+        background: #F7F2EB;
+        border-color: #D8C9BD;
+    }
 
     /* ---------- Order summary ---------- */
     .ck-summary-head {
@@ -1703,6 +1751,8 @@ require_once '../includes/navbar.php';
                 enctype="multipart/form-data"
                 onsubmit="return handleCheckoutSubmit(event)"
             >
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($cartCsrfToken, ENT_QUOTES, 'UTF-8') ?>">
+                <input type="hidden" name="checkout_request_token" value="<?= htmlspecialchars($cartCheckoutRequestToken, ENT_QUOTES, 'UTF-8') ?>">
 
                 <div class="ck-grid">
 
@@ -1734,6 +1784,8 @@ require_once '../includes/navbar.php';
                                         class="form-control custom-input"
                                         value="<?= htmlspecialchars($prefillFullName) ?>"
                                         autocomplete="name"
+                                        minlength="2"
+                                        maxlength="100"
                                         required
                                     >
                                 </div>
@@ -1749,6 +1801,7 @@ require_once '../includes/navbar.php';
                                         value="<?= htmlspecialchars($prefillMobile) ?>"
                                         inputmode="tel"
                                         autocomplete="tel"
+                                        maxlength="13"
                                         required
                                     >
                                 </div>
@@ -1768,14 +1821,20 @@ require_once '../includes/navbar.php';
 
                             <div class="ck-choices">
 
-                                <div class="form-check ck-choice">
+                                <div
+                                    class="form-check ck-choice <?= $cartNowPickupAvailable ? '' : 'is-disabled' ?>"
+                                    id="nowPickupChoice"
+                                >
                                     <input
                                         class="form-check-input"
                                         type="radio"
                                         name="pickup_type"
                                         id="now"
                                         value="Now"
+                                        data-manila-server-now="<?= (int)$cartManilaNowTimestamp ?>"
+                                        aria-describedby="nowPickupAvailability"
                                         required
+                                        <?= $cartNowPickupAvailable ? '' : 'disabled' ?>
                                         onclick="togglePickupFields(false)"
                                     >
                                     <label class="form-check-label" for="now">
@@ -1799,6 +1858,18 @@ require_once '../includes/navbar.php';
                                 </div>
 
                             </div>
+                            <div
+                                id="nowPickupAvailability"
+                                class="form-text mt-2"
+                                role="status"
+                                aria-live="polite"
+                            >
+                                <?= $cartNowPickupAvailable
+                                    ? 'Pick-up Now is currently available.'
+                                    : ($cartNowPickupMinute < 600
+                                        ? 'Pick-up Now becomes available at 10:00 AM. Please choose Pick-up Later before then.'
+                                        : 'Pick-up Now is unavailable after 10:00 PM. Please choose Pick-up Later.') ?>
+                            </div>
 
                             <div class="ck-fields" id="pickup-later-fields">
 
@@ -1816,14 +1887,16 @@ require_once '../includes/navbar.php';
                                 </div>
 
                                 <div>
-                                    <label for="pickup_time" class="ck-field-label">Time (9AM-10PM)</label>
+                                    <label for="pickup_time" class="ck-field-label">Time (10AM-9:30PM, every 15 min)</label>
                                     <input
                                         type="time"
                                         name="pickup_time"
                                         id="pickup_time"
                                         class="form-control custom-input"
-                                        min="09:00"
-                                        max="22:00"
+                                        min="10:00"
+                                        max="21:30"
+                                        step="900"
+                                        title="Pick-up times are available every 15 minutes (e.g. 10:00, 10:15, 10:30)"
                                         disabled
                                     >
                                 </div>
@@ -2302,6 +2375,7 @@ require_once '../includes/navbar.php';
                                                 </div>
 
                                                 <form method="POST" action="cart.php">
+                                                    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($cartCsrfToken, ENT_QUOTES, 'UTF-8') ?>">
                                                     <input type="hidden" name="cart_action" value="edit_cart_item">
                                                     <input type="hidden" name="cart_key" value="<?= htmlspecialchars($key, ENT_QUOTES) ?>">
 
@@ -2755,7 +2829,135 @@ GCASH PAYMENT MODAL
 |--------------------------------------------------------------------------
 */
 
+const localiteaCartServerTime = Number(
+    document.getElementById('now')?.dataset.manilaServerNow || 0
+);
+const localiteaCartPagePerformanceStart = performance.now();
+
+function getManilaMinuteOfDay() {
+
+    if (!Number.isFinite(localiteaCartServerTime) || localiteaCartServerTime <= 0) {
+        return null;
+    }
+
+    const elapsedMilliseconds = performance.now() - localiteaCartPagePerformanceStart;
+    const estimatedServerNow = new Date(
+        (localiteaCartServerTime * 1000) + elapsedMilliseconds
+    );
+
+    try {
+        const parts = new Intl.DateTimeFormat('en-PH', {
+            timeZone: 'Asia/Manila',
+            hour: '2-digit',
+            minute: '2-digit',
+            hourCycle: 'h23'
+        }).formatToParts(estimatedServerNow);
+
+        const hour = Number(parts.find(part => part.type === 'hour')?.value);
+        const minute = Number(parts.find(part => part.type === 'minute')?.value);
+        if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+
+        return (hour * 60) + minute;
+    } catch (error) {
+        // Asia/Manila is UTC+8 and does not observe daylight-saving time.
+        const manilaDate = new Date(estimatedServerNow.getTime() + (8 * 60 * 60 * 1000));
+        return (manilaDate.getUTCHours() * 60) + manilaDate.getUTCMinutes();
+    }
+}
+
+function getManilaDateAndMinute() {
+    if (!Number.isFinite(localiteaCartServerTime) || localiteaCartServerTime <= 0) {
+        return null;
+    }
+
+    const elapsedMilliseconds = performance.now() - localiteaCartPagePerformanceStart;
+    const estimatedServerNow = new Date(
+        (localiteaCartServerTime * 1000) + elapsedMilliseconds
+    );
+
+    try {
+        const parts = new Intl.DateTimeFormat('en-PH', {
+            timeZone: 'Asia/Manila',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            hourCycle: 'h23'
+        }).formatToParts(estimatedServerNow);
+        const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+        const hour = Number(values.hour);
+        const minute = Number(values.minute);
+        if (!values.year || !values.month || !values.day || !Number.isFinite(hour) || !Number.isFinite(minute)) {
+            return null;
+        }
+        return {
+            date: `${values.year}-${values.month}-${values.day}`,
+            minuteOfDay: (hour * 60) + minute
+        };
+    } catch (error) {
+        const manilaDate = new Date(estimatedServerNow.getTime() + (8 * 60 * 60 * 1000));
+        const pad = value => String(value).padStart(2, '0');
+        return {
+            date: `${manilaDate.getUTCFullYear()}-${pad(manilaDate.getUTCMonth() + 1)}-${pad(manilaDate.getUTCDate())}`,
+            minuteOfDay: (manilaDate.getUTCHours() * 60) + manilaDate.getUTCMinutes()
+        };
+    }
+}
+
+function updateNowPickupAvailability(showExpiredMessage = false) {
+
+    const nowRadio = document.getElementById('now');
+    const laterRadio = document.getElementById('later');
+    const choice = document.getElementById('nowPickupChoice');
+    const availabilityNote = document.getElementById('nowPickupAvailability');
+
+    if (!nowRadio || !laterRadio || !choice) return false;
+
+    const currentMinute = getManilaMinuteOfDay();
+    const isAvailable = currentMinute !== null
+        && currentMinute >= (10 * 60)
+        && currentMinute <= (22 * 60);
+
+    nowRadio.disabled = !isAvailable;
+    choice.classList.toggle('is-disabled', !isAvailable);
+
+    if (availabilityNote) {
+        if (currentMinute === null) {
+            availabilityNote.textContent = 'Pick-up Now availability could not be checked. Please refresh the page.';
+        } else if (currentMinute < 10 * 60) {
+            availabilityNote.textContent = 'Pick-up Now becomes available at 10:00 AM. Please choose Pick-up Later before then.';
+        } else if (currentMinute > 22 * 60) {
+            availabilityNote.textContent = 'Pick-up Now is unavailable after 10:00 PM. Please choose Pick-up Later.';
+        } else {
+            availabilityNote.textContent = 'Pick-up Now is currently available.';
+        }
+    }
+
+    // If the cart remains open after the Now window closes, require a later time.
+    if (!isAvailable && nowRadio.checked) {
+        nowRadio.checked = false;
+        laterRadio.checked = true;
+        togglePickupFields(true);
+
+        if (showExpiredMessage && typeof showCartToast === 'function') {
+            showCartToast(
+                'Pick-up Now is available only from 10:00 AM to 10:00 PM. Please choose a pick-up time.',
+                'warning'
+            );
+        }
+    }
+
+    return isAvailable;
+}
+
 function togglePickupFields(isLater) {
+
+    // Recheck at the moment the Now option is selected.
+    if (!isLater && !updateNowPickupAvailability(false)) {
+        showCartToast('Pick-up Now becomes available at 10:00 AM. Please choose Pick-up Later.', 'warning');
+        return;
+    }
 
     const dateInput = document.getElementById('pickup_date');
     const timeInput = document.getElementById('pickup_time');
@@ -2869,36 +3071,70 @@ function validateTime() {
     if (laterRadio.checked) {
 
         if (!dateInput.value) {
-
             showCartToast("Please select a pick-up date.");
-
             dateInput.focus();
-
             return false;
         }
 
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(dateInput.value)) {
+            showCartToast("Please select a valid pick-up date.");
+            dateInput.focus();
+            return false;
+        }
+
+        const [year, month, day] = dateInput.value.split('-').map(Number);
+        const parsedDate = new Date(year, month - 1, day);
+        if (
+            parsedDate.getFullYear() !== year ||
+            parsedDate.getMonth() !== month - 1 ||
+            parsedDate.getDate() !== day
+        ) {
+            showCartToast("Please select a valid pick-up date.");
+            dateInput.focus();
+            return false;
+        }
 
         if (!timeInput.value) {
-
             showCartToast("Please select a pick-up time.");
-
             timeInput.focus();
-
             return false;
         }
 
-
-        if (
-            timeInput.value < "09:00" ||
-            timeInput.value > "22:00"
-        ) {
-
-            showCartToast(
-                "Please select a pick-up time between 9:00 AM and 10:00 PM."
-            );
-
+        if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(timeInput.value)) {
+            showCartToast("Please select a valid pick-up time.");
             timeInput.focus();
+            return false;
+        }
 
+        if (Number(timeInput.value.slice(3, 5)) % 15 !== 0) {
+            showCartToast("Pick-up times are every 15 minutes, such as 10:00, 10:15, or 10:30.");
+            timeInput.focus();
+            return false;
+        }
+
+        if (timeInput.value < "10:00" || timeInput.value > "21:30") {
+            showCartToast("Please select a pick-up time between 10:00 AM and 9:30 PM.");
+            timeInput.focus();
+            return false;
+        }
+
+        const manilaNow = getManilaDateAndMinute();
+        if (!manilaNow) {
+            showCartToast("The current Philippine time could not be checked. Please refresh the page.");
+            return false;
+        }
+
+        if (dateInput.value < manilaNow.date) {
+            showCartToast("Pick-up date cannot be in the past.");
+            dateInput.focus();
+            return false;
+        }
+
+        const selectedMinute = (Number(timeInput.value.slice(0, 2)) * 60)
+            + Number(timeInput.value.slice(3, 5));
+        if (dateInput.value === manilaNow.date && selectedMinute <= manilaNow.minuteOfDay) {
+            showCartToast("Please select a pick-up time that has not passed yet.");
+            timeInput.focus();
             return false;
         }
 
@@ -2911,25 +3147,10 @@ function validateTime() {
 
     if (nowRadio.checked) {
 
-        const currentTime = new Date();
-
-        const hours = currentTime.getHours();
-        const minutes = currentTime.getMinutes();
-
-        const currentMinutes = (hours * 60) + minutes;
-
-        const openingMinutes = 9 * 60;
-        const closingMinutes = 22 * 60;
-
-        if (
-            currentMinutes < openingMinutes ||
-            currentMinutes > closingMinutes
-        ) {
-
+        if (nowRadio.disabled || !updateNowPickupAvailability(false)) {
             showCartToast(
-                "The store is open from 9:00 AM to 10:00 PM. Please choose Pick-up Later."
+                "Pick-up Now is available only from 10:00 AM to 10:00 PM. Please choose Pick-up Later."
             );
-
             return false;
         }
 
@@ -2937,6 +3158,12 @@ function validateTime() {
 
     return true;
 }
+
+// Keep the Now option synchronized if the customer leaves the cart open.
+updateNowPickupAvailability(false);
+window.setInterval(function () {
+    updateNowPickupAvailability(true);
+}, 5000);
 
 
 /*
@@ -3069,6 +3296,11 @@ async function processCheckoutAjax() {
         }
 
         if (!response.ok || !data.success) {
+            if (data && data.refresh) {
+                showCartToast(data.message || 'Your cart needs to be refreshed.', 'warning');
+                window.setTimeout(() => window.location.reload(), 900);
+                return;
+            }
             throw new Error(
                 data.message || 'Unable to place your order right now.'
             );

@@ -41,134 +41,80 @@ if (
         WHERE n.recipient_role = 'customer'
           AND n.recipient_id = ?
         ORDER BY n.created_at DESC, n.id DESC
-        LIMIT 20
+        LIMIT 5
     ");
     $notificationStmt->execute([$user_id]);
     $customer_notifications = $notificationStmt->fetchAll(PDO::FETCH_ASSOC);
 }
-
-/* Which link is highlighted (display only). */
-$navbar_page      = basename((string) parse_url((string) ($_SERVER['PHP_SELF'] ?? ''), PHP_URL_PATH));
-$navbar_is_member = isset($_SESSION['user_id']) && ($_SESSION['user_role'] ?? '') === 'customer';
-$navbar_order_page = $navbar_is_member ? 'dashboard.php' : 'monitor-guest-order.php';
-
-$navbar_home = $navbar_page === 'index.php';
-$navbar_menu = in_array($navbar_page, ['menu.php', 'product-view.php'], true);
-$navbar_order = $navbar_page === $navbar_order_page;
-$navbar_cart = $navbar_page === 'cart.php';
 ?>
 
 <style>
 /* =========================================================
-   CUSTOMER NAVBAR — Local Milktea House
-   Palette: espresso #2C221E · roast #4A3525 · mocha #6F4E37
-            oat #F3EADF · foam #FBF7F1 · line #E6DACB
+   CUSTOMER NAVBAR
 ========================================================= */
 
 .navbar-custom {
     position: sticky !important;
     top: 0;
+    background: #ffffff;
+
+    /* Dark brown outline */
+    border: 2px solid #6F4E37;
+
+    box-shadow: 0 3px 12px rgba(0, 0, 0, 0.08);
+    padding: clamp(5px, 0.8vw, 8px) 0;
     z-index: 1030;
-    padding: 8px 0;
-    background: rgba(255, 255, 255, 0.94);
-    -webkit-backdrop-filter: saturate(1.4) blur(10px);
-    backdrop-filter: saturate(1.4) blur(10px);
-    border: 0;
-    border-bottom: 1px solid #E6DACB;
-    box-shadow: 0 4px 18px rgba(74, 53, 37, 0.07);
+
     box-sizing: border-box;
 }
 
-/* ---------- Brand: logo + "LOCAL / MILKTEA HOUSE" ---------- */
 .navbar-custom .navbar-brand {
     display: inline-flex;
     flex-direction: row;
     align-items: center;
     justify-content: flex-start;
-    gap: 10px;
-    flex: 0 1 auto;
-    min-width: 0;
-    margin: 0;
+    gap: clamp(5px, 0.55vw, 9px);
     padding: 0;
+    margin: 0;
     text-decoration: none;
+    flex: 0 0 auto;
     line-height: 1;
 }
 
 .navbar-custom .navbar-brand img {
     display: block;
-    flex: 0 0 auto;
-    width: clamp(38px, 3.4vw, 48px);
+    width: clamp(36px, 3.2vw, 50px);
     height: auto;
     aspect-ratio: 1 / 1;
     object-fit: contain;
     object-position: center;
-}
-
-.navbar-custom .navbar-brand-text {
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    gap: 4px;
-    min-width: 0;
+    flex: 0 0 auto;
 }
 
 .navbar-custom .navbar-brand-local {
     display: block;
-    color: #4A3525;
-    font-size: clamp(1.05rem, 1.3vw, 1.3rem);
+    color: #6F4E37;
+    font-size: clamp(0.95rem, 1.1vw, 1.2rem);
     font-weight: 800;
-    letter-spacing: 1.2px;
+    letter-spacing: clamp(0.4px, 0.07vw, 0.9px);
     line-height: 1;
     text-transform: uppercase;
     white-space: nowrap;
-}
-
-.navbar-custom .navbar-brand-sub {
-    display: block;
-    color: #9A7D62;
-    font-size: clamp(0.56rem, 0.66vw, 0.66rem);
-    font-weight: 700;
-    letter-spacing: 2.4px;
-    line-height: 1;
-    text-transform: uppercase;
-    white-space: nowrap;
-}
-
-/* ---------- Links ---------- */
-.navbar-custom .navbar-nav {
-    gap: 2px;
 }
 
 .navbar-custom .nav-link {
-    margin: 0;
-    padding: 8px 14px;
-    border-radius: 50px;
-    color: #5B4A3E !important;
-    font-size: 0.94rem;
-    font-weight: 600;
+    font-size: 1rem;
+    font-weight: 500;
+    color: #444444 !important;
+    margin: 0 8px;
+    transition: color 0.25s ease;
 }
 
-.navbar-custom .nav-link:hover,
-.navbar-custom .nav-link:focus-visible {
-    background: #F3EADF;
-    color: #2C221E !important;
+.navbar-custom .nav-link:hover {
+    color: #6f4e37 !important;
 }
 
-.navbar-custom .nav-link.active {
-    background: #F3EADF;
-    color: #2C221E !important;
-}
-
-.navbar-custom .nav-link:focus-visible,
-.navbar-custom .navbar-toggler:focus-visible,
-.navbar-custom .dropdown-item:focus-visible {
-    outline: 3px solid rgba(111, 78, 55, 0.35);
-    outline-offset: 2px;
-}
-
-/* ---------- Icon buttons (cart / bell) ---------- */
 .navbar-custom .nav-icon-link {
-    position: relative;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -176,169 +122,69 @@ $navbar_cart = $navbar_page === 'cart.php';
     height: 42px;
     margin: 0 2px;
     padding: 0 !important;
-    border-radius: 50%;
 }
 
 .navbar-custom .nav-icon-link i {
-    font-size: 1.25rem;
-    line-height: 1;
+    font-size: 1.35rem;
 }
 
 .navbar-custom .icon-badge {
     position: absolute;
-    top: 1px;
-    right: -1px;
-    min-width: 19px;
-    height: 19px;
+    top: 2px;
+    right: -2px;
+    min-width: 18px;
+    height: 18px;
     padding: 0 5px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    border: 2px solid #ffffff;
     border-radius: 50rem;
-    background: #D6453B;
+    background: #dc3545;
     color: #ffffff;
-    font-size: 0.64rem;
-    font-weight: 800;
+    font-size: 0.65rem;
+    font-weight: 700;
     line-height: 1;
-    font-variant-numeric: tabular-nums;
-    box-sizing: content-box;
 }
 
-.navbar-custom .icon-badge[hidden] {
-    display: none;
-}
-
-/* The cart badge uses the brand brown; the bell stays red. */
-.navbar-custom .icon-badge.cart-badge {
-    background: #332317;
-}
-
-/* ---------- Account pill ---------- */
-.navbar-custom .nav-account {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    max-width: 100%;
-    padding: 5px 12px 5px 6px;
-    border: 1.5px solid #E0D2C2;
-    background: #ffffff;
-    color: #2C221E !important;
-}
-
-.navbar-custom .nav-account:hover,
-.navbar-custom .nav-account:focus-visible,
-.navbar-custom .nav-account.show {
-    border-color: #B8A08A;
-    background: #FBF7F1;
-}
-
-.navbar-custom .nav-account-avatar {
-    flex: 0 0 auto;
+/* Oval Log In button (guests) */
+.navbar-custom .btn-login-oval {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    background: #332317;
-    color: #ffffff;
+    min-height: 38px;
+    padding: 6px 24px;
+    border: 1.5px solid #2c221e;
+    border-radius: 50rem;
+    background: #ffffff;
+    color: #2c221e;
     font-size: 0.95rem;
-}
-
-.navbar-custom .nav-account-name {
-    min-width: 0;
-    max-width: 150px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-/* ---------- Login / Register ---------- */
-.navbar-custom .btn {
-    border-radius: 50px;
-    padding: 8px 18px;
-    font-size: 0.9rem;
-    font-weight: 700;
-}
-
-.navbar-custom .btn-outline-dark {
-    border: 1.5px solid #4A3525;
-    color: #4A3525;
-    background: transparent;
-}
-
-.navbar-custom .btn-outline-dark:hover {
-    background: #4A3525;
-    border-color: #4A3525;
-    color: #ffffff;
-}
-
-.navbar-custom .btn-primary-custom {
-    border: 1.5px solid #24170F;
-    background: #332317;
-    color: #ffffff;
-}
-
-.navbar-custom .btn-primary-custom:hover {
-    background: #24170F;
-    border-color: #1A100B;
-    color: #ffffff;
-}
-
-/* ---------- Dropdowns ---------- */
-.navbar-custom .dropdown-menu {
-    margin-top: 10px;
-    padding: 6px;
-    border: 1px solid #E6DACB;
-    border-radius: 16px;
-    box-shadow: 0 14px 34px rgba(74, 53, 37, 0.14);
-}
-
-.navbar-custom .dropdown-item {
-    padding: 10px 14px;
-    border-radius: 10px;
-    color: #3A2C24;
-    font-size: 0.9rem;
     font-weight: 600;
+    white-space: nowrap;
+    transition: background-color 0.25s ease, color 0.25s ease;
 }
 
-.navbar-custom .dropdown-item:hover,
-.navbar-custom .dropdown-item:focus {
-    background: #F3EADF;
-    color: #2C221E;
+.navbar-custom .btn-login-oval:hover,
+.navbar-custom .btn-login-oval:focus-visible {
+    background: #2c221e;
+    color: #ffffff;
 }
 
-.navbar-custom .dropdown-item.text-danger:hover {
-    background: #FCEBEA;
-    color: #B3382F !important;
-}
-
-.navbar-custom .dropdown-divider {
-    margin: 6px 4px;
-    border-color: #EFE5D9;
-}
-
-/* Notifications */
+/* Notification dropdown */
 .navbar-custom .notification-dropdown {
-    width: 370px;
+    width: 360px;
     max-width: calc(100vw - 24px);
     padding: 0;
-    max-height: min(72vh, 480px);
-    overflow-x: hidden;
-    overflow-y: auto;
-    overscroll-behavior: contain;
+    border: 1px solid #e6dec9;
+    border-radius: 14px;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+    overflow: hidden;
 }
 
 .navbar-custom .notification-header {
-    position: sticky;
-    top: 0;
-    z-index: 1;
-    padding: 14px 16px 12px;
-    background: #ffffff;
-    color: #2C221E;
-    font-size: 0.98rem;
-    font-weight: 800;
+    padding: 14px 16px;
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: #2c221e;
 }
 
 .navbar-custom .notification-dropdown .dropdown-divider {
@@ -347,21 +193,19 @@ $navbar_cart = $navbar_page === 'cart.php';
 
 .navbar-custom .notification-dropdown-item {
     display: block;
-    margin: 0;
     padding: 12px 14px !important;
-    border-radius: 0;
+    margin: 0;
     white-space: normal !important;
     color: #333333 !important;
 }
 
 .navbar-custom .notification-dropdown-item:hover {
-    background: #F7F0E8;
+    background: #f7f1e8;
 }
 
-.navbar-custom .notification-dropdown-item.notification-unread,
-.navbar-custom .notification-unread {
-    background: #FDF8F2;
-    border-left: 3px solid #6F4E37;
+.navbar-custom .notification-dropdown-item.unread {
+    background: #fdf8f2;
+    border-left: 3px solid #6f4e37;
 }
 
 .navbar-custom .notification-content {
@@ -372,17 +216,17 @@ $navbar_cart = $navbar_page === 'cart.php';
 }
 
 .navbar-custom .notification-icon {
-    flex: 0 0 30px;
-    width: 30px;
-    height: 30px;
-    margin-top: 1px;
+    flex: 0 0 28px;
+    width: 28px;
+    height: 28px;
     border-radius: 50%;
-    background: #F3EADF;
-    color: #6F4E37;
+    background: #f5eee5;
+    color: #6f4e37;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     font-size: 0.82rem;
+    margin-top: 1px;
 }
 
 .navbar-custom .notification-text {
@@ -394,9 +238,9 @@ $navbar_cart = $navbar_page === 'cart.php';
 
 .navbar-custom .notification-message {
     margin: 0;
-    color: #4A3525;
-    font-size: 0.83rem;
-    font-weight: 700;
+    color: #4a3525;
+    font-size: 0.82rem;
+    font-weight: 600;
     line-height: 1.35;
     overflow-wrap: anywhere;
 }
@@ -404,51 +248,62 @@ $navbar_cart = $navbar_page === 'cart.php';
 .navbar-custom .notification-order {
     display: block;
     max-width: 100%;
-    margin-top: 4px;
-    color: #6F6F6F;
-    font-size: 0.72rem;
-    line-height: 1.2;
     overflow-wrap: anywhere;
     word-break: break-word;
+    margin-top: 4px;
+    color: #6f6f6f;
+    font-size: 0.71rem;
+    line-height: 1.2;
 }
 
 .navbar-custom .notification-time {
     display: block;
     max-width: 100%;
-    margin-top: 3px;
-    color: #8A7F75;
-    font-size: 0.69rem;
-    line-height: 1.2;
     overflow-wrap: anywhere;
     word-break: break-word;
+    margin-top: 3px;
+    color: #8a7f75;
+    font-size: 0.68rem;
+    line-height: 1.2;
+}
+.notification-unread {
+    background: #FDF8F2;
+    border-left: 3px solid #6F4E37;
 }
 
 .navbar-custom .notification-empty {
-    padding: 22px 16px;
+    padding: 18px 16px;
     text-align: center;
-    color: #8A7F75;
-    font-size: 0.82rem;
+    color: #8a7f75;
+    font-size: 0.8rem;
 }
 
-.navbar-custom .notification-dropdown li.text-center .dropdown-item {
-    margin: 4px;
+.navbar-custom .notification-view-all {
+    display: block;
+    padding: 11px 16px !important;
     text-align: center;
-    color: #6F4E37;
+    color: #6f4e37 !important;
+    font-size: 0.8rem;
+    font-weight: 600;
 }
 
-/* Keep "Mark All as Read" visible at the bottom while the list scrolls */
-.navbar-custom .notification-dropdown li.notification-footer {
-    position: sticky;
-    bottom: 0;
-    z-index: 1;
-    background: #ffffff;
-    border-top: 1px solid #EFE5D9;
-    box-shadow: 0 -6px 10px -8px rgba(44, 34, 30, .18);
+.navbar-custom .notification-view-all:hover {
+    background: #f7f1e8;
+}
+
+/* General dropdowns */
+.navbar-custom .dropdown-menu {
+    border: 1px solid #e6dec9;
+    border-radius: 14px;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
+}
+
+.navbar-custom .dropdown-item {
+    padding: 10px 18px;
 }
 
 .navbar-custom .navbar-toggler {
-    border: 0;
-    border-radius: 12px;
+    border: none;
 }
 
 .navbar-custom .navbar-toggler:focus {
@@ -458,16 +313,15 @@ $navbar_cart = $navbar_page === 'cart.php';
 /* =========================================================
    LOGOUT CONFIRMATION MODAL
 ========================================================= */
+
 .logout-modal {
     position: fixed;
     inset: 0;
-    z-index: 9999;
+    background: rgba(0, 0, 0, 0.45);
     display: none;
     align-items: center;
     justify-content: center;
-    background: rgba(44, 34, 30, 0.5);
-    -webkit-backdrop-filter: blur(2px);
-    backdrop-filter: blur(2px);
+    z-index: 9999;
 }
 
 .logout-modal.show {
@@ -477,37 +331,37 @@ $navbar_cart = $navbar_page === 'cart.php';
 .logout-modal-box {
     width: 360px;
     max-width: calc(100% - 30px);
-    padding: 26px 24px 22px;
     background: #ffffff;
-    border: 1px solid #E6DACB;
-    border-radius: 20px;
+    border: 1px solid #b8a08a;
+    border-radius: 15px;
+    padding: 25px;
     text-align: center;
-    box-shadow: 0 18px 44px rgba(44, 34, 30, 0.22);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
 }
 
 .logout-modal-icon {
-    width: 52px;
-    height: 52px;
+    width: 48px;
+    height: 48px;
     margin: 0 auto 12px;
     border-radius: 50%;
-    background: #FCEBEA;
-    color: #D6453B;
+    background: #f8e1e1;
+    color: #dc3545;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 1.3rem;
+    font-size: 1.2rem;
 }
 
 .logout-modal-box h5 {
     margin-bottom: 6px;
-    color: #2C221E;
-    font-weight: 800;
+    color: #2c221e;
+    font-weight: 700;
 }
 
 .logout-modal-box p {
     margin-bottom: 20px;
-    color: #8A7F75;
-    font-size: 0.86rem;
+    color: #8a7f75;
+    font-size: 0.85rem;
 }
 
 .logout-modal-actions {
@@ -518,94 +372,89 @@ $navbar_cart = $navbar_page === 'cart.php';
 
 .logout-cancel,
 .logout-confirm {
-    min-width: 108px;
-    padding: 10px 16px;
-    border-radius: 50px;
-    font-size: 0.86rem;
-    font-weight: 700;
+    min-width: 100px;
+    padding: 9px 16px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    font-weight: 600;
     cursor: pointer;
     text-decoration: none;
 }
 
 .logout-cancel {
     background: #ffffff;
-    color: #4A3525;
-    border: 1.5px solid #D5C6BA;
+    color: #4a3525;
+    border: 1px solid #b8a08a;
 }
 
 .logout-cancel:hover {
-    background: #F3EADF;
-    border-color: #4A3525;
+    background: #f7f1e8;
 }
 
 .logout-confirm {
-    background: #332317;
+    background: #dc3545;
     color: #ffffff;
-    border: 1.5px solid #332317;
+    border: 1px solid #dc3545;
 }
 
 .logout-confirm:hover {
-    background: #24170F;
+    background: #bb2d3b;
     color: #ffffff;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-    .navbar-custom .nav-link,
-    .navbar-custom .btn,
-    .navbar-custom .dropdown-item,
-    .logout-cancel,
-    .logout-confirm {
-        transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
-    }
-}
-
-/* =========================================================
-   PHONES & TABLETS
-========================================================= */
 @media (max-width: 575.98px) {
-    .navbar-custom .navbar-brand {
-        gap: 8px;
-    }
-
     .navbar-custom .navbar-brand img {
-        width: clamp(34px, 10vw, 40px);
+        width: clamp(32px, 11vw, 42px);
     }
 
     .navbar-custom .navbar-brand-local {
-        font-size: 1rem;
-        letter-spacing: 1px;
+        font-size: clamp(0.72rem, 3.5vw, 0.9rem);
     }
 
-    .navbar-custom .navbar-brand-sub {
-        font-size: 0.52rem;
-        letter-spacing: 1.8px;
-    }
-}
-
-@media (max-width: 359.98px) {
-    .navbar-custom .navbar-brand-sub {
-        display: none;
+    .navbar-custom .navbar-brand {
+        gap: 5px;
     }
 }
 
 @media (max-width: 991.98px) {
+    .navbar-custom .notification-dropdown {
+        width: min(360px, calc(100vw - 30px));
+    }
+
+    .navbar-custom {
+        padding: clamp(5px, 0.8vw, 8px) 0;
+    }
+
+    .navbar-custom .navbar-brand {
+        font-size: 1.15rem;
+        margin-right: 0;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .navbar-custom .navbar-brand i {
+        font-size: 1.25rem;
+        margin-right: 4px;
+    }
+
     .navbar-custom .navbar-toggler {
+        padding: 8px 10px;
         min-width: 44px;
         min-height: 44px;
-        padding: 8px 10px;
     }
 
-    .navbar-custom .navbar-cart-mobile {
-        width: 44px;
-        height: 44px;
-        margin: 0 4px 0 auto !important;
+    .navbar-custom .navbar-toggler:focus-visible,
+    .navbar-custom .nav-link:focus-visible {
+        outline: 3px solid #C69C6D;
+        outline-offset: 2px;
     }
 
-    /* Opened menu: a tidy panel with easy-to-tap rows */
+    /* Opened menu: full-width, easy-to-tap rows */
     .navbar-custom .navbar-collapse {
         margin-top: 8px;
-        padding: 8px 0 4px;
-        border-top: 1px solid #EFE5D9;
+        padding-top: 6px;
+        border-top: 1px solid #efe6dc;
     }
 
     .navbar-custom .navbar-nav {
@@ -614,7 +463,7 @@ $navbar_cart = $navbar_page === 'cart.php';
     }
 
     .navbar-custom .navbar-nav .nav-item {
-        margin: 0 !important;
+        margin-right: 0 !important;
     }
 
     .navbar-custom .navbar-nav .nav-link {
@@ -622,32 +471,25 @@ $navbar_cart = $navbar_page === 'cart.php';
         align-items: center;
         min-height: 46px;
         margin: 0;
-        padding: 10px 14px;
-        border-radius: 12px;
+        padding: 10px 8px;
+        border-radius: 10px;
+    }
+
+    .navbar-custom .navbar-nav .nav-link:hover {
+        background: #f7f1e8;
     }
 
     .navbar-custom .navbar-nav .nav-icon-link {
         width: auto;
         height: auto;
         justify-content: flex-start;
-        border-radius: 12px;
-        padding: 10px 14px !important;
+        padding: 10px 8px !important;
     }
 
-    .navbar-custom .nav-account {
-        width: 100%;
-        border-radius: 12px;
-    }
-
-    .navbar-custom .nav-account-name {
-        max-width: none;
-        flex: 1 1 auto;
-    }
-
-    /* Login / Register stack full width */
+    /* Log In button: full width in the phone menu */
     .navbar-custom .navbar-nav .btn {
         width: 100%;
-        min-height: 46px;
+        min-height: 44px;
         margin: 4px 0 !important;
     }
 
@@ -668,65 +510,33 @@ $navbar_cart = $navbar_page === 'cart.php';
     /* The bell is icon-only on desktop; give it a text label in the phone menu. */
     .navbar-custom #notificationDropdown::after {
         content: "Notifications";
-        order: 2;
         margin-left: 12px;
-        font-size: 0.94rem;
-        font-weight: 600;
+        font-size: 1rem;
+        font-weight: 500;
     }
 
     .navbar-custom #notificationDropdown .icon-badge {
-        order: 3;
         position: static;
         margin-left: auto;
     }
 
+    .navbar-custom .navbar-cart-mobile {
+        width: 44px;
+        height: 44px;
+        margin: 0 2px 0 auto !important;
+    }
+
     .logout-modal-box {
-        padding: 22px 18px 18px;
+        padding: 20px;
     }
 
     .logout-cancel,
     .logout-confirm {
         flex: 1 1 0;
-        min-height: 46px;
+        min-height: 44px;
     }
 }
-/* =========================================================
-   PHONE / TABLET MENU: FLOATS OVER THE PAGE
-   The opened menu no longer pushes the page content down;
-   it drops down on top of it like a small floating card.
-========================================================= */
-@media (max-width: 991.98px) {
-    .navbar-custom .navbar-collapse {
-        position: absolute;
-        top: 100%;
-        left: 12px;
-        right: 12px;
-        margin: 6px 0 0;
-        padding: 8px;
-        background: #FFFFFF;
-        border: 1px solid #E6DACB;
-        border-radius: 16px;
-        box-shadow: 0 14px 32px rgba(44, 34, 30, 0.18);
-        max-height: calc(100vh - 90px);
-        max-height: calc(100dvh - 90px);
-        overflow-y: auto;
-        -webkit-overflow-scrolling: touch;
-        z-index: 1040;
 
-        /* Still scrollable on short screens, but without a visible scrollbar */
-        scrollbar-width: none;
-        -ms-overflow-style: none;
-    }
-
-    .navbar-custom .navbar-collapse::-webkit-scrollbar {
-        display: none;
-    }
-
-    /* No scrollbar flash while the menu is opening / closing */
-    .navbar-custom .navbar-collapse.collapsing {
-        overflow: hidden;
-    }
-}
 </style>
 
 <nav class="navbar navbar-expand-lg navbar-custom sticky-top">
@@ -737,20 +547,21 @@ $navbar_cart = $navbar_page === 'cart.php';
                 src="../assets/images/logo.png"
                 alt="Local Milktea House"
             >
-            <span class="navbar-brand-text">
-                <span class="navbar-brand-local">Local</span>
-                <span class="navbar-brand-sub">Milktea House</span>
-            </span>
+            <span class="navbar-brand-local">LOCAL</span>
         </a>
 
         <!-- Cart shortcut: always visible on phones, without opening the menu -->
         <a
-            class="nav-link nav-icon-link position-relative ms-auto me-1 d-lg-none navbar-cart-mobile<?= $navbar_cart ? ' active' : '' ?>"
+            class="nav-link nav-icon-link position-relative ms-auto me-1 d-lg-none navbar-cart-mobile"
             href="../customer/cart.php"
             aria-label="Cart"
         >
             <i class="bi bi-cart3"></i>
-            <span class="icon-badge cart-badge" data-cart-badge <?= $cart_count > 0 ? '' : 'hidden' ?>><?= $cart_count > 99 ? '99+' : (int) $cart_count ?></span>
+            <?php if ($cart_count > 0): ?>
+                <span class="icon-badge">
+                    <?= $cart_count > 99 ? '99+' : $cart_count ?>
+                </span>
+            <?php endif; ?>
         </a>
 
         <button
@@ -769,11 +580,11 @@ $navbar_cart = $navbar_page === 'cart.php';
             <ul class="navbar-nav ms-auto align-items-center">
 
                 <li class="nav-item">
-                    <a class="nav-link<?= $navbar_home ? ' active' : '' ?>" href="../customer/index.php"<?= $navbar_home ? ' aria-current="page"' : '' ?>>Home</a>
+                    <a class="nav-link" href="../customer/index.php">Home</a>
                 </li>
 
                 <li class="nav-item">
-                    <a class="nav-link<?= $navbar_menu ? ' active' : '' ?>" href="../customer/menu.php"<?= $navbar_menu ? ' aria-current="page"' : '' ?>>Menu</a>
+                    <a class="nav-link" href="../customer/menu.php">Menu</a>
                 </li>
 
                 <li class="nav-item">
@@ -782,31 +593,35 @@ $navbar_cart = $navbar_page === 'cart.php';
 
                 <li class="nav-item">
                     <a
-                        class="nav-link<?= $navbar_order ? ' active' : '' ?>"
+                        class="nav-link"
                         href="<?= (isset($_SESSION['user_id']) && ($_SESSION['user_role'] ?? '') === 'customer')
                             ? '../customer/dashboard.php'
                             : '../customer/monitor-guest-order.php' ?>"
-                        <?= $navbar_order ? ' aria-current="page"' : '' ?>
                     >
-                        Order
+                       Order
                     </a>
                 </li>
 
                 <!-- Cart (desktop; phones use the shortcut next to the menu button) -->
-                <li class="nav-item me-1 d-none d-lg-block">
+                <li class="nav-item dropdown me-2 d-none d-lg-block">
                     <a
-                        class="nav-link nav-icon-link position-relative<?= $navbar_cart ? ' active' : '' ?>"
+                        class="nav-link nav-icon-link position-relative"
                         href="../customer/cart.php"
                         aria-label="Cart"
                     >
                         <i class="bi bi-cart3"></i>
-                        <span class="icon-badge cart-badge" data-cart-badge <?= $cart_count > 0 ? '' : 'hidden' ?>><?= $cart_count > 99 ? '99+' : (int) $cart_count ?></span>
+
+                        <?php if ($cart_count > 0): ?>
+                            <span class="icon-badge">
+                                <?= $cart_count > 99 ? '99+' : $cart_count ?>
+                            </span>
+                        <?php endif; ?>
                     </a>
                 </li>
 
                 <!-- Notifications -->
                 <?php if (isset($_SESSION['user_id']) && ($_SESSION['user_role'] ?? '') === 'customer'): ?>
-                    <li class="nav-item dropdown me-1">
+                    <li class="nav-item dropdown me-2">
                         <a
                             class="nav-link nav-icon-link position-relative"
                             href="#"
@@ -868,13 +683,15 @@ $navbar_cart = $navbar_page === 'cart.php';
                                 <?php endforeach; ?>
                             <?php endif; ?>
 
-                            <li class="text-center notification-footer">
-                                <a href="../customer/read_notification.php?mark_all=1"
-                                   class="dropdown-item small fw-semibold">
-                                    <i class="bi bi-check2-all me-1"></i>
-                                    Mark All as Read
-                                </a>
-                            </li>
+                            <li><hr class="dropdown-divider"></li>
+
+                           <li class="text-center">
+                        <a href="../customer/read_notification.php?mark_all=1"
+                            class="dropdown-item small fw-semibold">
+                                <i class="bi bi-check2-all me-1"></i>
+                                Mark All as Read
+                            </a>
+                    </li>
                         </ul>
                     </li>
                 <?php endif; ?>
@@ -883,14 +700,14 @@ $navbar_cart = $navbar_page === 'cart.php';
                 <?php if (isset($_SESSION['user_id'])): ?>
                     <li class="nav-item dropdown">
                         <a
-                            class="nav-link nav-account dropdown-toggle fw-semibold"
+                            class="nav-link dropdown-toggle fw-semibold"
                             href="#"
                             role="button"
                             data-bs-toggle="dropdown"
                             aria-expanded="false"
                         >
-                            <span class="nav-account-avatar"><i class="bi bi-person-fill"></i></span>
-                            <span class="nav-account-name"><?= htmlspecialchars((string) ($_SESSION['user_name'] ?? '')) ?></span>
+                            <i class="bi bi-person-circle fs-5"></i>
+                            <?= htmlspecialchars((string)($_SESSION['user_name'] ?? '')) ?>
                         </a>
 
                         <ul class="dropdown-menu dropdown-menu-end">
@@ -912,9 +729,8 @@ $navbar_cart = $navbar_page === 'cart.php';
                         </ul>
                     </li>
                 <?php else: ?>
-                    <!-- Only "Log in" lives in the header; "Sign up" is inside the login page -->
-                    <li class="nav-item">
-                        <a class="btn btn-outline-dark" href="../auth/login.php">Log in</a>
+                    <li class="nav-item ms-lg-2">
+                        <a class="btn btn-login-oval" href="../auth/login.php">Log In</a>
                     </li>
                 <?php endif; ?>
 
@@ -972,97 +788,4 @@ if (logoutBtn && logoutModal && cancelLogout) {
         }
     });
 }
-</script>
-
-<script>
-/*
- * =========================================================
- * LIVE CART BADGE
- * =========================================================
- * The badge above is rendered by PHP when the page loads, so it
- * went stale whenever an item was added without a full reload
- * (AJAX "Add" buttons, or coming back with the browser's Back button).
- *
- * This keeps it in sync by re-reading the session cart:
- *   - after any fetch() call to a cart URL (add / update / remove)
- *   - when the page is restored from the back/forward cache
- *   - when the tab becomes visible again
- *   - on demand:  window.updateCartBadge(n)  or
- *                 document.dispatchEvent(new Event('cart:updated'))
- */
-(function () {
-    var badges = document.querySelectorAll('[data-cart-badge]');
-    if (!badges.length) { return; }
-
-    function setBadge(count) {
-        count = parseInt(count, 10);
-        if (isNaN(count) || count < 0) { count = 0; }
-
-        badges.forEach(function (badge) {
-            badge.textContent = count > 99 ? '99+' : String(count);
-            badge.hidden = count <= 0;
-        });
-    }
-
-    var nativeFetch = window.fetch ? window.fetch.bind(window) : null;
-    var refreshing = false;
-    var pending = false;
-
-    function refreshBadge() {
-        if (!nativeFetch) { return; }
-        if (refreshing) { pending = true; return; }
-        refreshing = true;
-
-        nativeFetch('../customer/cart-count.php', {
-            method: 'GET',
-            cache: 'no-store',
-            credentials: 'same-origin',
-            headers: { 'Accept': 'application/json' }
-        })
-            .then(function (response) {
-                return response.ok ? response.json() : null;
-            })
-            .then(function (data) {
-                if (data && typeof data.count !== 'undefined') {
-                    setBadge(data.count);
-                }
-            })
-            .catch(function () { /* keep the server-rendered number */ })
-            .then(function () {
-                refreshing = false;
-                if (pending) { pending = false; refreshBadge(); }
-            });
-    }
-
-    window.updateCartBadge = setBadge;
-    window.refreshCartBadge = refreshBadge;
-
-    /* Refresh after any cart-related fetch(); the response is passed through untouched. */
-    if (nativeFetch) {
-        window.fetch = function (input) {
-            var url = '';
-            try {
-                url = typeof input === 'string' ? input : (input && input.url) || '';
-            } catch (e) { url = ''; }
-
-            var request = nativeFetch.apply(window, arguments);
-
-            if (/cart/i.test(url) && !/cart-count/i.test(url)) {
-                request.then(function () { refreshBadge(); }, function () {});
-            }
-
-            return request;
-        };
-    }
-
-    document.addEventListener('cart:updated', refreshBadge);
-
-    window.addEventListener('pageshow', function (event) {
-        if (event.persisted) { refreshBadge(); }
-    });
-
-    document.addEventListener('visibilitychange', function () {
-        if (document.visibilityState === 'visible') { refreshBadge(); }
-    });
-})();
 </script>

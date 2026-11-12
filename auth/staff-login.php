@@ -38,7 +38,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $_SESSION['user_email'] = $staff['email'];
             $_SESSION['user_role'] = $staff['role'];
 
-            header("Location: ../staff/orders.php");
+            // Staff's actual order-management page is staff/index.php.
+            header("Location: index.php");
             exit;
 
         } else {
@@ -279,7 +280,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <div class="text-center mt-4">
 
             <a
-                href="login.php"
+                href="../auth/login.php"
                 class="text-decoration-none small"
                 style="color:#4A3525;"
             >

@@ -427,122 +427,14 @@ body {
     background: #F7F3EE;
 }
 
-.profile-topbar {
-    position: sticky;
-    top: 0;
-    z-index: 1100;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 20px;
-    padding: 16px 24px;
-    background: #ffffff;
-    border-bottom: 2px solid #6F4E37;
-    box-shadow: 0 3px 10px rgba(44, 34, 30, .08);
-}
-
-.profile-search {
-    max-width: 320px;
-    width: 100%;
-}
-
-.profile-search input {
-    width: 100%;
-    border-radius: 50px;
-    border: 1px solid #B8A08A;
-    padding: 9px 16px;
-    font-size: .85rem;
-    background: #FDF8F2;
-    outline: none;
-}
-
-.profile-search input:focus {
-    border-color: #6F4E37;
-}
-
-/* =========================================================
-   TOPBAR ADMIN MENU
-========================================================= */
-
-.admin-profile {
-    position: relative;
-}
-
-.admin-profile-btn {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    border: 1px solid #8B6A55;
-    background: #ffffff;
-    padding: 6px 10px 6px 6px;
-    border-radius: 12px;
-    cursor: pointer;
-    color: #2c221e;
-    font-size: .92rem;
-    font-weight: 600;
-    min-height: 46px;
-}
-
-.admin-profile-btn:hover,
-.admin-profile-btn[aria-expanded="true"] {
-    background: #FDF8F2;
-    border-color: #6F4E37;
-}
-
-.admin-profile .avatar {
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    background: #4A3525;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: #ffffff;
-    overflow: hidden;
-}
-
-.admin-profile .avatar img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-}
-
-.profile-arrow {
-    font-size: 11px;
-}
-
-.admin-profile-dropdown {
-    position: absolute;
-    top: calc(100% + 8px);
-    right: 0;
-    width: 200px;
-    background: #ffffff;
-    border: 2px solid #6F4E37;
-    border-radius: 12px;
-    box-shadow: 0 10px 24px rgba(44,34,30,.16);
-    padding: 6px;
-    display: none;
-    z-index: 1200;
-    overflow: hidden;
-}
-
-.admin-profile-dropdown.show {
-    display: block;
-}
-
-.admin-profile-dropdown a {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 10px 12px;
-    border-radius: 8px;
-    color: #4A3525;
-    text-decoration: none;
-    font-size: .85rem;
-}
-
-.admin-profile-dropdown a:hover {
-    background: #F0E6D6;
+/*
+ * sidebar.php already offsets .profile-page to the right of the fixed
+ * sidebar on desktop. The shared navbar normally applies its own sidebar
+ * offset, so cancel that second offset on this page to prevent clipping.
+ */
+.profile-page > .localitea-admin-navbar {
+    margin-left: 0 !important;
+    width: 100% !important;
 }
 
 /* =========================================================
@@ -804,17 +696,6 @@ body {
         padding: 15px;
     }
 
-    .profile-topbar {
-        padding: 12px 15px;
-    }
-
-    .profile-search {
-        max-width: 220px;
-    }
-
-    .admin-profile-btn span {
-        display: none;
-    }
 }
 </style>
 
@@ -822,83 +703,7 @@ body {
 
     <?php require_once 'sidebar.php'; ?>
 
-    <!-- =====================================================
-         TOPBAR
-    ====================================================== -->
-
-    <div class="profile-topbar">
-
-        <button type="button" class="admin-menu-toggle" aria-label="Open menu" aria-controls="adminSidebar" aria-expanded="false">
-            <i class="bi bi-list"></i>
-        </button>
-
-
-        <div class="profile-search">
-            <input
-                type="text"
-                placeholder="Search..."
-            >
-        </div>
-
-        <div class="admin-profile">
-
-            <button
-                type="button"
-                class="admin-profile-btn"
-                id="adminProfileBtn"
-                aria-expanded="false"
-                aria-haspopup="true"
-            >
-                <div class="avatar">
-                    <?php
-                    $topbarPicture =
-                        trim((string)($admin['profile_picture'] ?? ''));
-                    ?>
-
-                    <?php if (
-                        $topbarPicture !== '' &&
-                        $topbarPicture !== 'default-admin.png'
-                    ): ?>
-
-                        <img
-                            src="../assets/uploads/admins/<?= htmlspecialchars($topbarPicture) ?>"
-                            alt="Admin profile"
-                        >
-
-                    <?php else: ?>
-
-                        <i class="bi bi-person-fill"></i>
-
-                    <?php endif; ?>
-                </div>
-
-                <span>
-                    <?= htmlspecialchars(
-                        $admin['full_name'] ?? 'Admin User'
-                    ) ?>
-                </span>
-
-                <i class="bi bi-chevron-down profile-arrow"></i>
-            </button>
-
-            <div
-                class="admin-profile-dropdown"
-                id="adminProfileDropdown"
-            >
-                <a href="profile.php">
-                    <i class="bi bi-person"></i>
-                    Profile
-                </a>
-
-                <a href="../auth/logout.php">
-                    <i class="bi bi-box-arrow-right"></i>
-                    Log Out
-                </a>
-            </div>
-
-        </div>
-
-    </div>
+    <?php require_once 'navbar.php'; ?>
 
     <!-- =====================================================
          CONTENT
@@ -1318,47 +1123,5 @@ body {
 
 </div>
 
-<script>
-document.addEventListener('DOMContentLoaded', function () {
-    const button =
-        document.getElementById('adminProfileBtn');
 
-    const dropdown =
-        document.getElementById('adminProfileDropdown');
-
-    if (!button || !dropdown) {
-        return;
-    }
-
-    button.addEventListener('click', function (event) {
-        event.stopPropagation();
-
-        const isOpen =
-            button.getAttribute('aria-expanded') === 'true';
-
-        button.setAttribute(
-            'aria-expanded',
-            isOpen ? 'false' : 'true'
-        );
-
-        dropdown.classList.toggle(
-            'show',
-            !isOpen
-        );
-    });
-
-    document.addEventListener('click', function () {
-        button.setAttribute(
-            'aria-expanded',
-            'false'
-        );
-
-        dropdown.classList.remove('show');
-    });
-
-    dropdown.addEventListener('click', function (event) {
-        event.stopPropagation();
-    });
-});
-</script>
 

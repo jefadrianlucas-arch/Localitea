@@ -625,6 +625,27 @@ $staffShowBrandText = $staffShowBrandText ?? ($staffLogoUrl === null);
 
         </li>
 
+        <!-- =================================================
+             USER ACCOUNT SETTINGS
+        ================================================== -->
+
+        <li class="nav-item">
+
+            <a
+                href="user-accounts.php"
+                class="nav-link <?= $currentPage === 'user-accounts.php' ? 'active' : '' ?>"
+            >
+
+                <i class="bi bi-people-fill"></i>
+
+                <span>
+                    User Accounts
+                </span>
+
+            </a>
+
+        </li>
+
     </ul>
 
 </div>

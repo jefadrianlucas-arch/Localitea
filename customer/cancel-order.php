@@ -23,7 +23,6 @@ function customerRedirect(string $location): void
     exit;
 }
 
-
 if (
     !isset($_SESSION['user_id']) ||
     ($_SESSION['user_role'] ?? '') !== 'customer'
@@ -31,14 +30,15 @@ if (
     customerRedirect('../auth/login.php');
 }
 
-$user_id = (int)$_SESSION['user_id'];
+$user_id = (int) $_SESSION['user_id'];
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     customerRedirect('dashboard.php');
 }
 
-$order_id = (int)($_POST['order_id'] ?? 0);
-$cancellation_reason = trim($_POST['cancellation_reason'] ?? '');
+$order_id = (int) ($_POST['order_id'] ?? 0);
+$selectedCancellationReason = trim((string) ($_POST['cancellation_reason'] ?? ''));
+$otherCancellationReason = trim((string) ($_POST['cancellation_reason_other'] ?? ''));
 
 if ($order_id <= 0) {
     customerRedirect('dashboard.php');
@@ -52,14 +52,38 @@ $allowed_reasons = [
     'Other'
 ];
 
-if (!in_array($cancellation_reason, $allowed_reasons, true)) {
+if (!in_array($selectedCancellationReason, $allowed_reasons, true)) {
     customerRedirect('dashboard.php');
 }
 
 /*
- * Cancel ONLY when the order is still:
+ * When Other is selected, require the customer's explanation and store it
+ * along with the selected reason. The existing column is VARCHAR(255), so
+ * keep the explanation within 220 characters after the "Other: " prefix.
+ */
+if ($selectedCancellationReason === 'Other') {
+    $otherReasonLength = preg_match_all('/./us', $otherCancellationReason, $unusedMatches);
+    if (
+        $otherCancellationReason === '' ||
+        $otherReasonLength === false ||
+        $otherReasonLength > 220
+    ) {
+        customerRedirect('dashboard.php');
+    }
+
+    $cancellation_reason = 'Other: ' . $otherCancellationReason;
+} else {
+    $cancellation_reason = $selectedCancellationReason;
+}
+
+/*
+ * Customer cancellation is allowed only before preparation begins:
  * - Pending Verification
+ * - Awaiting Store Confirmation (order_queue)
  * - Confirmed
+ *
+ * Keep the status condition in the UPDATE so a request cannot cancel an order
+ * if staff moves it to Preparing between the page render and this request.
  */
 $stmt = $pdo->prepare("
     UPDATE orders
@@ -69,8 +93,7 @@ $stmt = $pdo->prepare("
         closed_at = NOW()
     WHERE id = ?
       AND customer_id = ?
-      AND status IN ('pending_verification', 'confirmed')
-");
+      AND status IN ('pending_verification', 'order_queue', 'confirmed')");
 
 $stmt->execute([
     $cancellation_reason,
@@ -78,24 +101,19 @@ $stmt->execute([
     $user_id
 ]);
 
-/*
- * If no order was updated, the order is already in a
- * status where customer cancellation is not allowed.
- */
+/* If no row was updated, the order is not owned by this customer or has moved
+   to a status where customer cancellation is not allowed. */
 if ($stmt->rowCount() === 0) {
     customerRedirect('dashboard.php');
 }
 
-/*
- * Get order information.
- */
+/* Get order information for notifications. */
 $orderStmt = $pdo->prepare("
     SELECT order_number, claim_number
     FROM orders
     WHERE id = ?
       AND customer_id = ?
-    LIMIT 1
-");
+    LIMIT 1");
 
 $orderStmt->execute([
     $order_id,
@@ -108,10 +126,7 @@ $orderIdentifier = !empty($order['order_number'])
     ? $order['order_number']
     : ($order['claim_number'] ?? 'Order');
 
-
-/*
- * STAFF NOTIFICATION
- */
+/* STAFF NOTIFICATION */
 $staffNotificationStmt = $pdo->prepare("
     INSERT INTO notifications
     (
@@ -128,8 +143,7 @@ $staffNotificationStmt = $pdo->prepare("
         ?,
         ?,
         ?
-    )
-");
+    )");
 
 $staffNotificationStmt->execute([
     'customer_cancelled_order',
@@ -137,10 +151,7 @@ $staffNotificationStmt->execute([
     $order_id
 ]);
 
-
-/*
- * CUSTOMER NOTIFICATION
- */
+/* CUSTOMER NOTIFICATION */
 $customerNotificationStmt = $pdo->prepare("
     INSERT INTO notifications
     (
@@ -157,8 +168,7 @@ $customerNotificationStmt = $pdo->prepare("
         ?,
         ?,
         ?
-    )
-");
+    )");
 
 $customerNotificationStmt->execute([
     $user_id,

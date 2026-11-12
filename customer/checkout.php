@@ -4,8 +4,11 @@ session_start();
 
 date_default_timezone_set('Asia/Manila');
 
+/* Errors are logged for the owner, never printed on the customer's screen. */
 error_reporting(E_ALL);
-ini_set('display_errors', 1);
+ini_set('display_errors', '0');
+ini_set('display_startup_errors', '0');
+ini_set('log_errors', '1');
 
 require_once '../includes/db.php';
 require_once '../includes/promotion-engine.php';
@@ -14,21 +17,132 @@ $isAjaxRequest =
     ($_POST['ajax'] ?? $_GET['ajax'] ?? '') === '1' ||
     strtolower((string)($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '')) === 'xmlhttprequest';
 
-function checkoutFail(string $message): void
+/*
+ * One MySQL named lock serializes online slot reservations. It is held from
+ * the capacity check through the order commit, then explicitly released.
+ */
+$pickupCapacityLockName = 'localitea_pickup_capacity';
+$pickupCapacityLockAcquired = false;
+
+function releasePickupCapacityLock(): void
 {
-    global $isAjaxRequest;
+    global $pdo, $pickupCapacityLockName, $pickupCapacityLockAcquired;
+
+    if (empty($pickupCapacityLockAcquired) || !isset($pdo) || !($pdo instanceof PDO)) {
+        return;
+    }
+
+    try {
+        $releaseStmt = $pdo->prepare('SELECT RELEASE_LOCK(?)');
+        $releaseStmt->execute([$pickupCapacityLockName]);
+        $releaseResult = $releaseStmt->fetchColumn();
+
+        if ((string)$releaseResult !== '1') {
+            error_log('Checkout pickup lock was not owned at release time.');
+        }
+
+        // The connection no longer needs to attempt a second release.
+        $pickupCapacityLockAcquired = false;
+    } catch (Throwable $releaseError) {
+        error_log('Checkout pickup lock release failed: ' . $releaseError->getMessage());
+    }
+}
+
+/**
+ * Return the first 15-minute pickup slot that is not earlier than the
+ * requested preparation deadline. Slots run from 10:00 AM through 9:30 PM.
+ */
+function checkoutEarliestPickupSlot(DateTimeImmutable $currentTime, int $leadMinutes): DateTimeImmutable
+{
+    $deadline = $currentTime->modify('+' . max(0, $leadMinutes) . ' minutes');
+
+    $secondsOfDay =
+        ((int)$deadline->format('G') * 3600) +
+        ((int)$deadline->format('i') * 60) +
+        (int)$deadline->format('s');
+
+    // Round upward to the next 15-minute boundary, including non-zero seconds.
+    $slotMinuteOfDay = intdiv($secondsOfDay + 899, 900) * 15;
+
+    if ($slotMinuteOfDay < 600) {
+        return $deadline->setTime(10, 0, 0);
+    }
+
+    if ($slotMinuteOfDay > 1290) {
+        return $deadline->setTime(0, 0, 0)->modify('+1 day')->setTime(10, 0, 0);
+    }
+
+    return $deadline->setTime(
+        intdiv($slotMinuteOfDay, 60),
+        $slotMinuteOfDay % 60,
+        0
+    );
+}
+
+/**
+ * Plain, friendly error page for non-AJAX requests (no technical details).
+ */
+function checkoutRenderErrorPage(string $message): void
+{
+    header('Content-Type: text/html; charset=utf-8');
+
+    echo '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
+        . '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        . '<title>Checkout</title></head>'
+        . '<body style="margin:0;background:#F6F2EE;font-family:Arial,Helvetica,sans-serif;">'
+        . '<div style="max-width:520px;margin:60px auto;padding:26px;background:#fff;'
+        . 'border:2px solid #6F4E37;border-radius:14px;color:#2C221E;">'
+        . '<h3 style="margin:0 0 10px;color:#4A3525;">We couldn\'t place your order</h3>'
+        . '<p style="margin:0 0 18px;line-height:1.5;">'
+        . htmlspecialchars($message, ENT_QUOTES, 'UTF-8')
+        . '</p>'
+        . '<a href="cart.php" style="display:inline-block;padding:9px 16px;background:#6F4E37;'
+        . 'color:#fff;border-radius:8px;text-decoration:none;font-weight:600;">Back to Cart</a>'
+        . '</div></body></html>';
+}
+
+function checkoutFail(string $message, bool $refresh = false, int $statusCode = 422, string $errorCode = 'checkout_error'): void
+{
+    global $isAjaxRequest, $pdo, $payment_screenshot;
+
+    /* A validation failure inside the transaction must not leave it open. */
+    if (isset($pdo) && $pdo instanceof PDO && $pdo->inTransaction()) {
+        $pdo->rollBack();
+    }
+
+    // Also release the connection-scoped capacity lock on validation failures.
+    releasePickupCapacityLock();
+
+    /* Remove a GCash image already moved to storage if checkout is rejected. */
+    if (!empty($payment_screenshot) && is_string($payment_screenshot)) {
+        $uploadRoot = realpath(dirname(__DIR__) . '/assets/uploads/receipts');
+        $candidate = dirname(__DIR__) . '/' . ltrim($payment_screenshot, '/\\');
+        $realCandidate = realpath($candidate);
+        if (
+            $uploadRoot !== false &&
+            $realCandidate !== false &&
+            str_starts_with($realCandidate, $uploadRoot . DIRECTORY_SEPARATOR) &&
+            is_file($realCandidate)
+        ) {
+            @unlink($realCandidate);
+        }
+    }
+
+    http_response_code($statusCode);
 
     if ($isAjaxRequest) {
-        http_response_code(422);
         header('Content-Type: application/json; charset=utf-8');
         echo json_encode([
             'success' => false,
-            'message' => $message
+            'message' => $message,
+            'refresh' => $refresh,
+            'error_code' => $errorCode
         ]);
         exit;
     }
 
-    die($message);
+    checkoutRenderErrorPage($message);
+    exit;
 }
 
 
@@ -52,10 +166,40 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 |--------------------------------------------------------------------------
 */
 
-if (!isset($_POST['checkout_action'])) {
-
-    header("Location: cart.php");
+if (!isset($_POST['checkout_action']) || (string)$_POST['checkout_action'] !== '1') {
+    header('Location: cart.php');
     exit;
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| CSRF + DUPLICATE SUBMISSION PROTECTION
+|--------------------------------------------------------------------------
+|
+| Both tokens are stored in the PHP session. The CSRF token protects the
+| request from cross-site submission. The checkout request token is consumed
+| only after a successful order commit, preventing the same form from being
+| submitted twice in one session.
+*/
+$postedCsrfToken = $_POST['csrf_token'] ?? '';
+if (
+    !is_string($postedCsrfToken) ||
+    empty($_SESSION['csrf_token']) ||
+    !is_string($_SESSION['csrf_token']) ||
+    !hash_equals($_SESSION['csrf_token'], $postedCsrfToken)
+) {
+    checkoutFail('Your session could not be verified. Please refresh the cart and try again.', false, 403);
+}
+
+$postedCheckoutRequestToken = $_POST['checkout_request_token'] ?? '';
+if (
+    !is_string($postedCheckoutRequestToken) ||
+    empty($_SESSION['checkout_request_token']) ||
+    !is_string($_SESSION['checkout_request_token']) ||
+    !hash_equals($_SESSION['checkout_request_token'], $postedCheckoutRequestToken)
+) {
+    checkoutFail('This checkout request has already been used or has expired. Please review your cart and try again.', true, 409);
 }
 
 
@@ -65,40 +209,53 @@ if (!isset($_POST['checkout_action'])) {
 |--------------------------------------------------------------------------
 */
 
-$customer_name = trim($_POST['full_name'] ?? '');
-$customer_phone = trim((string)($_POST['mobile_number'] ?? ''));
+$rawCustomerName = $_POST['full_name'] ?? '';
+$rawCustomerPhone = $_POST['mobile_number'] ?? '';
 
-/* Accept common Philippine formats, then normalize to 09XXXXXXXXX. */
-$customer_phone = preg_replace('/[\s\-()]+/', '', $customer_phone);
+if (!is_string($rawCustomerName) || !is_string($rawCustomerPhone)) {
+    checkoutFail('Please provide valid customer information.');
+}
 
+$customer_name = preg_replace('/\s+/u', ' ', trim($rawCustomerName));
+$customer_phone = trim($rawCustomerPhone);
+
+if ($customer_name === '') {
+    checkoutFail('Please provide your full name.');
+}
+
+/* Accept Unicode letters, spaces, periods, apostrophes, and hyphens. */
+$nameCharacterCount = 0;
+if (preg_match_all('/./us', $customer_name, $nameCharacters) === false) {
+    checkoutFail('Please enter a valid full name.');
+}
+$nameCharacterCount = count($nameCharacters[0]);
+if (
+    $nameCharacterCount < 2 ||
+    $nameCharacterCount > 100 ||
+    preg_match('/\A[\p{L}\p{M}][\p{L}\p{M} .\'’\-]*\z/u', $customer_name) !== 1
+) {
+    checkoutFail('Please enter a valid full name using letters, spaces, periods, apostrophes, or hyphens (2–100 characters).');
+}
+
+if ($customer_phone === '') {
+    checkoutFail('Please provide your mobile number.');
+}
+if (strlen($customer_phone) > 30) {
+    checkoutFail('Please enter a valid Philippine mobile number.');
+}
+
+/* Remove common visual separators, then normalize to 09XXXXXXXXX. */
+$customer_phone = preg_replace('/[\s\-().]+/', '', $customer_phone);
 if (str_starts_with($customer_phone, '+63')) {
     $customer_phone = '0' . substr($customer_phone, 3);
 } elseif (str_starts_with($customer_phone, '63')) {
     $customer_phone = '0' . substr($customer_phone, 2);
 }
 
-
-/*
-|--------------------------------------------------------------------------
-| BASIC VALIDATION
-|--------------------------------------------------------------------------
-*/
-
-if ($customer_name === '') {
-
-    checkoutFail("Please provide your full name.");
+if (!preg_match('/\A09\d{9}\z/', $customer_phone)) {
+    checkoutFail('Please enter a valid 11-digit Philippine mobile number.');
 }
 
-
-if ($customer_phone === '') {
-
-    checkoutFail("Please provide your mobile number.");
-}
-
-if (!preg_match('/^09\d{9}$/', $customer_phone)) {
-
-    checkoutFail("Please enter a valid 11-digit Philippine mobile number.");
-}
 
 
 /*
@@ -107,81 +264,110 @@ if (!preg_match('/^09\d{9}$/', $customer_phone)) {
 |--------------------------------------------------------------------------
 */
 
-$pickup_type = trim($_POST['pickup_type'] ?? '');
+$pickupTypeInput = $_POST['pickup_type'] ?? '';
+$pickupDateInput = $_POST['pickup_date'] ?? '';
+$pickupTimeInput = $_POST['pickup_time'] ?? '';
 
-$pickup_date = trim($_POST['pickup_date'] ?? '');
-
-$pickup_time = trim($_POST['pickup_time'] ?? '');
-
-
-if ($pickup_type === '') {
-
-    checkoutFail("Please select a pick-up option.");
+if (!is_string($pickupTypeInput) || !is_string($pickupDateInput) || !is_string($pickupTimeInput)) {
+    checkoutFail('Please provide valid pick-up information.');
 }
 
+$pickup_type = trim($pickupTypeInput);
+$pickup_date = trim($pickupDateInput);
+$pickup_time = trim($pickupTimeInput);
 
-/*
-|--------------------------------------------------------------------------
-| PICK-UP NOW
-|--------------------------------------------------------------------------
-*/
-
-if ($pickup_type === 'Now') {
-
-    $pickup_date = date('Y-m-d');
-
-    $pickup_time = date('H:i:s');
+if (!in_array($pickup_type, ['Now', 'Pick-up later'], true)) {
+    checkoutFail('Invalid pick-up option. Please choose Pick-up Now or Pick-up Later.');
 }
 
+$manilaTimezone = new DateTimeZone('Asia/Manila');
+$manilaNow = new DateTimeImmutable('now', $manilaTimezone);
+$currentMinuteOfDay = ((int)$manilaNow->format('G') * 60) + (int)$manilaNow->format('i');
+$openingMinute = 10 * 60;
+$lastPickupMinute = (21 * 60) + 30; // 9:30 PM; the store closes at 10:00 PM.
+$isPickupNow = ($pickup_type === 'Now');
+$selectedPickupDateTime = null;
 
-/*
-|--------------------------------------------------------------------------
-| PICK-UP LATER
-|--------------------------------------------------------------------------
-*/
+if ($isPickupNow) {
+    if ($currentMinuteOfDay < $openingMinute) {
+        checkoutFail('Pick-up Now is available starting at 10:00 AM. Please choose Pick-up Later for an earlier booking.', false, 422, 'pickup_now_unavailable');
+    }
 
-if ($pickup_type === 'Pick-up later') {
-
+    /* Pick-up Now receives its actual date/time only after the capacity lock. */
+    $pickup_date = '';
+    $pickup_time = '';
+} else {
     if ($pickup_date === '' || $pickup_time === '') {
-
-        checkoutFail("Please select a pick-up date and time.");
+        checkoutFail('Please select a pick-up date and time.', false, 422, 'pickup_selection_required');
     }
 
-
-    /*
-     * Prevent past pickup dates.
-     */
-
-    if ($pickup_date < date('Y-m-d')) {
-
-        checkoutFail("Pick-up date cannot be in the past.");
+    /* Strict YYYY-MM-DD calendar-date validation. */
+    if (!preg_match('/\A\d{4}-\d{2}-\d{2}\z/', $pickup_date)) {
+        checkoutFail('Please select a valid pick-up date.', false, 422, 'pickup_invalid_date');
+    }
+    $parsedPickupDate = DateTimeImmutable::createFromFormat('!Y-m-d', $pickup_date, $manilaTimezone);
+    $dateErrors = DateTimeImmutable::getLastErrors();
+    if (
+        !$parsedPickupDate ||
+        ($dateErrors !== false && ($dateErrors['warning_count'] > 0 || $dateErrors['error_count'] > 0)) ||
+        $parsedPickupDate->format('Y-m-d') !== $pickup_date
+    ) {
+        checkoutFail('Please select a valid pick-up date.');
     }
 
+    $todayDate = $manilaNow->format('Y-m-d');
+    $tomorrowDate = $manilaNow->modify('+1 day')->format('Y-m-d');
+    if ($pickup_date < $todayDate || $pickup_date > $tomorrowDate) {
+        checkoutFail('Advance pick-up is available for today or tomorrow only. Please choose a date within this booking period.');
+    }
 
-    /*
-     * Normalize time.
-     */
+    /* Accept only a real 24-hour HH:MM or HH:MM:SS value. */
+    if (!preg_match('/\A(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?\z/', $pickup_time)) {
+        checkoutFail('Please select a valid pick-up time.', false, 422, 'pickup_invalid_time');
+    }
+
+    $timeFormat = strlen($pickup_time) === 5 ? '!H:i' : '!H:i:s';
+    $parsedPickupTime = DateTimeImmutable::createFromFormat($timeFormat, $pickup_time, $manilaTimezone);
+    $timeErrors = DateTimeImmutable::getLastErrors();
+    $expectedTime = strlen($pickup_time) === 5
+        ? $parsedPickupTime?->format('H:i')
+        : $parsedPickupTime?->format('H:i:s');
+
+    if (
+        !$parsedPickupTime ||
+        ($timeErrors !== false && ($timeErrors['warning_count'] > 0 || $timeErrors['error_count'] > 0)) ||
+        $expectedTime !== $pickup_time
+    ) {
+        checkoutFail('Please select a valid pick-up time.');
+    }
 
     if (strlen($pickup_time) === 5) {
-
         $pickup_time .= ':00';
+    }
+
+    $selectedHour = (int)substr($pickup_time, 0, 2);
+    $selectedMinute = (int)substr($pickup_time, 3, 2);
+    $selectedSecond = (int)substr($pickup_time, 6, 2);
+    $selectedMinuteOfDay = ($selectedHour * 60) + $selectedMinute;
+
+    if ($selectedMinuteOfDay < $openingMinute || $selectedMinuteOfDay > $lastPickupMinute) {
+        checkoutFail('Pick-up time must be between 10:00 AM and 9:30 PM.', false, 422, 'pickup_invalid_time');
+    }
+
+    if (($selectedMinute % 15) !== 0 || $selectedSecond !== 0) {
+        checkoutFail('Pick-up times must use 15-minute intervals, such as 10:00 AM, 10:15 AM, or 10:30 AM.', false, 422, 'pickup_invalid_interval');
+    }
+
+    $selectedPickupDateTime = new DateTimeImmutable(
+        $pickup_date . ' ' . $pickup_time,
+        $manilaTimezone
+    );
+
+    if ($selectedPickupDateTime <= $manilaNow) {
+        checkoutFail('The selected pick-up time has already passed. Please choose a later time.', false, 422, 'pickup_time_passed');
     }
 }
 
-
-/*
-|--------------------------------------------------------------------------
-| VALIDATE PICKUP TIME
-|--------------------------------------------------------------------------
-*/
-
-if (
-    $pickup_time < '09:00:00' ||
-    $pickup_time > '22:00:00'
-) {
-
-    checkoutFail("Invalid pick-up time. Operating hours are strictly 9:00 AM to 10:00 PM.");
-}
 
 
 /*
@@ -190,9 +376,11 @@ if (
 |--------------------------------------------------------------------------
 */
 
-$payment_method = strtolower(
-    trim($_POST['payment_method'] ?? '')
-);
+$paymentMethodInput = $_POST['payment_method'] ?? '';
+if (!is_string($paymentMethodInput)) {
+    checkoutFail('Please select a valid payment method.');
+}
+$payment_method = strtolower(trim($paymentMethodInput));
 
 
 /*
@@ -229,13 +417,23 @@ if (!in_array($payment_method, ['cash', 'gcash'], true)) {
 |
 */
 
-$isRegisteredCustomer =
-    isset($_SESSION['user_id']) &&
-    ($_SESSION['user_role'] ?? '') === 'customer';
+$hasCustomerRole = ($_SESSION['user_role'] ?? '') === 'customer';
+$sessionCustomerId = filter_var(
+    $_SESSION['user_id'] ?? null,
+    FILTER_VALIDATE_INT,
+    ['options' => ['min_range' => 1]]
+);
 
-$customer_id = $isRegisteredCustomer
-    ? (int)$_SESSION['user_id']
-    : null;
+if ($hasCustomerRole && $sessionCustomerId === false) {
+    checkoutFail('Your customer session has expired. Please sign in again.');
+}
+
+$isRegisteredCustomer = $hasCustomerRole && $sessionCustomerId !== false;
+$customer_id = $isRegisteredCustomer ? (int)$sessionCustomerId : null;
+
+if (!$isRegisteredCustomer && !empty($_SESSION['user_id'])) {
+    checkoutFail('Please sign in again before placing this order.');
+}
 
 
 /*
@@ -255,6 +453,295 @@ if (
 
 /*
 |--------------------------------------------------------------------------
+| SERVER-SIDE CART / PRODUCT / CUSTOMIZATION VALIDATION
+|--------------------------------------------------------------------------
+|
+| Recheck every cart line against current database data. Session prices are
+| treated as a display snapshot, not as the source of truth. If a price has
+| changed, update the session cart and ask the customer to review the new
+| total before placing the order.
+*/
+$allowedSugarLevels = ['0%', '25%', '50%', '75%', '100%'];
+$allowedSizes = ['', 'Regular', 'Grande'];
+$cartPriceChanged = false;
+$productCache = [];
+$productLookupStmt = $pdo->prepare("
+    SELECT id, category_id, name, price, regular_price, grande_price, is_available, is_archived
+    FROM products
+    WHERE id = ?
+    LIMIT 1
+");
+
+foreach ($_SESSION['cart'] as $cartKey => $cartLine) {
+    if (!is_array($cartLine)) {
+        checkoutFail('Your cart contains an invalid item. Please remove it and try again.');
+    }
+
+    $rawProductId = $cartLine['product_id'] ?? null;
+    $productId = filter_var($rawProductId, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+    if ($productId === false) {
+        checkoutFail('A product in your cart is invalid. Please remove it and try again.');
+    }
+
+    $rawQuantity = $cartLine['quantity'] ?? null;
+    $quantity = filter_var($rawQuantity, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+    if ($quantity === false) {
+        checkoutFail('Every product quantity must be a whole number greater than zero.');
+    }
+
+    if (!isset($productCache[$productId])) {
+        $productLookupStmt->execute([$productId]);
+        $productCache[$productId] = $productLookupStmt->fetch(PDO::FETCH_ASSOC) ?: null;
+    }
+    $dbProduct = $productCache[$productId];
+
+    if (
+        !$dbProduct ||
+        (int)$dbProduct['is_available'] !== 1 ||
+        (int)$dbProduct['is_archived'] !== 0
+    ) {
+        checkoutFail('One of the products in your cart is no longer available. Please remove it or choose another product.');
+    }
+
+    $itemSize = $cartLine['size'] ?? '';
+    if (!is_string($itemSize)) {
+        checkoutFail('A product in your cart has an invalid size. Please edit the item.');
+    }
+    $itemSize = trim($itemSize);
+    if (!in_array($itemSize, $allowedSizes, true)) {
+        checkoutFail('A product in your cart has an invalid size. Please edit the item.');
+    }
+
+    if ($itemSize === 'Regular') {
+        $basePrice = (float)($dbProduct['regular_price'] ?? 0);
+    } elseif ($itemSize === 'Grande') {
+        $basePrice = (float)($dbProduct['grande_price'] ?? 0);
+    } else {
+        $basePrice = (float)($dbProduct['price'] ?? 0);
+    }
+    if (!is_finite($basePrice) || $basePrice <= 0) {
+        checkoutFail('The selected size or price for ' . (string)$dbProduct['name'] . ' is no longer available. Please edit your cart.');
+    }
+
+    $itemSugar = $cartLine['sugar_level'] ?? '';
+    if (!is_string($itemSugar) || !in_array(trim($itemSugar), $allowedSugarLevels, true)) {
+        checkoutFail('A product in your cart has an invalid sugar level. Please edit the item.');
+    }
+
+    $discountType = strtolower(trim((string)($cartLine['discount_type'] ?? 'none')));
+    if (!in_array($discountType, ['none', 'pwd', 'senior'], true)) {
+        checkoutFail('A product in your cart has an invalid discount selection. Please review your cart.');
+    }
+
+    /* Validate add-ons and obtain their current prices from the database. */
+    $rawAddons = $cartLine['addons'] ?? [];
+    if ($rawAddons === null || $rawAddons === '') {
+        $rawAddons = [];
+    }
+    if (!is_array($rawAddons)) {
+        checkoutFail('A product in your cart has invalid add-ons. Please edit the item.');
+    }
+
+    $addonNames = [];
+    foreach ($rawAddons as $addonName) {
+        if (!is_string($addonName)) {
+            checkoutFail('A product in your cart has invalid add-ons. Please edit the item.');
+        }
+        $addonName = trim($addonName);
+        if ($addonName === '') {
+            checkoutFail('A product in your cart has an empty add-on selection. Please edit the item.');
+        }
+        $addonNames[] = $addonName;
+    }
+    if (count($addonNames) !== count(array_unique($addonNames))) {
+        checkoutFail('A product in your cart contains a repeated add-on. Please edit the item.');
+    }
+
+    $addonsTotal = 0.00;
+    if ($addonNames) {
+        $addonPlaceholders = implode(',', array_fill(0, count($addonNames), '?'));
+        $addonValidationStmt = $pdo->prepare("
+            SELECT a.name, a.price
+            FROM addons a
+            INNER JOIN product_addons pa ON pa.addon_id = a.id
+            WHERE pa.product_id = ?
+              AND a.name IN ($addonPlaceholders)
+              AND a.is_available = 1
+              AND a.is_archived = 0
+        ");
+        $addonValidationStmt->execute(array_merge([$productId], $addonNames));
+        $currentAddons = $addonValidationStmt->fetchAll(PDO::FETCH_ASSOC);
+        if (count($currentAddons) !== count($addonNames)) {
+            checkoutFail('One of the add-ons in your cart is no longer available for this product. Please edit the item.');
+        }
+        foreach ($currentAddons as $currentAddon) {
+            $addonPrice = (float)$currentAddon['price'];
+            if (!is_finite($addonPrice) || $addonPrice < 0) {
+                checkoutFail('An add-on price is invalid. Please edit your cart.');
+            }
+            $addonsTotal += $addonPrice;
+        }
+    }
+
+    /* Validate any promotion tag; expired or mismatched promo lines cannot be ordered. */
+    $promotionId = (int)($cartLine['promotion_source_id'] ?? 0);
+    $promotionRole = trim((string)($cartLine['promotion_source_role'] ?? ''));
+    $promotionSlotId = (int)($cartLine['promotion_slot_id'] ?? 0);
+    if ($promotionId > 0) {
+        if (!in_array($promotionRole, ['qualifying', 'buy', 'get', 'bundle'], true)) {
+            checkoutFail('A promotion item in your cart is no longer valid. Please remove it and add it again.');
+        }
+
+        if ($promotionRole === 'bundle') {
+            if ($promotionSlotId <= 0) {
+                checkoutFail('A bundle item in your cart is missing its configured slot. Please add the bundle again.');
+            }
+            $promotionValidationStmt = $pdo->prepare("
+                SELECT pri.size AS promotion_size, slotp.category_id
+                FROM promotions p
+                INNER JOIN promotion_rules r ON r.promotion_id = p.id
+                INNER JOIN promotion_rule_items pri ON pri.rule_id = r.id
+                INNER JOIN products slotp ON slotp.id = pri.product_id
+                WHERE p.id = ?
+                  AND pri.id = ?
+                  AND pri.role = 'bundle'
+                  AND slotp.category_id = ?
+                  AND p.is_active = 1
+                  AND p.is_archived = 0
+                  AND p.start_date <= CURDATE()
+                  AND p.end_date >= CURDATE()
+                LIMIT 1
+            ");
+            $promotionValidationStmt->execute([$promotionId, $promotionSlotId, (int)$dbProduct['category_id']]);
+        } else {
+            if ($promotionSlotId > 0) {
+                checkoutFail('A promotion item in your cart has an invalid bundle slot. Please add it again.');
+            }
+            $promotionValidationStmt = $pdo->prepare("
+                SELECT pri.size AS promotion_size
+                FROM promotions p
+                INNER JOIN promotion_rules r ON r.promotion_id = p.id
+                INNER JOIN promotion_rule_items pri ON pri.rule_id = r.id
+                WHERE p.id = ?
+                  AND pri.product_id = ?
+                  AND pri.role = ?
+                  AND p.is_active = 1
+                  AND p.is_archived = 0
+                  AND p.start_date <= CURDATE()
+                  AND p.end_date >= CURDATE()
+                LIMIT 1
+            ");
+            $promotionValidationStmt->execute([$promotionId, $productId, $promotionRole]);
+        }
+
+        $promotionRow = $promotionValidationStmt->fetch(PDO::FETCH_ASSOC);
+        if (!$promotionRow) {
+            checkoutFail('A promotion in your cart has expired or its product configuration changed. Please review your cart.');
+        }
+        $requiredPromotionSize = strtolower(trim((string)($promotionRow['promotion_size'] ?? '')));
+        if (
+            in_array($requiredPromotionSize, ['regular', 'grande'], true) &&
+            strtolower($itemSize) !== $requiredPromotionSize
+        ) {
+            checkoutFail('A promotion item has an incorrect size. Please edit or add the promotion again.');
+        }
+    } elseif ($promotionRole !== '' || $promotionSlotId > 0) {
+        checkoutFail('A promotion item in your cart is invalid. Please remove it and add it again.');
+    }
+
+    /* Verify menu bundle flavor picks against the current bundle configuration. */
+    $bundlePicks = $cartLine['bundle_picks'] ?? [];
+    if ($bundlePicks !== [] && !is_array($bundlePicks)) {
+        checkoutFail('A bundle in your cart has invalid flavor selections. Please edit the bundle.');
+    }
+    if ($promotionId === 0) {
+        $bundleConfigStmt = $pdo->prepare("SELECT size, cups, category_ids FROM menu_bundle_options WHERE product_id = ?");
+        $bundleConfigStmt->execute([$productId]);
+        $bundleConfigs = $bundleConfigStmt->fetchAll(PDO::FETCH_ASSOC);
+        $bundleConfig = null;
+        foreach ($bundleConfigs as $configRow) {
+            if ((string)$configRow['size'] === $itemSize) {
+                $bundleConfig = $configRow;
+                break;
+            }
+        }
+        if ($bundleConfig) {
+            $requiredCups = (int)$bundleConfig['cups'];
+            $allowedCategories = array_values(array_filter(array_map('intval', explode(',', (string)$bundleConfig['category_ids']))));
+            if ($requiredCups <= 0 || !$allowedCategories || count($bundlePicks) !== $requiredCups) {
+                checkoutFail('A bundle in your cart is missing one or more flavor selections. Please edit the bundle.');
+            }
+            $pickIds = [];
+            foreach ($bundlePicks as $pick) {
+                $pickId = is_array($pick) ? filter_var($pick['id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]) : false;
+                if ($pickId === false) {
+                    checkoutFail('A bundle contains an invalid flavor selection. Please edit the bundle.');
+                }
+                $pickIds[] = (int)$pickId;
+            }
+            $uniquePickIds = array_values(array_unique($pickIds));
+            $pickPlaceholders = implode(',', array_fill(0, count($uniquePickIds), '?'));
+            $bundlePickStmt = $pdo->prepare("
+                SELECT id, name, category_id, price, regular_price, grande_price, is_available, is_archived
+                FROM products
+                WHERE id IN ($pickPlaceholders)
+            ");
+            $bundlePickStmt->execute($uniquePickIds);
+            $bundlePickProducts = [];
+            foreach ($bundlePickStmt->fetchAll(PDO::FETCH_ASSOC) as $pickProduct) {
+                $bundlePickProducts[(int)$pickProduct['id']] = $pickProduct;
+            }
+            foreach ($pickIds as $index => $pickId) {
+                $pickProduct = $bundlePickProducts[$pickId] ?? null;
+                $pickSizePrice = $pickProduct
+                    ? max((float)$pickProduct['price'], (float)($pickProduct['regular_price'] ?? 0), (float)($pickProduct['grande_price'] ?? 0))
+                    : 0;
+                if (
+                    !$pickProduct ||
+                    (int)$pickProduct['is_available'] !== 1 ||
+                    (int)$pickProduct['is_archived'] !== 0 ||
+                    !in_array((int)$pickProduct['category_id'], $allowedCategories, true) ||
+                    $pickSizePrice <= 0
+                ) {
+                    checkoutFail('One of the selected bundle flavors is no longer available. Please edit the bundle.');
+                }
+                $bundlePicks[$index]['id'] = $pickId;
+                $bundlePicks[$index]['name'] = (string)$pickProduct['name'];
+            }
+            $_SESSION['cart'][$cartKey]['bundle_picks'] = $bundlePicks;
+        } elseif (!empty($bundlePicks)) {
+            checkoutFail('The bundle configuration is no longer available. Please remove and add the bundle again.');
+        }
+    }
+
+    $currentUnitPrice = round($basePrice + $addonsTotal, 2);
+    $storedUnitPrice = $cartLine['price'] ?? null;
+    if (!is_numeric($storedUnitPrice) || (float)$storedUnitPrice < 0) {
+        checkoutFail('A product in your cart has an invalid price. Please remove it and add it again.');
+    }
+    if (abs((float)$storedUnitPrice - $currentUnitPrice) > 0.009) {
+        $_SESSION['cart'][$cartKey]['price'] = $currentUnitPrice;
+        $_SESSION['cart'][$cartKey]['name'] = (string)$dbProduct['name'];
+        $_SESSION['cart'][$cartKey]['addons'] = $addonNames;
+        $cartPriceChanged = true;
+    } else {
+        $_SESSION['cart'][$cartKey]['price'] = $currentUnitPrice;
+        $_SESSION['cart'][$cartKey]['name'] = (string)$dbProduct['name'];
+        $_SESSION['cart'][$cartKey]['addons'] = $addonNames;
+    }
+    $_SESSION['cart'][$cartKey]['quantity'] = (int)$quantity;
+    $_SESSION['cart'][$cartKey]['size'] = $itemSize;
+    $_SESSION['cart'][$cartKey]['sugar_level'] = trim($itemSugar);
+    $_SESSION['cart'][$cartKey]['discount_type'] = $discountType;
+}
+
+if ($cartPriceChanged) {
+    checkoutFail('A product or add-on price has changed. Your cart has been updated. Please review the new total before placing your order.', true, 409);
+}
+
+
+/*
+|--------------------------------------------------------------------------
 | CALCULATE TOTAL
 |--------------------------------------------------------------------------
 |
@@ -267,17 +754,12 @@ $subtotal = 0;
 
 
 foreach ($_SESSION['cart'] as $item) {
-
     $price = (float)($item['price'] ?? 0);
-
     $quantity = (int)($item['quantity'] ?? 0);
 
-
-    if ($price < 0 || $quantity <= 0) {
-
-        continue;
+    if (!is_finite($price) || $price < 0 || $quantity <= 0) {
+        checkoutFail('Your cart contains an invalid item. Please review your cart.');
     }
-
 
     $subtotal += $price * $quantity;
 }
@@ -358,7 +840,7 @@ foreach ($_SESSION['cart'] as $cartKey => $item) {
     );
 
     if (!in_array($discountType, ['none', 'pwd', 'senior'], true)) {
-        $discountType = 'none';
+        checkoutFail('A product in your cart has an invalid discount selection. Please review your cart.');
     }
 
     if ($discountType === 'none') {
@@ -404,6 +886,11 @@ $selectedDiscountType =
     !empty($selectedDiscountTypes)
         ? array_key_first($selectedDiscountTypes)
         : 'none';
+
+
+if ($selectedDiscountType !== 'none' && (!$isRegisteredCustomer || !$customer_id)) {
+    checkoutFail('PWD and Senior Citizen discounts are available only to approved customer accounts.');
+}
 
 /*
  * Read discount rates from the existing settings table.
@@ -494,6 +981,170 @@ if (
     $discount_amount = $customer_discount;
 }
 
+/*
+ * ================================================================
+ * ONLINE ORDER LIMIT — MAXIMUM 10 DRINK UNITS
+ * ================================================================
+ *
+ * Count actual drinks, not cart rows:
+ * - Standard drinks: one drink per product quantity.
+ * - Sip-and-Snack combos: one drink per combo quantity.
+ * - Configured menu bundles: use menu_bundle_options.cups.
+ * - Snacks (category 4) and add-ons (category 5): zero drink units.
+ * - Added free promotion rewards: count their actual drink quantity too.
+ *
+ * Promotion free_allocations are already part of the original cart
+ * quantities, so they are not added a second time.
+ */
+$maxOnlineDrinkUnits = 10;
+$onlineDrinkUnits = 0;
+
+$bundleDrinkCountStmt = $pdo->prepare("
+    SELECT cups
+    FROM menu_bundle_options
+    WHERE product_id = ?
+      AND size = ?
+    LIMIT 1
+");
+
+foreach ($_SESSION['cart'] as $cartKey => $cartLine) {
+    $productId = (int)($cartLine['product_id'] ?? 0);
+    $quantity = (int)($cartLine['quantity'] ?? 0);
+    $productRow = $productCache[$productId] ?? null;
+
+    if (!$productRow || $productId <= 0 || $quantity <= 0) {
+        checkoutFail('Your cart contains an item whose drink quantity could not be verified. Please review your cart.');
+    }
+
+    $categoryId = (int)($productRow['category_id'] ?? 0);
+
+    // Category 4 is Snacks and category 5 is Add-ons in this database.
+    if (in_array($categoryId, [4, 5], true)) {
+        continue;
+    }
+
+    $itemSizeForCount = trim((string)($cartLine['size'] ?? ''));
+    $bundleDrinkCountStmt->execute([$productId, $itemSizeForCount]);
+    $configuredBundleCups = $bundleDrinkCountStmt->fetchColumn();
+
+    if ($configuredBundleCups !== false) {
+        $cupsPerBundle = (int)$configuredBundleCups;
+
+        if ($cupsPerBundle <= 0) {
+            checkoutFail('A bundle in your cart has an invalid drink configuration. Please remove it and add it again.');
+        }
+
+        $onlineDrinkUnits += $cupsPerBundle * $quantity;
+    } elseif ($categoryId === 15) {
+        // A product in the Bundle category must have a verifiable cup configuration.
+        $bundlePicksForCount = $cartLine['bundle_picks'] ?? [];
+
+        if (!is_array($bundlePicksForCount) || count($bundlePicksForCount) === 0) {
+            checkoutFail('We could not verify the drink count for a bundle in your cart. Please remove it and add it again.');
+        }
+
+        $onlineDrinkUnits += count($bundlePicksForCount) * $quantity;
+    } else {
+        // Includes one drink per Sip-and-Snack combo.
+        $onlineDrinkUnits += $quantity;
+    }
+
+    if ($onlineDrinkUnits > $maxOnlineDrinkUnits) {
+        checkoutFail(
+            'Online orders are limited to 10 drink units per order. Your cart contains '
+            . $onlineDrinkUnits
+            . ' drink units. Please contact Local Milktea House directly to arrange a bulk order.'
+        );
+    }
+}
+
+/*
+ * Added Buy/Get reward products are saved as separate order-item rows,
+ * so they must be included in the same 10-drink limit.
+ */
+if (!empty($promotion_reward_items)) {
+    $rewardProductLookupStmt = $pdo->prepare("
+        SELECT category_id
+        FROM products
+        WHERE id = ?
+        LIMIT 1
+    ");
+
+    foreach ($promotion_reward_items as $rewardItem) {
+        if (!is_array($rewardItem)) {
+            checkoutFail('A promotional reward could not be verified. Please review your cart.');
+        }
+
+        $rewardProductId = filter_var(
+            $rewardItem['product_id'] ?? null,
+            FILTER_VALIDATE_INT,
+            ['options' => ['min_range' => 1]]
+        );
+        $rewardQuantity = filter_var(
+            $rewardItem['quantity'] ?? null,
+            FILTER_VALIDATE_INT,
+            ['options' => ['min_range' => 1]]
+        );
+
+        if ($rewardProductId === false || $rewardQuantity === false) {
+            checkoutFail('A promotional reward has an invalid quantity. Please review your cart.');
+        }
+
+        $rewardProductLookupStmt->execute([(int)$rewardProductId]);
+        $rewardProductRow = $rewardProductLookupStmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$rewardProductRow) {
+            checkoutFail('A promotional reward product could not be verified. Please review your cart.');
+        }
+
+        $rewardCategoryId = (int)($rewardProductRow['category_id'] ?? 0);
+
+        if (in_array($rewardCategoryId, [4, 5], true)) {
+            continue;
+        }
+
+        $rewardSize = trim((string)($rewardItem['size'] ?? ''));
+        $bundleDrinkCountStmt->execute([(int)$rewardProductId, $rewardSize]);
+        $rewardBundleCups = $bundleDrinkCountStmt->fetchColumn();
+
+        if ($rewardBundleCups !== false) {
+            $cupsPerRewardBundle = (int)$rewardBundleCups;
+
+            if ($cupsPerRewardBundle <= 0) {
+                checkoutFail('A promotional bundle has an invalid drink configuration. Please review your cart.');
+            }
+
+            $onlineDrinkUnits += $cupsPerRewardBundle * (int)$rewardQuantity;
+        } elseif ($rewardCategoryId === 15) {
+            $rewardBundlePicks = $rewardItem['bundle_picks'] ?? [];
+
+            if (!is_array($rewardBundlePicks) || count($rewardBundlePicks) === 0) {
+                checkoutFail('We could not verify the drink count for a promotional bundle. Please review your cart.');
+            }
+
+            $onlineDrinkUnits += count($rewardBundlePicks) * (int)$rewardQuantity;
+        } else {
+            $onlineDrinkUnits += (int)$rewardQuantity;
+        }
+
+        if ($onlineDrinkUnits > $maxOnlineDrinkUnits) {
+            checkoutFail(
+                'Online orders are limited to 10 drink units per order. Your order, including free promotional drinks, contains '
+                . $onlineDrinkUnits
+                . ' drink units. Please contact Local Milktea House directly to arrange a bulk order.'
+            );
+        }
+    }
+}
+
+if ($onlineDrinkUnits > $maxOnlineDrinkUnits) {
+    checkoutFail(
+        'Online orders are limited to 10 drink units per order. Your order contains '
+        . $onlineDrinkUnits
+        . ' drink units. Please contact Local Milktea House directly to arrange a bulk order.'
+    );
+}
+
 $total_amount = round(
     max(
         0,
@@ -534,14 +1185,22 @@ if ($payment_method === 'gcash') {
 
     if (
         !isset($_FILES['payment_screenshot']) ||
-        $_FILES['payment_screenshot']['error'] !== UPLOAD_ERR_OK
+        !is_array($_FILES['payment_screenshot']) ||
+        !isset($_FILES['payment_screenshot']['error']) ||
+        (int)$_FILES['payment_screenshot']['error'] !== UPLOAD_ERR_OK
     ) {
-
         checkoutFail("Please upload your GCash payment screenshot.");
     }
 
-
     $file = $_FILES['payment_screenshot'];
+    if (
+        empty($file['tmp_name']) ||
+        !is_uploaded_file($file['tmp_name']) ||
+        !isset($file['size']) ||
+        (int)$file['size'] <= 0
+    ) {
+        checkoutFail('The uploaded GCash screenshot is invalid. Please choose the image again.');
+    }
 
 
     /*
@@ -577,6 +1236,11 @@ if ($payment_method === 'gcash') {
     if (!isset($allowedMimeTypes[$mimeType])) {
 
         checkoutFail("Invalid payment screenshot. Only JPG, JPEG, or PNG files are allowed.");
+    }
+
+
+    if (@getimagesize($file['tmp_name']) === false) {
+        checkoutFail('The GCash screenshot is not a valid image file. Please upload a JPG or PNG image.');
     }
 
 
@@ -673,7 +1337,114 @@ if ($payment_method === 'gcash') {
 
 try {
 
+    /*
+     * ================================================================
+     * RESERVE A PICKUP SLOT SAFELY
+     * ================================================================
+     * MySQL named locks are connection-scoped and survive transaction
+     * commits. Acquire the lock before checking capacity, then keep it until
+     * the order has been inserted and committed. This prevents concurrent
+     * guest/customer checkouts from both taking the final place in a slot.
+     */
+    $pickupLockStmt = $pdo->prepare('SELECT GET_LOCK(?, 10)');
+    $pickupLockStmt->execute([$pickupCapacityLockName]);
+    $pickupLockResult = $pickupLockStmt->fetchColumn();
+
+    if ((string)$pickupLockResult !== '1') {
+        checkoutFail('Pickup scheduling is busy right now. Please try placing your order again.', true, 409, 'pickup_scheduling_busy');
+    }
+    $pickupCapacityLockAcquired = true;
+
+    // Refresh the time only after obtaining the lock; previous validation may be stale.
+    $pickupNow = new DateTimeImmutable('now', $manilaTimezone);
+    // Preparation time in minutes per payment method (Cash and GCash are both 10).
+    $pickupLeadByPayment = ['cash' => 10, 'gcash' => 10];
+    $pickupLeadMinutes = $pickupLeadByPayment[$payment_method] ?? 10;
+    $earliestPickupSlot = checkoutEarliestPickupSlot($pickupNow, $pickupLeadMinutes);
+    $pickupToday = $pickupNow->format('Y-m-d');
+    $pickupTomorrow = $pickupNow->modify('+1 day')->format('Y-m-d');
+
+    if ($isPickupNow) {
+        $freshMinuteOfDay = ((int)$pickupNow->format('G') * 60) + (int)$pickupNow->format('i');
+        if ($freshMinuteOfDay < $openingMinute) {
+            checkoutFail('Pick-up Now is available starting at 10:00 AM. Please choose Pick-up Later.', false, 422, 'pickup_now_unavailable');
+        }
+
+        // Pick-up Now must be fulfilled today; it cannot silently roll into tomorrow.
+        if (
+            $earliestPickupSlot->format('Y-m-d') !== $pickupToday ||
+            (((int)$earliestPickupSlot->format('G') * 60) + (int)$earliestPickupSlot->format('i')) > $lastPickupMinute
+        ) {
+            checkoutFail('No pickup slots remain today with enough preparation time. Please choose Pick-up Later for tomorrow.', true, 409, 'pickup_no_slots_today');
+        }
+
+        $pickup_date = $pickupToday;
+    } else {
+        // Recheck the today/tomorrow window using the fresh server time.
+        if ($pickup_date < $pickupToday || $pickup_date > $pickupTomorrow) {
+            checkoutFail('Advance pick-up is available for today or tomorrow only. Please choose a date within this booking period.', true, 409, 'pickup_date_window');
+        }
+
+        if ($selectedPickupDateTime === null || $selectedPickupDateTime < $earliestPickupSlot) {
+            if ($earliestPickupSlot->format('Y-m-d') > $pickupTomorrow) {
+                checkoutFail('No valid pickup slots remain within the today-or-tomorrow booking window. Please contact the store for assistance.', true, 409, 'pickup_no_slots_today');
+            }
+
+            checkoutFail(
+                'The selected pickup time does not allow enough preparation time for this payment method. The earliest eligible slot is ' .
+                $earliestPickupSlot->format('g:i A') . ' on ' . $earliestPickupSlot->format('M j, Y') . '. Please select that time or a later slot.',
+                true,
+                409,
+                'pickup_lead_time'
+            );
+        }
+    }
+
     $pdo->beginTransaction();
+
+    $pickupSlotCountStmt = $pdo->prepare("
+        SELECT COUNT(*)
+        FROM orders
+        WHERE order_source = 'online'
+          AND COALESCE(status, '') <> 'cancelled'
+          AND pickup_date = ?
+          AND pickup_time = ?
+    ");
+    $maximumOnlineOrdersPerSlot = 5;
+
+    if ($isPickupNow) {
+        $candidateSlot = $earliestPickupSlot;
+        $lastSlotToday = $pickupNow->setTime(21, 30, 0);
+        $slotAssigned = false;
+
+        while ($candidateSlot->format('Y-m-d') === $pickupToday && $candidateSlot <= $lastSlotToday) {
+            $candidateDate = $candidateSlot->format('Y-m-d');
+            $candidateTime = $candidateSlot->format('H:i:s');
+
+            $pickupSlotCountStmt->execute([$candidateDate, $candidateTime]);
+            $existingSlotOrders = (int)$pickupSlotCountStmt->fetchColumn();
+
+            if ($existingSlotOrders < $maximumOnlineOrdersPerSlot) {
+                $pickup_date = $candidateDate;
+                $pickup_time = $candidateTime;
+                $slotAssigned = true;
+                break;
+            }
+
+            $candidateSlot = $candidateSlot->modify('+15 minutes');
+        }
+
+        if (!$slotAssigned) {
+            checkoutFail('No pickup slots remain today. Please choose Pick-up Later for tomorrow.', true, 409, 'pickup_no_slots_today');
+        }
+    } else {
+        $pickupSlotCountStmt->execute([$pickup_date, $pickup_time]);
+        $existingSlotOrders = (int)$pickupSlotCountStmt->fetchColumn();
+
+        if ($existingSlotOrders >= $maximumOnlineOrdersPerSlot) {
+            checkoutFail('This pickup slot is already full. Please choose another available 15-minute slot.', true, 409, 'pickup_slot_full');
+        }
+    }
 
     /*
      * ================================================================
@@ -689,6 +1460,8 @@ try {
         if (!$isRegisteredCustomer || !$customer_id) {
             checkoutFail('PWD and Senior Citizen discounts are available only to approved customer accounts.');
         }
+        $verifiedDiscountIdName = '';
+        $verifiedDiscountIdNumber = '';
 
         $lockedCustomerStmt = $pdo->prepare("
             SELECT discount_type, verification_status, discount_id_name, discount_id_number
@@ -715,6 +1488,31 @@ try {
             checkoutFail('Your PWD/Senior Citizen ID must be approved and match your account before using the discount.');
         }
 
+
+        /* The ID name and number must both match the verified account record. */
+        $cartDiscountIdName = '';
+        $cartDiscountIdNumber = '';
+        foreach ($_SESSION['cart'] as $discountCartItem) {
+            if (strtolower(trim((string)($discountCartItem['discount_type'] ?? 'none'))) === $appliedDiscountType) {
+                $cartDiscountIdName = preg_replace('/\s+/u', ' ', trim((string)($discountCartItem['discount_id_name'] ?? '')));
+                $cartDiscountIdNumber = strtoupper(trim((string)($discountCartItem['discount_id_number'] ?? '')));
+                break;
+            }
+        }
+        $normalizedApprovedName = preg_replace('/\s+/u', ' ', trim($lockedIdName));
+        $cartDiscountIdNameCompare = function_exists('mb_strtolower')
+            ? mb_strtolower($cartDiscountIdName, 'UTF-8')
+            : strtolower($cartDiscountIdName);
+        $approvedDiscountIdNameCompare = function_exists('mb_strtolower')
+            ? mb_strtolower($normalizedApprovedName, 'UTF-8')
+            : strtolower($normalizedApprovedName);
+        if (
+            $cartDiscountIdName === '' ||
+            $cartDiscountIdNameCompare !== $approvedDiscountIdNameCompare
+        ) {
+            checkoutFail('The name entered for the discount does not match the approved ID on your account.');
+        }
+
         // Confirm the cart's submitted ID corresponds to the approved ID on this account.
         $cartDiscountIdNumber = '';
         foreach ($_SESSION['cart'] as $discountCartItem) {
@@ -729,23 +1527,40 @@ try {
             checkoutFail('The discount ID in your cart does not match the approved ID on your account.');
         }
 
+        $verifiedDiscountIdName = $lockedIdName;
+        $verifiedDiscountIdNumber = $lockedIdNumber;
+
         // Any prior order where this discount was actually applied consumes it,
         // regardless of that order's current status.
         $previousUseStmt = $pdo->prepare("
             SELECT id
             FROM orders
             WHERE customer_id = ?
-              AND LOWER(COALESCE(discount_type, 'none')) = ?
+              AND LOWER(COALESCE(discount_type, 'none')) IN ('pwd', 'senior')
               AND COALESCE(discount_amount, 0) > 0
             LIMIT 1
         ");
-        $previousUseStmt->execute([$customer_id, $appliedDiscountType]);
+        $previousUseStmt->execute([$customer_id]);
 
         if ($previousUseStmt->fetchColumn()) {
-            checkoutFail('Your PWD/Senior Citizen discount has already been used once and cannot be used on another order.');
+            checkoutFail('Your one-time PWD/Senior Citizen discount has already been used on a previous order.');
         }
     }
 
+
+    /*
+     * Secure guest tracking credential.
+     * The raw random token is sent only in the post-checkout tracking URL;
+     * only its SHA-256 hash is persisted. Registered-customer orders do not
+     * need a guest tracking token.
+     */
+    $guestTrackingToken = null;
+    $guestTrackingTokenHash = null;
+
+    if (!$isRegisteredCustomer) {
+        $guestTrackingToken = bin2hex(random_bytes(32)); // 256 bits of entropy
+        $guestTrackingTokenHash = hash('sha256', $guestTrackingToken);
+    }
 
     /*
      * ================================================================
@@ -758,6 +1573,8 @@ try {
         (
             order_number,
             claim_number,
+            order_source,
+            guest_tracking_token_hash,
             customer_id,
             customer_name,
             contact_number,
@@ -788,6 +1605,8 @@ try {
             ?,
             ?,
             ?,
+            ?,
+            ?,
             ?
         )
     ");
@@ -800,6 +1619,8 @@ try {
     $stmtOrder->execute([
         null,
         null,
+        'online',
+        $guestTrackingTokenHash,
         $customer_id,
         $customer_name,
         $customer_phone,
@@ -829,6 +1650,43 @@ try {
             "Failed to generate order ID."
         );
     }
+
+    /*
+ * ================================================================
+ * INSERT ONLINE PAYMENT RECORD
+ * ================================================================
+ *
+ * Online payments are initially unverified.
+ *
+ * Cash:
+ *   Payment will be verified when received at pick-up.
+ *
+ * GCash:
+ *   Payment will be verified after Admin or Staff checks the proof.
+ *
+ * The payment proof uses the same uploaded file path saved in orders.
+ */
+
+$paymentStmt = $pdo->prepare("
+    INSERT INTO payments
+    (
+        order_id,
+        payment_method,
+        amount,
+        proof_image,
+        is_verified,
+        verified_at,
+        verified_by
+    )
+    VALUES (?, ?, ?, ?, 0, NULL, NULL)
+");
+
+$paymentStmt->execute([
+    $order_id,
+    $payment_method,
+    $total_amount,
+    $payment_screenshot
+]);
 
 
     /*
@@ -863,7 +1721,10 @@ try {
             }
         }
 
-        if ($discountIdName !== '' && $discountIdNumber !== '') {
+        if (!empty($verifiedDiscountIdName) && !empty($verifiedDiscountIdNumber)) {
+
+            $discountIdName = $verifiedDiscountIdName;
+            $discountIdNumber = $verifiedDiscountIdNumber;
 
             $discountNote =
                 strtoupper($appliedDiscountType) .
@@ -1062,11 +1923,13 @@ try {
 
 
         if (
+            $product_id === null ||
             $quantity <= 0 ||
             $product_name === '' ||
+            !is_finite($unit_price) ||
             $unit_price < 0
         ) {
-            continue;
+            checkoutFail('An invalid product was found while saving your order. No order was placed.');
         }
 
 
@@ -1239,9 +2102,26 @@ try {
             $rewardProductId <= 0 ||
             $rewardName === '' ||
             $rewardQuantity <= 0 ||
+            !is_finite($rewardUnitPrice) ||
             $rewardUnitPrice < 0
         ) {
-            continue;
+            checkoutFail('A promotion reward is invalid. Please review the promotion and try again.');
+        }
+
+        $rewardAvailabilityStmt = $pdo->prepare("
+            SELECT is_available, is_archived
+            FROM products
+            WHERE id = ?
+            LIMIT 1
+        ");
+        $rewardAvailabilityStmt->execute([$rewardProductId]);
+        $rewardAvailability = $rewardAvailabilityStmt->fetch(PDO::FETCH_ASSOC);
+        if (
+            !$rewardAvailability ||
+            (int)$rewardAvailability['is_available'] !== 1 ||
+            (int)$rewardAvailability['is_archived'] !== 0
+        ) {
+            checkoutFail('A free product in the promotion is no longer available. Please review your order.');
         }
 
         $rewardSubtotal = round(
@@ -1490,6 +2370,96 @@ try {
 
     $pdo->commit();
 
+    // The slot is now committed and visible to the next checkout request.
+    releasePickupCapacityLock();
+
+    unset($_SESSION['checkout_request_token']);
+
+    /*
+     * Remember every guest order in this server-side session.
+     * This is a session-scoped order list, not a permanent guest history.
+     * The raw tokens are held only server-side so the guest can copy a
+     * secure link later; the database stores only each token's SHA-256 hash.
+     */
+    if (!$isRegisteredCustomer && $guestTrackingToken !== null) {
+        $guestOrders = $_SESSION['guest_orders'] ?? [];
+        if (!is_array($guestOrders)) {
+            $guestOrders = [];
+        }
+
+        $nowForGuestOrders = time();
+        $guestOrderTtl = 30 * 24 * 60 * 60;
+
+        // Migrate the previous single-order session entry so this checkout
+        // doesn't discard an earlier guest order when a second order is placed.
+        $legacyId = filter_var($_SESSION['last_guest_order_id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+        $legacyClaim = trim((string)($_SESSION['last_guest_claim_number'] ?? ''));
+        $legacyToken = strtolower(trim((string)($_SESSION['last_guest_tracking_token'] ?? '')));
+        $legacySavedAt = filter_var($_SESSION['last_guest_order_saved_at'] ?? null, FILTER_VALIDATE_INT);
+        if (
+            $legacyId !== false && $legacyClaim !== '' &&
+            preg_match('/\A[a-f0-9]{64}\z/D', $legacyToken) === 1 &&
+            $legacySavedAt !== false && $legacySavedAt <= $nowForGuestOrders &&
+            ($nowForGuestOrders - $legacySavedAt) <= $guestOrderTtl
+        ) {
+            $legacyKey = (string)(int)$legacyId;
+            if (!isset($guestOrders[$legacyKey])) {
+                $guestOrders[$legacyKey] = [
+                    'claim_number' => $legacyClaim,
+                    'tracking_token' => $legacyToken,
+                    'saved_at' => $legacySavedAt,
+                ];
+            }
+        }
+
+        // Discard malformed or expired session entries without touching database orders.
+        foreach ($guestOrders as $savedOrderId => $savedOrder) {
+            $savedId = filter_var((string)$savedOrderId, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+            $savedAt = is_array($savedOrder)
+                ? filter_var($savedOrder['saved_at'] ?? null, FILTER_VALIDATE_INT)
+                : false;
+            $savedToken = is_array($savedOrder)
+                ? strtolower(trim((string)($savedOrder['tracking_token'] ?? '')))
+                : '';
+            $savedClaim = is_array($savedOrder)
+                ? trim((string)($savedOrder['claim_number'] ?? ''))
+                : '';
+
+            if (
+                $savedId === false ||
+                $savedAt === false ||
+                $savedAt > $nowForGuestOrders ||
+                ($nowForGuestOrders - $savedAt) > $guestOrderTtl ||
+                $savedClaim === '' ||
+                preg_match('/\A[a-f0-9]{64}\z/D', $savedToken) !== 1
+            ) {
+                unset($guestOrders[$savedOrderId]);
+            }
+        }
+
+        $guestOrders[(string)(int)$order_id] = [
+            'claim_number' => (string)$claim_number,
+            'tracking_token' => (string)$guestTrackingToken,
+            'saved_at' => $nowForGuestOrders,
+        ];
+
+        $_SESSION['guest_orders'] = $guestOrders;
+
+        // Retain the previous single-order keys for safe migration of existing browser sessions.
+        $_SESSION['last_guest_order_id'] = (int)$order_id;
+        $_SESSION['last_guest_claim_number'] = (string)$claim_number;
+        $_SESSION['last_guest_tracking_token'] = (string)$guestTrackingToken;
+        $_SESSION['last_guest_order_saved_at'] = $nowForGuestOrders;
+    } elseif ($isRegisteredCustomer) {
+        // Do not surface guest orders while this session is authenticated as a customer.
+        unset(
+            $_SESSION['last_guest_order_id'],
+            $_SESSION['last_guest_claim_number'],
+            $_SESSION['last_guest_tracking_token'],
+            $_SESSION['last_guest_order_saved_at']
+        );
+    }
+
 
     /*
      * ================================================================
@@ -1533,7 +2503,9 @@ try {
 
         $successRedirect =
             "monitor-guest-order.php?claim=" .
-            urlencode($claim_number);
+            urlencode($claim_number) .
+            "&track=" .
+            urlencode((string)$guestTrackingToken);
 
     } else {
 
@@ -1547,6 +2519,11 @@ try {
             'message' => 'Your order has been placed successfully.',
             'order_number' => $order_number,
             'claim_number' => $claim_number,
+            'pickup_type' => $pickup_type,
+            'pickup_date' => $pickup_date,
+            'pickup_time' => $pickup_time,
+            'pickup_time_label' => (new DateTimeImmutable($pickup_date . ' ' . $pickup_time, $manilaTimezone))->format('g:i A'),
+            'pickup_date_label' => (new DateTimeImmutable($pickup_date . ' ' . $pickup_time, $manilaTimezone))->format('F j, Y'),
             'redirect' => $successRedirect
         ]);
         exit;
@@ -1568,6 +2545,8 @@ try {
         $pdo->rollBack();
     }
 
+    // Release the named lock on every exception path as well.
+    releasePickupCapacityLock();
 
     /*
      * If the GCash image was successfully uploaded but
@@ -1592,44 +2571,21 @@ try {
     }
 
 
+    /* Keep the real reason in the server log only. */
+    error_log('Checkout failed: ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine());
+
+    http_response_code(500);
+
     if ($isAjaxRequest) {
-        http_response_code(500);
         header('Content-Type: application/json; charset=utf-8');
         echo json_encode([
             'success' => false,
-            'message' => 'Unable to place your order right now.'
+            'message' => 'Unable to place your order right now. Please try again.'
         ]);
         exit;
     }
 
-    /*
-     * Show error while developing.
-     */
-
-    echo "<div style='
-        font-family:Arial;
-        max-width:700px;
-        margin:50px auto;
-        padding:25px;
-        border:1px solid #ddd;
-        border-radius:10px;
-        background:#fff;
-    '>";
-
-    echo "<h3 style='color:#b02a37;'>Checkout Error</h3>";
-
-    echo "<p>";
-    echo htmlspecialchars(
-        $e->getMessage()
-    );
-    echo "</p>";
-
-    echo "<a href='cart.php'>
-            Return to Cart
-          </a>";
-
-    echo "</div>";
-
+    checkoutRenderErrorPage('Something went wrong while placing your order. Please try again, or contact Local Milktea House if the problem continues.');
     exit;
 }
 

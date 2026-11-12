@@ -1022,7 +1022,7 @@ if ($menuBundleConfig) {
                                 id="size1"
                                 value="Regular"
                                 data-price="<?= $regularPrice ?>"
-                                <?= ($fixedPromotionSize === 'Regular' || ($fixedPromotionSize === '' && $grandePrice <= 0)) ? 'checked' : '' ?>
+                                <?= ($fixedPromotionSize === 'Regular' || ($fixedPromotionSize === '' && $regularPrice > 0)) ? 'checked' : '' ?>
                                 required
                                 onchange="calculateTotal()"
                                 <?= ($isPromotionGet && $fixedPromotionSize !== '' && $fixedPromotionSize !== 'Regular') || (!$isAvailable) ? 'disabled' : '' ?>
@@ -1117,7 +1117,7 @@ if ($menuBundleConfig) {
                         <?php $sugars = ['0%', '25%', '50%', '75%', '100%'];
                         foreach ($sugars as $i => $sugar): ?>
                         <div class="form-check pv-choice pv-choice--pill">
-                            <input class="form-check-input" type="radio" name="sugar_level" id="sugar_<?= $i ?>" value="<?= $sugar ?>" required <?= !$isAvailable ? 'disabled' : '' ?>>
+                            <input class="form-check-input" type="radio" name="sugar_level" id="sugar_<?= $i ?>" value="<?= $sugar ?>" required <?= ($sugar === '50%' ? 'checked ' : '') . (!$isAvailable ? 'disabled' : '') ?>>
                             <label class="form-check-label" for="sugar_<?= $i ?>"><?= $sugar ?></label>
                         </div>
                         <?php endforeach; ?>

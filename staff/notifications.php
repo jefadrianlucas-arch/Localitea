@@ -27,6 +27,11 @@ if (
     ($_GET['ajax'] ?? '') === 'notifications'
 ) {
 
+    /* This request returns JSON only, so release the session lock now. */
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        session_write_close();
+    }
+
     header('Content-Type: application/json; charset=utf-8');
     header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 
@@ -99,6 +104,11 @@ if (
 
     $notification_id = (int)($_POST['notification_id'] ?? 0);
     $isAjaxAction = ($_POST['ajax'] ?? '') === 'notification_action';
+
+    /* Only AJAX actions exit with JSON before the navbar is included. */
+    if ($isAjaxAction && session_status() === PHP_SESSION_ACTIVE) {
+        session_write_close();
+    }
 
     if ($notification_id <= 0) {
 
@@ -183,6 +193,11 @@ if (
 ) {
 
     $isAjaxAction = ($_POST['ajax'] ?? '') === 'notification_action';
+
+    /* Only AJAX actions exit with JSON before the navbar is included. */
+    if ($isAjaxAction && session_status() === PHP_SESSION_ACTIVE) {
+        session_write_close();
+    }
 
     try {
 
@@ -1345,9 +1360,7 @@ require_once '../includes/header.php';
 
                     </h2>
 
-                    <p>
-                        View recent order notifications and updates.
-                    </p>
+                
 
                 </div>
 
@@ -1757,10 +1770,10 @@ require_once '../includes/header.php';
                                         <button
                                             type="button"
                                             class="btn-view-order"
-                                            onclick="window.showNotificationToast('<?= htmlspecialchars(
+                                            data-toast-message="<?= htmlspecialchars(
                                                 $orderViewMessage,
                                                 ENT_QUOTES
-                                            ) ?>');"
+                                            ) ?>"
                                         >
 
                                             <i class="bi bi-eye"></i>
@@ -2022,10 +2035,14 @@ require_once '../includes/header.php';
    complete notification list without refreshing the page.
 ========================================================= */
 
-,window.LocaliteaNotificationPageUpdater = function (
+window.LocaliteaNotificationPageUpdater = function (
     data,
     hasNewNotifications = false
 ) {
+
+    if (window.__staffNotificationActionPending) {
+        return;
+    }
 
     if (!data || !data.success) {
         return;
@@ -2430,7 +2447,7 @@ if (hasNewNotifications) {
                         <button
                             type="button"
                             class="btn-view-order"
-                            onclick="window.showNotificationToast('Order not found or finished.');"
+                            data-toast-message="Order not found or finished."
                         >
 
                             <i class="bi bi-eye"></i>
@@ -2765,7 +2782,7 @@ if (totalNotificationPages > 1) {
 section.innerHTML =
     cards.join('') +
     paginationHtml;
-});
+};
 </script>
 
 <script>
@@ -2796,12 +2813,12 @@ section.innerHTML =
         toastMessage.textContent = message;
 
         if (
-            typeof bootstrap !== 'undefined' &&
-            bootstrap.Toast
+            window.bootstrap &&
+            window.bootstrap.Toast
         ) {
 
             const toast =
-                bootstrap.Toast.getOrCreateInstance(
+                window.bootstrap.Toast.getOrCreateInstance(
                     toastElement,
                     {
                         delay: 2500
@@ -2831,295 +2848,215 @@ section.innerHTML =
      */
     window.showNotificationToast = showNotificationToast;
 
+    /* "View Order" on a finished/missing order: show the toast.
+       Delegated, so it also works after the live updater rebuilds the cards. */
+    document.addEventListener('click', function (event) {
+        const trigger = event.target.closest('[data-toast-message]');
+
+        if (trigger) {
+            showNotificationToast(trigger.dataset.toastMessage || '');
+        }
+    });
+
 
     /* ---------------------------------------------------------
-       REFRESH NOTIFICATIONS
+       UPDATE THE CURRENT PAGE IMMEDIATELY AFTER THE SERVER
+       CONFIRMS THE DATABASE CHANGE. Do not fetch/rebuild the
+       entire notification list just to change one card.
     --------------------------------------------------------- */
 
-    async function refreshNotificationPage() {
+    function updateUnreadHeader(unreadCount) {
+        const count = Math.max(0, Number(unreadCount || 0));
+        const actions = document.querySelector('.notification-actions');
 
-        try {
-
-            const response = await fetch(
-                'notifications.php?ajax=notifications&_=' +
-                Date.now(),
-                {
-                    method: 'GET',
-                    cache: 'no-store',
-                    headers: {
-                        'X-Requested-With': 'XMLHttpRequest'
-                    }
-                }
-            );
-
-            const data = await response.json();
-
-            if (
-                data &&
-                data.success &&
-                typeof window.LocaliteaNotificationPageUpdater ===
-                    'function'
-            ) {
-
-                window.LocaliteaNotificationPageUpdater(
-                data,
-                false
-            );
+        if (actions) {
+            if (count > 0) {
+                actions.innerHTML = `
+                    <span class="unread-badge">
+                        <i class="bi bi-bell-fill me-1"></i>
+                        ${count} unread
+                    </span>
+                    <form method="POST">
+                        <button type="submit" name="mark_all_read" class="btn-mark-all">
+                            <i class="bi bi-check2-all me-1"></i>
+                            Mark All as Read
+                        </button>
+                    </form>
+                `;
+            } else {
+                actions.innerHTML = `
+                    <span class="unread-badge">
+                        <i class="bi bi-check-circle me-1"></i>
+                        All caught up
+                    </span>
+                `;
             }
+        }
 
-        } catch (error) {
+        // Keep the sidebar's unread badge in sync as well.
+        const sidebarBadge = document.getElementById('sidebarNotificationBadge');
+        if (sidebarBadge) {
+            sidebarBadge.textContent = count > 99 ? '99+' : String(count);
+            sidebarBadge.hidden = count === 0;
+        }
+    }
 
-            console.error(
-                'Unable to refresh notifications:',
-                error
-            );
+    function renderCardAsRead(card) {
+        if (!card) {
+            return;
+        }
+
+        card.classList.remove('unread');
+        card.classList.add('read');
+
+        const newBadge = card.querySelector('.new-badge');
+        if (newBadge) {
+            newBadge.remove();
+        }
+
+        const readForm = card.querySelector('.notification-card-actions form');
+        if (readForm) {
+            const readLabel = document.createElement('span');
+            readLabel.className = 'text-muted';
+            readLabel.style.fontSize = '11px';
+            readLabel.innerHTML = '<i class="bi bi-check2-all me-1"></i>Read';
+            readForm.replaceWith(readLabel);
         }
     }
 
 
     /* ---------------------------------------------------------
        HANDLE MARK AS READ / MARK ALL AS READ
-       Event delegation keeps this working even after
-       AJAX rebuilds the notification cards.
     --------------------------------------------------------- */
+
+    async function submitNotificationAction(
+        form,
+        button,
+        actionName,
+        successMessage,
+        failureMessage
+    ) {
+        if (form.dataset.submitting === '1') {
+            return;
+        }
+
+        form.dataset.submitting = '1';
+        window.__staffNotificationActionPending = true;
+
+        const formData = new FormData(form);
+        formData.set(actionName, '1');
+        formData.set('ajax', 'notification_action');
+
+        const originalHtml = button.innerHTML;
+        const requestController = new AbortController();
+        const requestTimeout = window.setTimeout(function () {
+            requestController.abort();
+        }, 12000);
+
+        button.disabled = true;
+        button.innerHTML = `
+            <span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>
+            Marking...
+        `;
+
+        try {
+            const response = await fetch(window.location.pathname, {
+                method: 'POST',
+                body: formData,
+                cache: 'no-store',
+                credentials: 'same-origin',
+                signal: requestController.signal,
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Accept': 'application/json'
+                }
+            });
+
+            const responseText = await response.text();
+            let data;
+            try {
+                data = JSON.parse(responseText);
+            } catch (parseError) {
+                throw new Error('The server returned an invalid response.');
+            }
+
+            if (!response.ok || !data || !data.success) {
+                throw new Error((data && data.message) || failureMessage);
+            }
+
+            if (actionName === 'mark_read') {
+                renderCardAsRead(form.closest('.notification-card'));
+            } else {
+                document.querySelectorAll('.notification-card.unread').forEach(renderCardAsRead);
+            }
+
+            updateUnreadHeader(data.unread_count);
+            showNotificationToast(data.message || successMessage);
+
+        } catch (error) {
+            console.error(failureMessage, error);
+            showNotificationToast(error && error.message ? error.message : failureMessage);
+
+            if (button.isConnected) {
+                button.disabled = false;
+                button.innerHTML = originalHtml;
+            }
+        } finally {
+            window.clearTimeout(requestTimeout);
+            window.__staffNotificationActionPending = false;
+            delete form.dataset.submitting;
+
+            // Never leave the clicked control stuck in its loading state.
+            if (button.isConnected) {
+                button.disabled = false;
+                button.innerHTML = originalHtml;
+            }
+        }
+    }
 
     document.addEventListener(
         'submit',
-        async function (event) {
+        function (event) {
 
             const form = event.target;
 
-            if (
-                !form ||
-                !(form instanceof HTMLFormElement)
-            ) {
+            if (!(form instanceof HTMLFormElement)) {
                 return;
             }
 
-
             const markReadButton =
-                form.querySelector(
-                    'button[name="mark_read"]'
-                );
+                form.querySelector('button[name="mark_read"]');
 
             const markAllButton =
-                form.querySelector(
-                    'button[name="mark_all_read"]'
-                );
-
-
-            /* -------------------------------------------------
-               MARK SINGLE AS READ
-            ------------------------------------------------- */
+                form.querySelector('button[name="mark_all_read"]');
 
             if (markReadButton) {
 
                 event.preventDefault();
 
-                const formData =
-                new FormData(form);
-
-                formData.append(
+                submitNotificationAction(
+                    form,
+                    markReadButton,
                     'mark_read',
-                    '1'
+                    'Notification marked as read.',
+                    'Unable to mark notification as read.'
                 );
-
-                formData.append(
-                    'ajax',
-                    'notification_action'
-                );
-
-
-                markReadButton.disabled = true;
-
-
-                try {
-
-                    const response = await fetch(
-                        'notifications.php',
-                        {
-                            method: 'POST',
-                            body: formData,
-                            cache: 'no-store',
-                            headers: {
-                                'X-Requested-With':
-                                    'XMLHttpRequest'
-                            }
-                        }
-                    );
-
-                    const data =
-                        await response.json();
-
-
-                    if (
-                        data &&
-                        data.success
-                    ) {
-
-                        showNotificationToast(
-                            data.message ||
-                            'Notification marked as read.'
-                        );
-
-                        /* Update this card immediately. */
-                        const card =
-                            form.closest('.notification-card');
-
-                        if (card) {
-                            card.classList.remove('unread');
-                            card.classList.add('read');
-
-                            const newBadge =
-                                card.querySelector('.new-badge');
-
-                            if (newBadge) {
-                                newBadge.remove();
-                            }
-
-                            const formContainer =
-                                markReadButton.closest('form');
-
-                            if (formContainer) {
-                                const readState = document.createElement('span');
-                                readState.className = 'text-muted';
-                                readState.style.fontSize = '11px';
-                                readState.innerHTML =
-                                    '<i class="bi bi-check2-all me-1"></i> Read';
-
-                                formContainer.replaceWith(readState);
-                            }
-                        }
-
-                        /* Sync the unread counter with the server response. */
-                        const actions =
-                            document.querySelector('.notification-actions');
-
-                        if (actions) {
-                            const unreadBadge =
-                                actions.querySelector('.unread-badge');
-
-                            if (Number(data.unread_count || 0) > 0) {
-                                if (unreadBadge) {
-                                    unreadBadge.innerHTML =
-                                        '<i class="bi bi-bell-fill me-1"></i> ' +
-                                        Number(data.unread_count) +
-                                        ' unread';
-                                }
-                            } else {
-                                actions.innerHTML = `
-                                    <span class="unread-badge">
-                                        <i class="bi bi-check-circle me-1"></i>
-                                        All caught up
-                                    </span>
-                                `;
-                            }
-                        }
-
-                    } else {
-
-                        showNotificationToast(
-                            data.message ||
-                            'Unable to mark notification as read.'
-                        );
-
-                        markReadButton.disabled = false;
-                    }
-
-                } catch (error) {
-
-                    console.error(error);
-
-                    showNotificationToast(
-                        'Unable to mark notification as read.'
-                    );
-
-                    markReadButton.disabled = false;
-                }
 
                 return;
             }
-
-
-            /* -------------------------------------------------
-               MARK ALL AS READ
-            ------------------------------------------------- */
 
             if (markAllButton) {
 
                 event.preventDefault();
 
-                const formData =
-                new FormData(form);
-
-                formData.append(
+                submitNotificationAction(
+                    form,
+                    markAllButton,
                     'mark_all_read',
-                    '1'
+                    'All notifications marked as read.',
+                    'Unable to mark all notifications as read.'
                 );
-
-                formData.append(
-                    'ajax',
-                    'notification_action'
-                );
-
-
-                markAllButton.disabled = true;
-
-
-                try {
-
-                    const response = await fetch(
-                        'notifications.php',
-                        {
-                            method: 'POST',
-                            body: formData,
-                            cache: 'no-store',
-                            headers: {
-                                'X-Requested-With':
-                                    'XMLHttpRequest'
-                            }
-                        }
-                    );
-
-                    const data =
-                        await response.json();
-
-
-                    if (
-                        data &&
-                        data.success
-                    ) {
-
-                        showNotificationToast(
-                            data.message ||
-                            'All notifications marked as read.'
-                        );
-
-                        await refreshNotificationPage();
-
-                    } else {
-
-                        showNotificationToast(
-                            data.message ||
-                            'Unable to mark all notifications as read.'
-                        );
-
-                        markAllButton.disabled = false;
-                    }
-
-                } catch (error) {
-
-                    console.error(error);
-
-                    showNotificationToast(
-                        'Unable to mark all notifications as read.'
-                    );
-
-                    markAllButton.disabled = false;
-                }
-
             }
-
         }
     );
 
@@ -3131,4 +3068,3 @@ section.innerHTML =
     </main>
 
 </div>
-

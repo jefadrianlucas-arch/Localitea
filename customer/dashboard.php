@@ -1,6 +1,180 @@
 <?php
 require_once '../includes/db.php';
 
+/*
+ * CUSTOMER DASHBOARD ACCESS CONTROL
+ * The dashboard and its refund/order data are customer-only.
+ * Start the session if the shared database include has not already done so,
+ * then redirect visitors without a valid customer session before running
+ * any customer-specific queries or POST/AJAX handlers.
+ */
+if (session_status() !== PHP_SESSION_ACTIVE) {
+    session_start();
+}
+
+$customerSessionUserId = filter_var(
+    $_SESSION['user_id'] ?? null,
+    FILTER_VALIDATE_INT,
+    ['options' => ['min_range' => 1]]
+);
+
+if (
+    (($_SESSION['user_role'] ?? '') !== 'customer') ||
+    ($customerSessionUserId === false)
+) {
+    header('Location: ../auth/login.php');
+    exit;
+}
+
+$user_id = (int)$customerSessionUserId;
+
+
+/* =========================================================
+   CUSTOMER GCash REFUND DETAILS
+   Customers can submit their GCash recipient details for an
+   eligible cancelled order. Supporting image is optional.
+========================================================= */
+if (
+    $_SERVER['REQUEST_METHOD'] === 'POST'
+    && ($_POST['submit_refund_details'] ?? '') === '1'
+) {
+    if (
+        !isset($_SESSION['user_id'])
+        || (($_SESSION['user_role'] ?? '') !== 'customer')
+    ) {
+        header('Location: ../auth/login.php');
+        exit;
+    }
+
+    $refundOrderId = filter_var($_POST['order_id'] ?? null, FILTER_VALIDATE_INT);
+    $refundAccountName = trim((string)($_POST['refund_account_name'] ?? ''));
+    $refundMobileNumber = trim((string)($_POST['refund_mobile_number'] ?? ''));
+
+    try {
+        if (!$refundOrderId || $refundOrderId < 1) {
+            throw new RuntimeException('Invalid order selected.');
+        }
+
+        if ($refundAccountName === '' || mb_strlen($refundAccountName) > 100) {
+            throw new RuntimeException('Enter the GCash account name (up to 100 characters).');
+        }
+
+        // Accept common Philippine mobile formats: 09XXXXXXXXX, 639XXXXXXXXX, or +639XXXXXXXXX.
+        $normalizedMobile = preg_replace('/[\\s()\\-]/', '', $refundMobileNumber);
+        if (!preg_match('/^(09\\d{9}|639\\d{9}|\\+639\\d{9})$/', $normalizedMobile)) {
+            throw new RuntimeException('Enter a valid Philippine GCash mobile number.');
+        }
+
+        $eligibleStmt = $pdo->prepare("
+            SELECT id, payment_method, payment_screenshot, refund_status,
+                   cancellation_reason, refund_supporting_image
+            FROM orders
+            WHERE id = ? AND customer_id = ? AND status = 'cancelled'
+            LIMIT 1
+        ");
+        $eligibleStmt->execute([$refundOrderId, (int)$_SESSION['user_id']]);
+        $eligibleOrder = $eligibleStmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$eligibleOrder
+            || strtolower(trim((string)$eligibleOrder['payment_method'])) !== 'gcash'
+            || trim((string)($eligibleOrder['payment_screenshot'] ?? '')) === ''
+            || strtolower(trim((string)($eligibleOrder['cancellation_reason'] ?? ''))) === 'payment could not be verified'
+            || !in_array((string)$eligibleOrder['refund_status'], ['pending'], true)
+        ) {
+            throw new RuntimeException('This order is not eligible for refund details.');
+        }
+
+        $supportingImagePath = $eligibleOrder['refund_supporting_image'] ?? null;
+        if (isset($_FILES['refund_supporting_image']) &&
+            $_FILES['refund_supporting_image']['error'] !== UPLOAD_ERR_NO_FILE) {
+            $upload = $_FILES['refund_supporting_image'];
+
+            if ($upload['error'] !== UPLOAD_ERR_OK) {
+                throw new RuntimeException('The supporting image could not be uploaded. Please try again.');
+            }
+            if ((int)$upload['size'] > 5 * 1024 * 1024) {
+                throw new RuntimeException('The supporting image must not exceed 5MB.');
+            }
+
+            $finfo = new finfo(FILEINFO_MIME_TYPE);
+            $mime = $finfo->file($upload['tmp_name']);
+            $allowedMimes = [
+                'image/jpeg' => 'jpg',
+                'image/png' => 'png',
+                'image/webp' => 'webp'
+            ];
+            if (!isset($allowedMimes[$mime])) {
+                throw new RuntimeException('Upload a JPG, PNG, or WEBP image only.');
+            }
+
+            $uploadDirectory = dirname(__DIR__) . '/assets/uploads/refunds';
+            if (!is_dir($uploadDirectory) &&
+                !mkdir($uploadDirectory, 0755, true) &&
+                !is_dir($uploadDirectory)) {
+                throw new RuntimeException('The upload folder could not be created.');
+            }
+
+            $filename = 'refund_customer_' . $refundOrderId . '_' . bin2hex(random_bytes(8))
+                . '.' . $allowedMimes[$mime];
+            if (!move_uploaded_file($upload['tmp_name'], $uploadDirectory . '/' . $filename)) {
+                throw new RuntimeException('The supporting image could not be saved.');
+            }
+
+            $supportingImagePath = 'assets/uploads/refunds/' . $filename;
+        }
+
+        $saveRefundDetails = $pdo->prepare("
+            UPDATE orders
+            SET refund_account_name = ?,
+                refund_mobile_number = ?,
+                refund_supporting_image = ?,
+                refund_details_submitted_at = NOW()
+            WHERE id = ? AND customer_id = ?
+              AND status = 'cancelled' AND refund_status = 'pending'
+        ");
+        $saveRefundDetails->execute([
+            $refundAccountName,
+            $normalizedMobile,
+            $supportingImagePath,
+            $refundOrderId,
+            (int)$_SESSION['user_id']
+        ]);
+
+        if ($saveRefundDetails->rowCount() < 1) {
+            // MySQL may report zero changed rows when values are identical; confirm the order still has saved details.
+            $confirmStmt = $pdo->prepare("
+                SELECT refund_account_name, refund_mobile_number
+                FROM orders
+                WHERE id = ? AND customer_id = ? AND status = 'cancelled'
+                  AND refund_status = 'pending'
+            ");
+            $confirmStmt->execute([$refundOrderId, (int)$_SESSION['user_id']]);
+            $confirmedDetails = $confirmStmt->fetch(PDO::FETCH_ASSOC);
+            if (!$confirmedDetails
+                || $confirmedDetails['refund_account_name'] !== $refundAccountName
+                || $confirmedDetails['refund_mobile_number'] !== $normalizedMobile) {
+                throw new RuntimeException('Your refund details could not be saved. Please try again.');
+            }
+        }
+
+        $_SESSION['refund_flash'] = [
+            'type' => 'success',
+            'message' => 'Your GCash refund details have been submitted.'
+        ];
+    } catch (Throwable $e) {
+        $_SESSION['refund_flash'] = [
+            'type' => 'danger',
+            'message' => $e instanceof RuntimeException
+                ? $e->getMessage()
+                : 'Something went wrong while saving your refund details. Please try again.'
+        ];
+    }
+
+    header('Location: dashboard.php?view=refunds');
+    exit;
+}
+
+
 
 if (
     ($_GET['ajax'] ?? '') === 'status' &&
@@ -50,7 +224,7 @@ if (isset($_GET['read_notification'])) {
     header("Location: dashboard.php");
     exit;
 }
-$user_id = $_SESSION['user_id'];
+$user_id = (int)$customerSessionUserId;
 
 /* =========================================================
    GET ACTIVE ORDERS
@@ -84,6 +258,42 @@ $historyStmt = $pdo->prepare("
 $historyStmt->execute([$user_id]);
 
 $orderHistory = $historyStmt->fetchAll(PDO::FETCH_ASSOC);
+
+/* =========================================================
+   CUSTOMER PENDING REFUNDS
+   Keep this separate from history pagination so all pending
+   GCash refunds are visible from their own dashboard tab.
+========================================================= */
+$pendingRefundOrders = array_values(array_filter(
+    $orderHistory,
+    static function (array $order): bool {
+        return (string)($order['status'] ?? '') === 'cancelled'
+            && strtolower(trim((string)($order['payment_method'] ?? ''))) === 'gcash'
+            && trim((string)($order['payment_screenshot'] ?? '')) !== ''
+            && strtolower(trim((string)($order['cancellation_reason'] ?? ''))) !== 'payment could not be verified'
+            && (string)($order['refund_status'] ?? 'none') === 'pending';
+    }
+));
+
+/* =========================================================
+   CUSTOMER PROCESSED REFUNDS
+   Keep completed and rejected refunds visible in the
+   customer's Refunds tab after pending refunds disappear.
+========================================================= */
+$processedRefundOrders = array_values(array_filter(
+    $orderHistory,
+    static function (array $order): bool {
+        $refundStatus = strtolower(trim(
+            (string)($order['refund_status'] ?? 'none')
+        ));
+
+        return (string)($order['status'] ?? '') === 'cancelled'
+            && strtolower(trim((string)($order['payment_method'] ?? ''))) === 'gcash'
+            && trim((string)($order['payment_screenshot'] ?? '')) !== ''
+            && strtolower(trim((string)($order['cancellation_reason'] ?? ''))) !== 'payment could not be verified'
+            && in_array($refundStatus, ['refunded', 'rejected'], true);
+    }
+));
 
 
 /* =========================================================
@@ -209,6 +419,7 @@ try {
 
 $statusLabels = [
     'pending_verification' => 'Pending Verification',
+    'order_queue'           => 'Awaiting Store Confirmation',
     'confirmed'             => 'Order Confirmed',
     'preparing'             => 'Preparing',
     'ready'                 => 'Ready for Pick-up',
@@ -218,6 +429,7 @@ $statusLabels = [
 
 $statusDescriptions = [
     'pending_verification' => 'Your order has been received and is waiting for verification.',
+    'order_queue'           => 'Your order has been received and is waiting for store confirmation.',
     'confirmed'             => 'Your order has been confirmed by the store.',
     'preparing'             => 'Your order is currently being prepared.',
     'ready'                 => 'Your order is ready for pick-up.',
@@ -373,7 +585,7 @@ $timelineStatuses = [
 
 $dashboardView = $_GET['view'] ?? 'active';
 
-if (!in_array($dashboardView, ['active', 'history'], true)) {
+if (!in_array($dashboardView, ['active', 'history', 'refunds'], true)) {
     $dashboardView = 'active';
 }
 $isHistoryAjax = (
@@ -386,6 +598,9 @@ $isHistoryAjax = (
 if ($isHistoryAjax) {
     ob_start();
 }
+
+$refundFlash = $_SESSION['refund_flash'] ?? null;
+unset($_SESSION['refund_flash']);
 
 require_once '../includes/header.php';
 require_once '../includes/navbar.php';
@@ -663,15 +878,37 @@ require_once '../includes/navbar.php';
         color: #ffffff;
     }
 
+    .refund-tab-count {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 20px;
+        height: 20px;
+        padding: 0 5px;
+        border-radius: 999px;
+        background: rgba(111, 78, 55, .12);
+        color: inherit;
+        font-size: .72rem;
+        line-height: 1;
+    }
+
+    .dashboard-view-tab.active .refund-tab-count {
+        background: rgba(255, 255, 255, .2);
+    }
+
     @media (max-width: 576px) {
         .dashboard-view-tabs {
             gap: 8px;
+            overflow-x: auto;
+            padding-bottom: 3px;
+            flex-wrap: nowrap;
         }
 
         .dashboard-view-tab {
-            flex: 1;
+            flex: 0 0 auto;
             padding: 10px 12px;
             font-size: .8rem;
+            white-space: nowrap;
         }
     }
 
@@ -770,6 +1007,11 @@ require_once '../includes/navbar.php';
     .status-pending {
         background: #FFF1D6;
         color: #8a5a00;
+    }
+
+    .status-order_queue {
+        background: #E7F1FF;
+        color: #285B9A;
     }
 
     .status-confirmed {
@@ -1087,6 +1329,31 @@ require_once '../includes/navbar.php';
     font-size: .78rem;
     font-weight: 700;
 }
+    .refund-details-panel {
+        padding: 16px;
+        border: 1px solid #D8C9BD;
+        border-radius: 12px;
+        background: #FBF8F4;
+    }
+
+    .refund-details-panel > .d-flex > i {
+        color: #6f4e37;
+    }
+
+    .refund-details-panel h6 {
+        color: #4A3525;
+    }
+
+    .refund-details-form .form-control {
+        border-color: #D8C9BD;
+        border-radius: 9px;
+        font-size: .88rem;
+    }
+
+    .refund-details-form .form-control:focus {
+        border-color: #6f4e37;
+        box-shadow: 0 0 0 3px rgba(111,78,55,.12);
+    }
 </style>
 
 
@@ -1667,9 +1934,70 @@ require_once '../includes/navbar.php';
         font-weight: 700;
     }
 
-    /* Cancel modals */
+    /* Cancellation modal: match the outlined red Cancel Order control. */
     .modal .modal-content {
         border-radius: 14px;
+    }
+
+    .cancel-order-modal .modal-footer {
+        gap: 8px;
+    }
+
+    .cancel-order-modal .btn-outline-danger {
+        border: 1px solid #dc3545;
+        background: #ffffff;
+        color: #dc3545;
+        border-radius: 10px;
+        padding: 8px 16px;
+        font-size: .82rem;
+        font-weight: 700;
+        transition: background-color .15s ease, color .15s ease, border-color .15s ease;
+    }
+
+    .cancel-order-modal .btn-outline-danger:hover,
+    .cancel-order-modal .btn-outline-danger:focus-visible {
+        background: #dc3545;
+        border-color: #dc3545;
+        color: #ffffff;
+    }
+
+    .cancel-order-modal .btn-brown {
+        min-width: 110px;
+        background: #6f4e37;
+        border: 1px solid #6f4e37;
+        color: #ffffff;
+        border-radius: 10px;
+        padding: 8px 16px;
+        font-weight: 700;
+    }
+
+    .cancel-order-modal .btn-brown:hover,
+    .cancel-order-modal .btn-brown:focus-visible {
+        background: #5b3d2e;
+        border-color: #5b3d2e;
+        color: #ffffff;
+    }
+
+    .cancel-other-reason textarea {
+        min-height: 96px;
+        resize: vertical;
+        border-color: #D8C9BD;
+    }
+
+    .cancel-other-reason textarea:focus {
+        border-color: #6f4e37;
+        box-shadow: 0 0 0 3px rgba(111, 78, 55, .12);
+    }
+
+    @media (max-width: 576px) {
+        .cancel-order-modal .modal-footer {
+            flex-wrap: wrap;
+        }
+
+        .cancel-order-modal .modal-footer .btn {
+            flex: 1 1 100%;
+            min-height: 42px;
+        }
     }
 
     @media (max-width: 768px) {
@@ -1703,6 +2031,13 @@ require_once '../includes/navbar.php';
             Monitor your current order status and view your previous orders.
         </p> 
 
+        <?php if (is_array($refundFlash) && !empty($refundFlash['message'])): ?>
+            <div class="alert alert-<?= htmlspecialchars($refundFlash['type'] ?? 'info') ?> alert-dismissible fade show" role="alert">
+                <?= htmlspecialchars($refundFlash['message']) ?>
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+        <?php endif; ?>
+
         
 
             
@@ -1723,9 +2058,19 @@ require_once '../includes/navbar.php';
             <a
                 href="dashboard.php?view=history&history_page=1"
                 class="dashboard-view-tab <?= $dashboardView === 'history' ? 'active' : '' ?>"
-             >
+            >
                 <i class="bi bi-clock-history"></i>
                 Order History
+            </a>
+
+            <a
+                href="dashboard.php?view=refunds"
+                class="dashboard-view-tab <?= $dashboardView === 'refunds' ? 'active' : '' ?>"
+                aria-label="Refunds"
+            >
+                <i class="bi bi-arrow-counterclockwise"></i>
+                Refunds
+                <span class="refund-tab-count"><?= count($pendingRefundOrders) ?></span>
             </a>
 
         </div>
@@ -1779,8 +2124,13 @@ require_once '../includes/navbar.php';
                 'completed'
             ];
 
+            // Cash/online queue orders are awaiting confirmation, so show the first timeline step.
+            $timelineStatusForDisplay = $activeStatus === 'order_queue'
+                ? 'pending_verification'
+                : $activeStatus;
+
             $activeStatusIndex = array_search(
-                $activeStatus,
+                $timelineStatusForDisplay,
                 $activeTimelineStatuses,
                 true
             );
@@ -1875,10 +2225,10 @@ require_once '../includes/navbar.php';
 
                                 <?php
                                 $isDone =
-                                    $activeStatusIndex >= $index;
+                                    $activeStatusIndex > $index;
 
                                 $isCurrent =
-                                    $activeStatus === $timelineStatus;
+                                    $timelineStatusForDisplay === $timelineStatus;
                                 ?>
 
                                 <div class="timeline-step
@@ -1902,10 +2252,9 @@ require_once '../includes/navbar.php';
                                     <div class="timeline-name">
 
                                         <?= htmlspecialchars(
-                                            statusLabel(
-                                                $timelineStatus,
-                                                $statusLabels
-                                            )
+                                            $activeStatus === 'order_queue' && $timelineStatus === 'pending_verification'
+                                                ? 'Awaiting Confirmation'
+                                                : statusLabel($timelineStatus, $statusLabels)
                                         ) ?>
 
                                     </div>
@@ -2154,7 +2503,7 @@ require_once '../includes/navbar.php';
                         <?php if (
                             in_array(
                                 $activeStatus,
-                                ['pending_verification', 'confirmed'],
+                                ['pending_verification', 'order_queue', 'confirmed'],
                                 true
                             )
                         ): ?>
@@ -2162,26 +2511,9 @@ require_once '../includes/navbar.php';
                             <button
                                 type="button"
                                 class="btn btn-outline-danger"
+                                data-cancel-order-id="<?= (int)$activeOrder['id'] ?>"
                                 data-bs-toggle="modal"
                                 data-bs-target="#cancelOrderModal<?= (int)$activeOrder['id'] ?>"
-                            >
-                                <i class="bi bi-x-circle me-1"></i>
-                                Cancel Order
-                            </button>
-
-                        <?php elseif (
-                            in_array(
-                                $activeStatus,
-                                ['preparing', 'ready'],
-                                true
-                            )
-                        ): ?>
-
-                            <button
-                                type="button"
-                                class="btn btn-outline-danger"
-                                data-bs-toggle="modal"
-                                data-bs-target="#cannotCancelModal"
                             >
                                 <i class="bi bi-x-circle me-1"></i>
                                 Cancel Order
@@ -2203,13 +2535,13 @@ require_once '../includes/navbar.php';
             <?php if (
                 in_array(
                     $activeStatus,
-                    ['pending_verification', 'confirmed'],
+                    ['pending_verification', 'order_queue', 'confirmed'],
                     true
                 )
             ): ?>
 
                 <div
-                    class="modal fade"
+                    class="modal fade cancel-order-modal"
                     id="cancelOrderModal<?= (int)$activeOrder['id'] ?>"
                     tabindex="-1"
                     aria-hidden="true"
@@ -2245,41 +2577,49 @@ require_once '../includes/navbar.php';
                                         Are you sure you want to cancel this order?
                                     </p>
 
-                                    <label class="form-label fw-semibold">
+                                    <label
+                                        class="form-label fw-semibold"
+                                        for="cancelReason<?= (int)$activeOrder['id'] ?>"
+                                    >
                                         Reason for cancellation
                                     </label>
 
                                     <select
+                                        id="cancelReason<?= (int)$activeOrder['id'] ?>"
                                         name="cancellation_reason"
-                                        class="form-select"
+                                        class="form-select js-cancellation-reason"
                                         required
+                                        aria-controls="cancelReasonOtherWrap<?= (int)$activeOrder['id'] ?>"
                                     >
-
-                                        <option value="">
-                                            Select a reason
-                                        </option>
-
-                                        <option value="Changed my mind">
-                                            Changed my mind
-                                        </option>
-
-                                        <option value="Ordered by mistake">
-                                            Ordered by mistake
-                                        </option>
-
-                                        <option value="Pickup time is no longer convenient">
-                                            Pickup time is no longer convenient
-                                        </option>
-
-                                        <option value="Wrong order details">
-                                            Wrong order details
-                                        </option>
-
-                                        <option value="Other">
-                                            Other
-                                        </option>
-
+                                        <option value="">Select a reason</option>
+                                        <option value="Changed my mind">Changed my mind</option>
+                                        <option value="Ordered by mistake">Ordered by mistake</option>
+                                        <option value="Pickup time is no longer convenient">Pickup time is no longer convenient</option>
+                                        <option value="Wrong order details">Wrong order details</option>
+                                        <option value="Other">Other</option>
                                     </select>
+
+                                    <div
+                                        id="cancelReasonOtherWrap<?= (int)$activeOrder['id'] ?>"
+                                        class="cancel-other-reason mt-3 d-none"
+                                        data-other-reason-wrap
+                                    >
+                                        <label
+                                            class="form-label fw-semibold"
+                                            for="cancelReasonOther<?= (int)$activeOrder['id'] ?>"
+                                        >Tell us why you're cancelling</label>
+                                        <textarea
+                                            id="cancelReasonOther<?= (int)$activeOrder['id'] ?>"
+                                            name="cancellation_reason_other"
+                                            class="form-control"
+                                            rows="3"
+                                            maxlength="220"
+                                            placeholder="Please describe your reason..."
+                                            data-other-reason-input
+                                            disabled
+                                        ></textarea>
+                                        <div class="form-text">Required when Other is selected. Maximum 220 characters.</div>
+                                    </div>
 
                                     <input
                                         type="hidden"
@@ -2294,7 +2634,7 @@ require_once '../includes/navbar.php';
 
                                     <button
                                         type="button"
-                                        class="btn btn-secondary"
+                                        class="btn btn-brown"
                                         data-bs-dismiss="modal"
                                     >
                                         Keep Order
@@ -2302,8 +2642,9 @@ require_once '../includes/navbar.php';
 
                                     <button
                                         type="submit"
-                                        class="btn btn-danger"
+                                        class="btn btn-outline-danger"
                                     >
+                                        <i class="bi bi-x-circle me-1"></i>
                                         Confirm Cancellation
                                     </button>
 
@@ -2329,6 +2670,289 @@ require_once '../includes/navbar.php';
         <?php endif; ?>
 
 
+<!-- =====================================================
+     PENDING REFUNDS
+===================================================== -->
+
+        <?php if ($dashboardView === 'refunds'): ?>
+            <div class="card-custom p-4 mb-4" id="pendingRefunds">
+                <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">
+                    <div>
+                        <h4 class="history-title mb-1">Pending GCash Refunds</h4>
+                        <p class="text-muted small mb-0">View eligible cancelled GCash orders and provide the account details for your refund.</p>
+                    </div>
+                    <span class="text-muted small"><?= count($pendingRefundOrders) ?> pending refund(s)</span>
+                </div>
+
+                <?php if (empty($pendingRefundOrders)): ?>
+                    <div class="empty-state py-4">
+                        <i class="bi bi-arrow-counterclockwise"></i>
+                        <p class="fw-semibold mb-1">No pending refunds</p>
+                        <p class="small text-muted mb-0">Eligible cancelled GCash orders will appear here while the store processes the refund.</p>
+                    </div>
+                <?php else: ?>
+                    <div class="d-flex flex-column gap-3">
+                        <?php foreach ($pendingRefundOrders as $refundOrd): ?>
+                            <?php
+                                $refundDetailsSubmitted = trim((string)($refundOrd['refund_account_name'] ?? '')) !== ''
+                                    && trim((string)($refundOrd['refund_mobile_number'] ?? '')) !== '';
+                                $refundOrderDate = $refundOrd['refund_requested_at'] ?? $refundOrd['closed_at'] ?? $refundOrd['created_at'] ?? null;
+                            ?>
+                            <div class="refund-details-panel">
+                                <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">
+                                    <div>
+                                        <div class="fw-bold" style="color:#4A3525;"><?= htmlspecialchars((string)($refundOrd['order_number'] ?? 'Order')) ?></div>
+                                        <div class="small text-muted">
+                                            Claim #: <?= htmlspecialchars((string)($refundOrd['claim_number'] ?? 'N/A')) ?>
+                                            <?php if ($refundOrderDate): ?>
+                                                <span class="mx-1">·</span>
+                                                Requested <?= htmlspecialchars(date('M j, Y g:i A', strtotime((string)$refundOrderDate))) ?>
+                                            <?php endif; ?>
+                                        </div>
+                                    </div>
+                                    <span class="status-badge status-pending">Refund Pending</span>
+                                </div>
+
+                                <div class="row g-2 mb-3">
+                                    <div class="col-sm-6">
+                                        <div class="small text-muted">Order Total</div>
+                                        <div class="fw-bold">₱<?= number_format((float)($refundOrd['total_amount'] ?? 0), 2) ?></div>
+                                    </div>
+                                    <div class="col-sm-6">
+                                        <div class="small text-muted">Payment Method</div>
+                                        <div class="fw-semibold">GCash</div>
+                                    </div>
+                                </div>
+
+                                <?php if ($refundDetailsSubmitted): ?>
+                                    <div class="alert alert-success py-2 small mb-3">
+                                        <i class="bi bi-check-circle me-1"></i>
+                                        Your GCash details have been submitted. You may update them while this refund is pending.
+                                    </div>
+                                <?php else: ?>
+                                    <div class="alert alert-warning py-2 small mb-3">
+                                        <i class="bi bi-info-circle me-1"></i>
+                                        Please provide the GCash account details where you want to receive the refund.
+                                    </div>
+                                <?php endif; ?>
+
+                                <form method="POST" enctype="multipart/form-data" class="refund-details-form">
+                                    <input type="hidden" name="submit_refund_details" value="1">
+                                    <input type="hidden" name="order_id" value="<?= (int)$refundOrd['id'] ?>">
+
+                                    <div class="row g-3">
+                                        <div class="col-md-6">
+                                            <label class="form-label small fw-semibold" for="pendingRefundAccountName<?= (int)$refundOrd['id'] ?>">GCash Account Name</label>
+                                            <input
+                                                type="text"
+                                                class="form-control"
+                                                id="pendingRefundAccountName<?= (int)$refundOrd['id'] ?>"
+                                                name="refund_account_name"
+                                                maxlength="100"
+                                                autocomplete="name"
+                                                value="<?= htmlspecialchars((string)($refundOrd['refund_account_name'] ?? '')) ?>"
+                                                placeholder="Name registered to GCash"
+                                                required
+                                            >
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label small fw-semibold" for="pendingRefundMobileNumber<?= (int)$refundOrd['id'] ?>">GCash Mobile Number</label>
+                                            <input
+                                                type="tel"
+                                                class="form-control"
+                                                id="pendingRefundMobileNumber<?= (int)$refundOrd['id'] ?>"
+                                                name="refund_mobile_number"
+                                                maxlength="16"
+                                                inputmode="tel"
+                                                autocomplete="tel"
+                                                value="<?= htmlspecialchars((string)($refundOrd['refund_mobile_number'] ?? '')) ?>"
+                                                placeholder="09XXXXXXXXX or +639XXXXXXXXX"
+                                                required
+                                            >
+                                        </div>
+                                        <div class="col-12">
+                                            <label class="form-label small fw-semibold" for="pendingRefundSupportingImage<?= (int)$refundOrd['id'] ?>">Supporting Screenshot (Optional)</label>
+                                            <input
+                                                type="file"
+                                                class="form-control"
+                                                id="pendingRefundSupportingImage<?= (int)$refundOrd['id'] ?>"
+                                                name="refund_supporting_image"
+                                                accept="image/jpeg,image/png,image/webp"
+                                            >
+                                            <div class="form-text">JPG, PNG, or WEBP. Maximum 5MB. This is optional.</div>
+                                            <?php if (!empty($refundOrd['refund_supporting_image'])): ?>
+                                                <div class="small mt-2">
+                                                    Previously uploaded:
+                                                    <a href="../<?= htmlspecialchars(ltrim((string)$refundOrd['refund_supporting_image'], '/')) ?>" target="_blank" rel="noopener">View supporting image</a>
+                                                </div>
+                                            <?php endif; ?>
+                                        </div>
+                                    </div>
+
+                                    <div class="d-flex justify-content-end mt-3">
+                                        <button type="submit" class="btn btn-brown">
+                                            <i class="bi bi-send me-1"></i>
+                                            <?= $refundDetailsSubmitted ? 'Update Refund Details' : 'Submit Refund Details' ?>
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                <?php endif; ?>
+            </div>
+        <?php endif; ?>
+
+<!-- =====================================================
+     PROCESSED REFUNDS / REFUND HISTORY
+===================================================== -->
+
+<?php if ($dashboardView === 'refunds'): ?>
+
+    <div class="card-custom p-4 mb-4" id="refundHistory">
+
+        <div class="d-flex justify-content-between align-items-center
+                    flex-wrap gap-2 mb-3">
+            <div>
+                <h4 class="history-title mb-1">Refund History</h4>
+                <p class="text-muted small mb-0">
+                    View processed refunds and the store's refund proof.
+                </p>
+            </div>
+
+            <span class="text-muted small">
+                <?= count($processedRefundOrders) ?> record(s)
+            </span>
+        </div>
+
+        <?php if (empty($processedRefundOrders)): ?>
+
+            <div class="empty-state py-4">
+                <i class="bi bi-clock-history"></i>
+                <p class="fw-semibold mb-1">No processed refunds yet</p>
+                <p class="small text-muted mb-0">
+                    Processed refunds will appear here.
+                </p>
+            </div>
+
+        <?php else: ?>
+
+            <div class="d-flex flex-column gap-3">
+
+                <?php foreach ($processedRefundOrders as $refundOrd): ?>
+
+                    <div class="refund-details-panel">
+
+                        <div class="fw-bold mb-1" style="color:#4A3525;">
+                            Order:
+                            <?= htmlspecialchars(
+                                (string)($refundOrd['order_number'] ?? 'N/A'),
+                                ENT_QUOTES,
+                                'UTF-8'
+                            ) ?>
+                        </div>
+
+                        <div class="small text-muted mb-3">
+                            Claim #:
+                            <?= htmlspecialchars(
+                                (string)($refundOrd['claim_number'] ?? 'N/A'),
+                                ENT_QUOTES,
+                                'UTF-8'
+                            ) ?>
+                        </div>
+
+                        <?php
+                        $refundProofPath = trim(
+                            (string)($refundOrd['refund_proof_image'] ?? '')
+                        );
+
+                        $refundProofUrl = '';
+
+                        if ($refundProofPath !== '') {
+                            $refundProofUrl = '../' . ltrim($refundProofPath, '/');
+                        }
+
+                        $refundStatus = strtolower(trim(
+                            (string)($refundOrd['refund_status'] ?? '')
+                        ));
+                        ?>
+
+                        <?php if ($refundStatus === 'refunded'): ?>
+
+                            <div class="alert alert-success">
+                                Your refund has been processed by the store.
+                            </div>
+
+                            <?php if ($refundProofUrl !== ''): ?>
+
+                                <div class="small fw-bold mb-2" style="color:#4A3525;">
+    <i class="bi bi-receipt me-1"></i>
+    Store's Refund Proof
+</div>
+
+<a
+    href="<?= htmlspecialchars(
+        $refundProofUrl,
+        ENT_QUOTES,
+        'UTF-8'
+    ) ?>"
+    target="_blank"
+    rel="noopener"
+    class="d-inline-block"
+    aria-label="Open refund proof in a new tab"
+>
+    <img
+        src="<?= htmlspecialchars(
+            $refundProofUrl,
+            ENT_QUOTES,
+            'UTF-8'
+        ) ?>"
+        alt="Store's GCash refund proof"
+        class="img-fluid rounded border"
+        style="max-width:360px;max-height:420px;object-fit:contain;"
+    >
+</a>
+
+<div class="small text-muted mt-2">
+    Select the image to view it full size.
+</div>
+
+                            <?php else: ?>
+
+                                <div class="alert alert-warning">
+                                    The refund was marked as processed, but no
+                                    refund screenshot was saved. Please contact
+                                    the store administrator.
+                                </div>
+
+                            <?php endif; ?>
+
+                        <?php elseif ($refundStatus === 'rejected'): ?>
+
+                            <div class="alert alert-danger">
+                                Refund rejected.
+                                <?= htmlspecialchars(
+                                    trim((string)(
+                                        $refundOrd['refund_rejection_reason'] ?? ''
+                                    )) ?: 'Please contact the store for more information.',
+                                    ENT_QUOTES,
+                                    'UTF-8'
+                                ) ?>
+                            </div>
+
+                        <?php endif; ?>
+
+                    </div>
+
+                <?php endforeach; ?>
+
+            </div>
+
+        <?php endif; ?>
+
+    </div>
+
+<?php endif; ?>
 <!-- =====================================================
      ORDER HISTORY
 ===================================================== -->
@@ -2962,6 +3586,283 @@ require_once '../includes/navbar.php';
 
                             <?php endif; ?>
 
+                            <?php
+                            $refundEligibleForCustomer = (
+                                ($ord['status'] ?? '') === 'cancelled'
+                                && strtolower(trim((string)($ord['payment_method'] ?? ''))) === 'gcash'
+                                && trim((string)($ord['payment_screenshot'] ?? '')) !== ''
+                                && strtolower(trim((string)($ord['cancellation_reason'] ?? ''))) !== 'payment could not be verified'
+                                && ($ord['refund_status'] ?? 'none') === 'pending'
+                            );
+                            $refundDetailsSubmitted = trim((string)($ord['refund_account_name'] ?? '')) !== ''
+                                && trim((string)($ord['refund_mobile_number'] ?? '')) !== '';
+                            ?>
+
+                            <?php if ($refundEligibleForCustomer): ?>
+                                <div class="refund-details-panel mt-3">
+                                    <div class="d-flex align-items-start gap-2 mb-3">
+                                        <i class="bi bi-arrow-counterclockwise fs-5"></i>
+                                        <div>
+                                            <h6 class="fw-bold mb-1">GCash Refund Details</h6>
+                                            <p class="small text-muted mb-0">
+                                                Enter the GCash account that should receive your refund. A supporting screenshot is optional.
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    <?php if ($refundDetailsSubmitted): ?>
+                                        <div class="alert alert-success py-2 small mb-3">
+                                            <i class="bi bi-check-circle me-1"></i>
+                                            Your refund details have been submitted. You can update them while the refund is pending.
+                                        </div>
+                                    <?php endif; ?>
+
+                                    <form method="POST" enctype="multipart/form-data" class="refund-details-form">
+                                        <input type="hidden" name="submit_refund_details" value="1">
+                                        <input type="hidden" name="order_id" value="<?= (int)$ord['id'] ?>">
+
+                                        <div class="mb-3">
+                                            <label class="form-label small fw-semibold" for="refundAccountName<?= (int)$ord['id'] ?>">GCash Account Name</label>
+                                            <input
+                                                type="text"
+                                                class="form-control"
+                                                id="refundAccountName<?= (int)$ord['id'] ?>"
+                                                name="refund_account_name"
+                                                maxlength="100"
+                                                autocomplete="name"
+                                                value="<?= htmlspecialchars((string)($ord['refund_account_name'] ?? '')) ?>"
+                                                placeholder="Name registered to GCash"
+                                                required
+                                            >
+                                        </div>
+
+                                        <div class="mb-3">
+                                            <label class="form-label small fw-semibold" for="refundMobileNumber<?= (int)$ord['id'] ?>">GCash Mobile Number</label>
+                                            <input
+                                                type="tel"
+                                                class="form-control"
+                                                id="refundMobileNumber<?= (int)$ord['id'] ?>"
+                                                name="refund_mobile_number"
+                                                maxlength="16"
+                                                inputmode="tel"
+                                                autocomplete="tel"
+                                                value="<?= htmlspecialchars((string)($ord['refund_mobile_number'] ?? '')) ?>"
+                                                placeholder="09XXXXXXXXX or +639XXXXXXXXX"
+                                                required
+                                            >
+                                        </div>
+
+                                        <div class="mb-3">
+                                            <label class="form-label small fw-semibold" for="refundSupportingImage<?= (int)$ord['id'] ?>">Supporting Screenshot (Optional)</label>
+                                            <input
+                                                type="file"
+                                                class="form-control"
+                                                id="refundSupportingImage<?= (int)$ord['id'] ?>"
+                                                name="refund_supporting_image"
+                                                accept="image/jpeg,image/png,image/webp"
+                                            >
+                                            <div class="form-text">JPG, PNG, or WEBP. Maximum 5MB. You can leave this blank.</div>
+                                            <?php if (!empty($ord['refund_supporting_image'])): ?>
+                                                <div class="small mt-2">
+                                                    Previously uploaded:
+                                                    <a href="../<?= htmlspecialchars(ltrim((string)$ord['refund_supporting_image'], '/')) ?>" target="_blank" rel="noopener">View supporting image</a>
+                                                </div>
+                                            <?php endif; ?>
+                                        </div>
+
+                                        <button type="submit" class="btn btn-brown">
+                                            <i class="bi bi-send me-1"></i>
+                                            <?= $refundDetailsSubmitted ? 'Update Refund Details' : 'Submit Refund Details' ?>
+                                        </button>
+                                    </form>
+                                </div>
+                           <?php elseif (
+    ($ord['status'] ?? '') === 'cancelled'
+    && in_array(
+        strtolower(trim((string)($ord['refund_status'] ?? ''))),
+        ['refunded', 'rejected'],
+        true
+    )
+): ?>
+
+    <?php
+        $orderRefundStatus = strtolower(trim(
+            (string)($ord['refund_status'] ?? '')
+        ));
+
+        $orderRefundAccountName = trim(
+            (string)($ord['refund_account_name'] ?? '')
+        );
+
+        $orderRefundMobileNumber = trim(
+            (string)($ord['refund_mobile_number'] ?? '')
+        );
+
+        $orderRefundDetailsSubmittedAt = trim(
+            (string)($ord['refund_details_submitted_at'] ?? '')
+        );
+
+        $orderRefundSupportingImage = trim(
+            (string)($ord['refund_supporting_image'] ?? '')
+        );
+    ?>
+
+    <?php if ($orderRefundStatus === 'refunded'): ?>
+
+        <div class="alert alert-success mt-3 mb-0">
+            <strong>
+                <i class="bi bi-check-circle me-1"></i>
+                Refund processed.
+            </strong>
+
+            <div class="small mt-1">
+                Your store's refund proof is available in Refund History.
+            </div>
+
+            <a
+                class="btn btn-brown btn-sm mt-2"
+                href="dashboard.php?view=refunds#refundHistory"
+            >
+                <i class="bi bi-clock-history me-1"></i>
+                Go to Refund History
+            </a>
+        </div>
+
+    <?php else: ?>
+
+        <div class="alert alert-danger mt-3 mb-0">
+            <strong>
+                <i class="bi bi-x-circle me-1"></i>
+                Refund rejected.
+            </strong>
+
+            <div class="small mt-1">
+                <?= htmlspecialchars(
+                    trim((string)(
+                        $ord['refund_rejection_reason'] ?? ''
+                    )) ?: 'Please check Refund History for more information.',
+                    ENT_QUOTES,
+                    'UTF-8'
+                ) ?>
+            </div>
+
+            <a
+                class="btn btn-brown btn-sm mt-2"
+                href="dashboard.php?view=refunds#refundHistory"
+            >
+                <i class="bi bi-clock-history me-1"></i>
+                Go to Refund History
+            </a>
+        </div>
+
+    <?php endif; ?>
+
+    <div class="refund-details-panel mt-3">
+
+        <div class="d-flex align-items-start gap-2 mb-3">
+            <i class="bi bi-phone fs-5" aria-hidden="true"></i>
+
+            <div>
+                <h6 class="fw-bold mb-1">
+                    GCash Refund Details
+                </h6>
+
+                <p class="small text-muted mb-0">
+                    The recipient details you submitted for this refund.
+                </p>
+            </div>
+        </div>
+
+        <?php if (
+            $orderRefundAccountName !== ''
+            || $orderRefundMobileNumber !== ''
+        ): ?>
+
+            <div class="row g-3">
+
+                <div class="col-sm-6">
+                    <div class="info-label">
+                        GCash Account Name
+                    </div>
+
+                    <div class="info-value">
+                        <?= htmlspecialchars(
+                            $orderRefundAccountName !== ''
+                                ? $orderRefundAccountName
+                                : 'Not provided',
+                            ENT_QUOTES,
+                            'UTF-8'
+                        ) ?>
+                    </div>
+                </div>
+
+                <div class="col-sm-6">
+                    <div class="info-label">
+                        GCash Mobile Number
+                    </div>
+
+                    <div class="info-value">
+                        <?= htmlspecialchars(
+                            $orderRefundMobileNumber !== ''
+                                ? $orderRefundMobileNumber
+                                : 'Not provided',
+                            ENT_QUOTES,
+                            'UTF-8'
+                        ) ?>
+                    </div>
+                </div>
+
+            </div>
+
+            <?php if ($orderRefundDetailsSubmittedAt !== ''): ?>
+
+                <div class="small text-muted mt-2">
+                    Details submitted on
+                    <?= htmlspecialchars(
+                        date(
+                            'M j, Y g:i A',
+                            strtotime($orderRefundDetailsSubmittedAt)
+                        ),
+                        ENT_QUOTES,
+                        'UTF-8'
+                    ) ?>
+                </div>
+
+            <?php endif; ?>
+
+            <?php if ($orderRefundSupportingImage !== ''): ?>
+
+                <div class="small mt-3">
+                    <i class="bi bi-paperclip me-1"></i>
+                    Your supporting screenshot:
+
+                    <a
+                        href="../<?= htmlspecialchars(
+                            ltrim($orderRefundSupportingImage, '/'),
+                            ENT_QUOTES,
+                            'UTF-8'
+                        ) ?>"
+                        target="_blank"
+                        rel="noopener"
+                    >
+                        View supporting screenshot
+                    </a>
+                </div>
+
+            <?php endif; ?>
+
+        <?php else: ?>
+
+            <div class="alert alert-warning small mb-0">
+                No GCash recipient details were submitted for this order.
+            </div>
+
+        <?php endif; ?>
+
+    </div>
+
+<?php endif; ?>
+
 
                             <hr>
 
@@ -3305,65 +4206,6 @@ require_once '../includes/navbar.php';
 
 
 
-<!-- =====================================================
-     CANNOT CANCEL MODAL
-====================================================== -->
-
-<div
-    class="modal fade"
-    id="cannotCancelModal"
-    tabindex="-1"
-    aria-labelledby="cannotCancelModalLabel"
-    aria-hidden="true"
->
-
-    <div class="modal-dialog modal-dialog-centered">
-
-        <div class="modal-content">
-
-            <div class="modal-header">
-
-                <h5
-                    class="modal-title"
-                    id="cannotCancelModalLabel"
-                >
-                    Order Cannot Be Cancelled
-                </h5>
-
-                <button
-                    type="button"
-                    class="btn-close"
-                    data-bs-dismiss="modal"
-                    aria-label="Close"
-                ></button>
-
-            </div>
-
-
-            <div class="modal-body">
-                Your order can no longer be cancelled because it is already being prepared or is ready for pick-up.
-            </div>
-
-
-            <div class="modal-footer">
-
-                <button
-                    type="button"
-                    class="btn btn-primary"
-                    data-bs-dismiss="modal"
-                >
-                    Okay
-                </button>
-
-            </div>
-
-        </div>
-
-    </div>
-
-</div>
-
-
 <?php
 if ($isHistoryAjax) {
     $ajaxPageOutput = ob_get_clean();
@@ -3396,6 +4238,7 @@ if ($isHistoryAjax) {
 (function () {
     const statusLabels = {
         pending_verification: 'Pending Verification',
+        order_queue: 'Awaiting Store Confirmation',
         confirmed: 'Order Confirmed',
         preparing: 'Preparing',
         ready: 'Ready for Pick-up'
@@ -3437,6 +4280,22 @@ if ($isHistoryAjax) {
                 const current = document.querySelector('[data-active-order-current="' + id + '"]');
                 if (current) {
                     current.textContent = statusLabels[status] || status.replaceAll('_', ' ');
+                }
+
+                // Cancellation is available only before preparation starts.
+                const cancelButton = document.querySelector('[data-cancel-order-id="' + id + '"]');
+                const canCancel = ['pending_verification', 'order_queue', 'confirmed'].includes(status);
+                if (cancelButton) {
+                    cancelButton.hidden = !canCancel;
+                    cancelButton.setAttribute('aria-hidden', String(!canCancel));
+                }
+
+                // If the status advances while the confirmation modal is open, close it.
+                if (!canCancel) {
+                    const cancelModal = document.getElementById('cancelOrderModal' + id);
+                    if (cancelModal && cancelModal.classList.contains('show') && window.bootstrap && window.bootstrap.Modal) {
+                        window.bootstrap.Modal.getOrCreateInstance(cancelModal).hide();
+                    }
                 }
             });
         })
@@ -3634,6 +4493,40 @@ if ($isHistoryAjax) {
             form.dataset.sending = '0';
             button.disabled = false;
             button.textContent = oldLabel;
+        });
+    });
+})();
+</script>
+
+<script>
+/* Show a required free-text reason only when the customer selects Other. */
+(function () {
+    function syncOtherReason(select, shouldFocus) {
+        const form = select.closest('form');
+        if (!form) return;
+
+        const wrap = form.querySelector('[data-other-reason-wrap]');
+        const textarea = form.querySelector('[data-other-reason-input]');
+        if (!wrap || !textarea) return;
+
+        const isOther = select.value === 'Other';
+        wrap.classList.toggle('d-none', !isOther);
+        textarea.disabled = !isOther;
+        textarea.required = isOther;
+        textarea.setAttribute('aria-required', String(isOther));
+
+        if (!isOther) {
+            textarea.value = '';
+            textarea.setCustomValidity('');
+        } else if (shouldFocus) {
+            textarea.focus();
+        }
+    }
+
+    document.querySelectorAll('.js-cancellation-reason').forEach(function (select) {
+        syncOtherReason(select, false);
+        select.addEventListener('change', function () {
+            syncOtherReason(select, true);
         });
     });
 })();

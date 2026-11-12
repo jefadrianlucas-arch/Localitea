@@ -562,6 +562,26 @@ body{
     transition:transform .25s ease;
 }
 
+/* Make the best-seller image itself the product link. */
+.product-image-link{
+    display:block;
+    width:100%;
+    height:100%;
+    color:inherit;
+    text-decoration:none;
+    cursor:pointer;
+}
+
+.product-image-link:focus-visible{
+    outline:2px solid #6F4E37;
+    outline-offset:-3px;
+    border-radius:12px;
+}
+
+.product-image-wrap::after{
+    pointer-events:none;
+}
+
 .product-card:hover .product-image-wrap img{
     transform:scale(1.05);
 }
@@ -1675,11 +1695,17 @@ body{
             <div class="col-xl-3 col-lg-3 col-md-6 col-sm-6 col-6">
                 <div class="card product-card h-100">
                     <div class="product-image-wrap">
-                        <img
-                            src="<?= htmlspecialchars(customerImagePath($prod['image'])) ?>"
-                            alt="<?= htmlspecialchars($prod['name']) ?>"
-                            onerror="this.onerror=null;this.src='../assets/uploads/products/default-product.png';"
+                        <a
+                            href="product-view.php?id=<?= (int)$prod['id'] ?>"
+                            class="product-image-link"
+                            aria-label="View <?= htmlspecialchars($prod['name']) ?>"
                         >
+                            <img
+                                src="<?= htmlspecialchars(customerImagePath($prod['image'])) ?>"
+                                alt="<?= htmlspecialchars($prod['name']) ?>"
+                                onerror="this.onerror=null;this.src='../assets/uploads/products/default-product.png';"
+                            >
+                        </a>
                     </div>
 
                     <div class="card-body text-center d-flex flex-column">
@@ -1690,10 +1716,6 @@ body{
                         <div class="product-price mt-1">
                             ₱<?= number_format((float)$prod['price'],2) ?>
                         </div>
-
-                        <a href="product-view.php?id=<?= (int)$prod['id'] ?>" class="btn btn-dark order-btn mt-auto mx-auto">
-                            Order
-                        </a>
                     </div>
                 </div>
             </div>

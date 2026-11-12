@@ -240,113 +240,162 @@ $navbarAdminInitial =
 
 .localitea-admin-search-wrapper {
     position: relative;
-
-    width: min(500px, 100%);
-
+    width: 44px;
     min-width: 0;
+    /* Keep the collapsed search beside Admin Panel, not centered in the navbar. */
+    justify-self: start;
+    margin: 0;
+    z-index: 5;
+    transition: width .24s ease;
+}
 
-    justify-self: center;
+.localitea-admin-search-wrapper.is-expanded {
+    width: min(320px, 100%);
+}
 
-    margin: 0 auto;
+/* Collapsed search: show only a compact, accessible icon button. */
+.localitea-admin-search-toggle {
+    width: 42px;
+    height: 42px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 1px solid #B8A08A;
+    border-radius: 50%;
+    background: #FDF8F2;
+    color: #6F4E37;
+    cursor: pointer;
+    font-size: 1rem;
+    box-sizing: border-box;
+    transition: background .2s ease, border-color .2s ease, color .2s ease;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.localitea-admin-search-toggle:hover,
+.localitea-admin-search-toggle:focus-visible {
+    background: #F0E6D6;
+    border-color: #8F725A;
+    color: #4A3525;
+}
+
+.localitea-admin-search-toggle:focus-visible,
+.localitea-admin-search-close:focus-visible {
+    outline: 3px solid #C69C6D;
+    outline-offset: 2px;
 }
 
 .localitea-admin-navbar-search {
+    display: none;
     width: 100%;
-
     position: relative;
+    margin: 0;
+}
+
+.localitea-admin-search-wrapper.is-expanded .localitea-admin-search-toggle {
+    display: none;
+}
+
+.localitea-admin-search-wrapper.is-expanded .localitea-admin-navbar-search {
+    display: block;
+    animation: adminSearchExpand .18s ease-out;
+}
+
+@keyframes adminSearchExpand {
+    from { opacity: .7; }
+    to { opacity: 1; }
 }
 
 .localitea-admin-navbar-search input {
     width: 100%;
-
-    height: 40px;
-
+    height: 42px;
     border: 1px solid #B8A08A;
-
     border-radius: 50px;
-
-    padding:
-        8px 16px 8px 42px;
-
+    padding: 8px 42px 8px 42px;
     font-size: .84rem;
-
     color: #2C221E;
-
     background: #FDF8F2;
-
     outline: none;
-
     box-sizing: border-box;
-
-    transition:
-        border-color .2s ease,
-        box-shadow .2s ease,
-        background .2s ease;
+    transition: border-color .2s ease, box-shadow .2s ease, background .2s ease;
 }
 
 .localitea-admin-navbar-search input::placeholder {
     color: #9A8B80;
 }
 
-.localitea-admin-navbar-search input:focus {
-    border-color: #6F4E37;
-
-    background: #FFFFFF;
-
-    box-shadow:
-        0 0 0 3px
-        rgba(111, 78, 55, .08);
+/* Hide the browser's built-in clear (blue x) button; we use our own. */
+.localitea-admin-navbar-search input::-webkit-search-cancel-button,
+.localitea-admin-navbar-search input::-webkit-search-decoration,
+.localitea-admin-navbar-search input::-webkit-search-results-button,
+.localitea-admin-navbar-search input::-webkit-search-results-decoration {
+    -webkit-appearance: none;
+    appearance: none;
+    display: none;
 }
 
-/* Search icon */
+.localitea-admin-navbar-search input::-ms-clear {
+    display: none;
+}
 
+.localitea-admin-navbar-search input:focus {
+    border-color: #6F4E37;
+    background: #FFFFFF;
+    box-shadow: 0 0 0 3px rgba(111, 78, 55, .08);
+}
+
+/* Search icon inside the expanded input. */
 .localitea-admin-navbar-search::before {
     content: '';
-
     position: absolute;
-
     left: 15px;
     top: 50%;
-
-    transform:
-        translateY(-50%);
-
+    transform: translateY(-50%);
     width: 14px;
     height: 14px;
-
-    border:
-        2px solid #8B6A55;
-
+    border: 2px solid #8B6A55;
     border-radius: 50%;
-
     pointer-events: none;
-
     z-index: 2;
-
     box-sizing: border-box;
 }
 
 .localitea-admin-navbar-search::after {
     content: '';
-
     position: absolute;
-
     left: 27px;
-
     top: calc(50% + 5px);
-
     width: 6px;
     height: 2px;
-
     background: #8B6A55;
-
     border-radius: 2px;
-
     transform: rotate(45deg);
-
     pointer-events: none;
-
     z-index: 2;
+}
+
+.localitea-admin-search-close {
+    position: absolute;
+    top: 50%;
+    right: 5px;
+    transform: translateY(-50%);
+    width: 31px;
+    height: 31px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: #8B6A55;
+    cursor: pointer;
+    z-index: 3;
+}
+
+.localitea-admin-search-close:hover {
+    background: #F0E6D6;
+    color: #4A3525;
 }
 
 /* =========================================================
@@ -916,7 +965,11 @@ $navbarAdminInitial =
     }
 
     .localitea-admin-search-wrapper {
-        width: min(430px, 100%);
+        width: 44px;
+    }
+
+    .localitea-admin-search-wrapper.is-expanded {
+        width: min(300px, 100%);
     }
 
     .localitea-admin-navbar-profile-name {
@@ -994,8 +1047,24 @@ $navbarAdminInitial =
     }
 
     .localitea-admin-search-wrapper {
+        width: 44px;
+    }
 
-        width: 100%;
+    .localitea-admin-search-wrapper.is-expanded {
+        position: absolute;
+        top: 50%;
+        left: 58px;
+        right: 58px;
+        width: auto;
+        max-width: none;
+        margin: 0;
+        transform: translateY(-50%);
+        z-index: 10;
+    }
+
+    .localitea-admin-search-toggle {
+        width: 38px;
+        height: 38px;
     }
 
     .localitea-admin-navbar-search input {
@@ -1003,7 +1072,7 @@ $navbarAdminInitial =
         height: 38px;
 
         padding:
-            7px 10px 7px 37px;
+            7px 40px 7px 37px;
 
         font-size: 16px;
     }
@@ -1122,7 +1191,7 @@ $navbarAdminInitial =
         height: 35px;
 
         padding:
-            6px 8px 6px 33px;
+            6px 38px 6px 33px;
 
         font-size: 16px;
     }
@@ -1214,9 +1283,8 @@ $navbarAdminInitial =
     }
 
     .localitea-admin-navbar-search input {
-
         padding-left: 31px;
-        padding-right: 6px;
+        padding-right: 36px;
     }
 
     .localitea-admin-navbar-profile-btn {
@@ -1256,6 +1324,7 @@ $navbarAdminInitial =
 
     .localitea-admin-navbar-search input {
         padding-left: 29px;
+        padding-right: 34px;
     }
 
     .localitea-admin-navbar-search::before {
@@ -1318,7 +1387,7 @@ $navbarAdminInitial =
             ></i>
 
             <span>
-                Admin Panel
+                Admin
             </span>
 
         </div>
@@ -1334,17 +1403,28 @@ $navbarAdminInitial =
         id="localiteaAdminSearchWrapper"
     >
 
+        <button
+            type="button"
+            class="localitea-admin-search-toggle"
+            id="localiteaAdminSearchToggle"
+            aria-label="Open system search"
+            aria-controls="localiteaAdminSearchInput"
+            aria-expanded="false"
+            title="Search system"
+        >
+            <i class="bi bi-search" aria-hidden="true"></i>
+        </button>
+
         <form
             class="localitea-admin-navbar-search"
             id="localiteaAdminSearchForm"
             role="search"
             autocomplete="off"
         >
-
             <input
                 type="search"
                 id="localiteaAdminSearchInput"
-                placeholder="Search system..."
+                placeholder="Search"
                 aria-label="Search the Admin system"
                 aria-autocomplete="list"
                 aria-controls="localiteaAdminSearchResults"
@@ -1352,6 +1432,15 @@ $navbarAdminInitial =
                 spellcheck="false"
             >
 
+            <button
+                type="button"
+                class="localitea-admin-search-close"
+                id="localiteaAdminSearchClose"
+                aria-label="Close system search"
+                title="Close search"
+            >
+                <i class="bi bi-x-lg" aria-hidden="true"></i>
+            </button>
         </form>
 
         <div
@@ -1534,6 +1623,16 @@ $navbarAdminInitial =
     const searchWrapper =
         document.getElementById(
             'localiteaAdminSearchWrapper'
+        );
+
+    const searchToggle =
+        document.getElementById(
+            'localiteaAdminSearchToggle'
+        );
+
+    const searchClose =
+        document.getElementById(
+            'localiteaAdminSearchClose'
         );
 
     const searchForm =
@@ -2045,6 +2144,51 @@ $navbarAdminInitial =
 
     }
 
+    function expandSearch() {
+
+        if (!searchWrapper) {
+            return;
+        }
+
+        searchWrapper.classList.add('is-expanded');
+
+        if (searchToggle) {
+            searchToggle.setAttribute('aria-expanded', 'true');
+            searchToggle.setAttribute('aria-label', 'Close system search');
+        }
+
+        window.requestAnimationFrame(function () {
+            if (searchInput) {
+                searchInput.focus({ preventScroll: true });
+            }
+        });
+
+    }
+
+    function collapseSearch(clearQuery = true, restoreFocus = false) {
+
+        if (!searchWrapper) {
+            return;
+        }
+
+        closeSearchResults();
+        searchWrapper.classList.remove('is-expanded');
+
+        if (searchToggle) {
+            searchToggle.setAttribute('aria-expanded', 'false');
+            searchToggle.setAttribute('aria-label', 'Open system search');
+        }
+
+        if (clearQuery && searchInput) {
+            searchInput.value = '';
+        }
+
+        if (restoreFocus && searchToggle) {
+            searchToggle.focus({ preventScroll: true });
+        }
+
+    }
+
     function openSearchResults() {
 
         if (searchResults) {
@@ -2311,6 +2455,19 @@ $navbarAdminInitial =
         searchForm
     ) {
 
+        if (searchToggle) {
+            searchToggle.addEventListener('click', function () {
+                expandSearch();
+            });
+        }
+
+        if (searchClose) {
+            searchClose.addEventListener('click', function (event) {
+                event.preventDefault();
+                collapseSearch(true, true);
+            });
+        }
+
         searchInput.addEventListener(
             'input',
             function () {
@@ -2415,7 +2572,9 @@ $navbarAdminInitial =
                     event.key === 'Escape'
                 ) {
 
-                    closeSearchResults();
+                    event.preventDefault();
+                    event.stopPropagation();
+                    collapseSearch(true, true);
 
                 }
 
@@ -2458,7 +2617,7 @@ $navbarAdminInitial =
                 )
             ) {
 
-                closeSearchResults();
+                collapseSearch(true);
 
             }
 
@@ -2720,7 +2879,11 @@ $navbarAdminInitial =
 
                 closeProfileDropdown();
 
-                closeSearchResults();
+                if (searchWrapper && searchWrapper.classList.contains('is-expanded')) {
+                    collapseSearch(true);
+                } else {
+                    closeSearchResults();
+                }
 
             }
 

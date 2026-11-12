@@ -246,6 +246,27 @@ function formatOrderAddons(?string $addons): string
 }
 
 
+/**
+ * Same data as formatOrderAddons(), but returned as separate pieces so the
+ * details modal can show each add-on / bundle cup on its own.
+ */
+function orderAddonParts(?string $addons): array
+{
+    $text = formatOrderAddons($addons);
+
+    if ($text === '') {
+        return [];
+    }
+
+    return array_values(
+        array_filter(
+            array_map('trim', explode(', ', $text)),
+            static fn($part) => $part !== ''
+        )
+    );
+}
+
+
 /* =========================================================
    GET COMPLETED SALES TRANSACTIONS
 ========================================================= */
@@ -268,6 +289,10 @@ $salesStmt = $pdo->prepare("
         pickup_time,
         payment_method,
         payment_screenshot,
+        subtotal,
+        discount_type,
+        discount_rate,
+        discount_amount,
         total_amount,
         status,
         created_at,
@@ -1486,9 +1511,51 @@ body {
     box-shadow: 0 0 0 2px rgba(111,78,55,.10);
 }
 
-.completed-transaction-filter-search {
+.completed-transaction-search-wrap {
+    position: relative;
     width: 290px;
     max-width: 100%;
+}
+
+.completed-transaction-filter-search {
+    width: 100%;
+    max-width: 100%;
+    padding-right: 40px !important;
+}
+
+.completed-transaction-search-clear {
+    position: absolute;
+    top: 50%;
+    right: 7px;
+    transform: translateY(-50%);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: #7B6D62;
+    font-size: 21px;
+    line-height: 1;
+    cursor: pointer;
+    transition: background .15s ease, color .15s ease;
+}
+
+.completed-transaction-search-clear:hover {
+    background: #F1E8DF;
+    color: #4A3525;
+}
+
+.completed-transaction-search-clear:focus-visible {
+    outline: 2px solid #6F4E37;
+    outline-offset: 1px;
+}
+
+.completed-transaction-search-clear[hidden] {
+    display: none !important;
 }
 
 .completed-transaction-filter-period {
@@ -1501,31 +1568,6 @@ body {
 
 .completed-transaction-filter-month-wrap {
     display: none;
-}
-
-.completed-transaction-filter-actions {
-    display: flex;
-    gap: 8px;
-}
-
-.completed-transaction-filter-actions .btn {
-    height: 38px;
-    border-radius: 8px;
-    font-size: .82rem;
-    font-weight: 500;
-    padding: 7px 13px;
-}
-
-.completed-transaction-filter-clear {
-    background: #FFFFFF;
-    border: 1px solid #B8A08A;
-    color: #6F4E37;
-    text-decoration: none;
-}
-
-.completed-transaction-filter-clear:hover {
-    background: #F7F1E8;
-    color: #4A3525;
 }
 
 .completed-transactions-ajax-busy {
@@ -1541,19 +1583,12 @@ body {
     }
 
     .completed-transaction-filter-group,
+    .completed-transaction-search-wrap,
     .completed-transaction-filter-search,
     .completed-transaction-filter-period,
-    .completed-transaction-filter-month,
-    .completed-transaction-filter-actions {
+    .completed-transaction-filter-month {
         width: 100%;
         max-width: 100%;
-    }
-
-    .completed-transaction-filter-actions .btn,
-    .completed-transaction-filter-clear {
-        flex: 1 1 0;
-        text-align: center;
-        justify-content: center;
     }
 }
 
@@ -1733,41 +1768,32 @@ body {
 .transaction-pagination {
     display: flex;
     justify-content: center;
-    align-items: center;
-    gap: 6px;
-    margin-top: 18px;
-    flex-wrap: wrap;
+    margin: 24px 0;
 }
 
-.transaction-page-link {
-    min-width: 34px;
-    height: 34px;
-    padding: 0 9px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border: 2px solid #6F4E37;
-    border-radius: 7px;
-    background: #ffffff;
-    color: #4A3525;
-    text-decoration: none;
-    font-size: 0.72rem;
-    font-weight: 500;
+.transaction-pagination .pagination {
+    margin-bottom: 0;
 }
 
-.transaction-page-link:hover {
-    background: #F7F1E8;
-    color: #4A3525;
+/* Match the current Admin Orders pagination appearance. */
+.transaction-pagination .page-link {
+    color: #6F4E37;
+    border-color: #8B6F5A;
+    font-size: .8rem;
+    white-space: nowrap;
 }
 
-.transaction-page-link.active {
-    background: #4A3525;
-    border-color: #4A3525;
-    color: #ffffff;
+.transaction-pagination .page-item.active .page-link {
+    background: #6F4E37;
+    border-color: #5A3D2B;
+    color: #FFFFFF;
 }
 
-.transaction-page-link.disabled {
-    opacity: 0.45;
+.transaction-pagination .page-item.disabled .page-link,
+.transaction-pagination .page-link.disabled {
+    color: #A79B91;
+    border-color: #B8A08A;
+    background: #F7F5F2;
     pointer-events: none;
 }
 
@@ -1776,6 +1802,24 @@ body {
     font-size: 0.74rem;
     margin-top: 8px;
     text-align: center;
+}
+
+@media (max-width: 768px) {
+    .transaction-pagination {
+        overflow-x: auto;
+        justify-content: flex-start;
+        padding: 0 2px 3px;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .transaction-pagination nav {
+        margin: 0 auto;
+    }
+
+    .transaction-pagination .pagination {
+        flex-wrap: nowrap;
+        white-space: nowrap;
+    }
 }
 
 .transaction-detail-section {
@@ -3162,6 +3206,765 @@ body {
     }
 }
 
+
+/* =========================================================
+   REDESIGN LAYER
+   Appended last so it refines the rules above without
+   touching the JS hooks (.transaction-report-card,
+   .overview-card, .mode-tab, .btn-view-transaction, modal ids).
+========================================================= */
+
+.sales-content {
+    --sr-ink: #2C221E;
+    --sr-brown: #4A3525;
+    --sr-accent: #6F4E37;
+    --sr-line: #E8DED4;
+    --sr-soft: #FBF8F4;
+    --sr-cream: #F7F1E8;
+    --sr-muted: #8A7F75;
+    --sr-green: #2F6E3E;
+    --sr-blue: #1677FF;
+    --sr-shadow: 0 1px 2px rgba(44, 34, 30, .05), 0 10px 28px rgba(44, 34, 30, .06);
+}
+
+.sr-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 11px;
+    border: 1px solid var(--sr-line);
+    border-radius: 999px;
+    background: var(--sr-soft);
+    color: #6F665F;
+    font-size: .72rem;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.sr-chip i {
+    color: var(--sr-accent);
+}
+
+/* ---------- Completed transactions ---------- */
+.transaction-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 14px;
+}
+
+.transaction-head .transaction-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 700;
+}
+
+.transaction-head .transaction-title i {
+    color: var(--sr-accent);
+}
+
+.completed-transaction-filter-form {
+    border: 1px solid var(--sr-line);
+    border-radius: 12px;
+    background: var(--sr-soft);
+}
+
+.transaction-customer {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 4px;
+    color: #6F665F;
+    font-size: .72rem;
+    line-height: 1.2;
+}
+
+.transaction-customer i {
+    color: var(--sr-accent);
+    font-size: .78rem;
+}
+
+.btn-view-transaction {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    border: 1px solid #CDB9A8;
+    border-radius: 9px;
+    padding: 7px 12px;
+    font-weight: 600;
+    transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+}
+
+.btn-view-transaction:hover {
+    background: var(--sr-brown);
+    border-color: var(--sr-brown);
+    color: #FFFFFF;
+}
+
+/* Desktop / tablet table only; phones keep their card layout. */
+@media (min-width: 768px) {
+
+    .transaction-table {
+        border-collapse: separate;
+        border-spacing: 0;
+    }
+
+    .transaction-table th {
+        background: var(--sr-soft);
+        border-bottom: 1px solid var(--sr-line);
+        font-weight: 600;
+        letter-spacing: .3px;
+    }
+
+    .transaction-table th:first-child {
+        border-top-left-radius: 10px;
+    }
+
+    .transaction-table th:last-child {
+        border-top-right-radius: 10px;
+    }
+
+    .transaction-table td {
+        border-bottom: 1px solid #F0E8E0;
+        padding: 13px 10px;
+        transition: background-color .12s ease;
+    }
+
+    .transaction-table tbody tr:hover td {
+        background: #FDFAF6;
+    }
+
+    .transaction-table tbody tr:last-child td {
+        border-bottom: 1px solid var(--sr-line);
+    }
+}
+
+.transaction-pagination .page-link {
+    border-radius: 8px;
+    margin: 0 2px;
+    border-color: var(--sr-line);
+}
+
+.transaction-pagination .page-item.active .page-link {
+    border-color: var(--sr-brown);
+}
+
+.report-footer-summary {
+    border-top: 1px solid var(--sr-line);
+    padding-top: 14px;
+}
+
+
+
+/* =========================================================
+   TRANSACTION DETAILS MODAL (redesigned)
+========================================================= */
+
+.transaction-details-dialog {
+    --bs-modal-width: 920px;
+    max-width: 920px;
+}
+
+.transaction-detail-modal {
+    border-radius: 18px;
+}
+
+.txd-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--sr-line, #E8DED4);
+    background: #FFFCF9;
+}
+
+.txd-header .btn-close {
+    margin: 0 0 0 4px;
+}
+
+.txd-header-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+    background: #4A3525;
+    color: #FFFFFF;
+    font-size: 1.05rem;
+}
+
+.txd-header-text {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.transaction-detail-modal .txd-header .modal-title {
+    display: block;
+    margin: 0;
+    font-size: 1.02rem;
+    font-weight: 700;
+    line-height: 1.2;
+}
+
+.txd-header-sub {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 3px;
+    color: #8A7F75;
+    font-size: .76rem;
+    font-weight: 500;
+}
+
+.txd-sep {
+    display: inline-block;
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: #C9BBAE;
+}
+
+.txd-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex: 0 0 auto;
+    padding: 6px 11px;
+    border: 1px solid #B9DCC4;
+    border-radius: 999px;
+    background: #EAF6EE;
+    color: #2F6E3E;
+    font-size: .72rem;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.txd-body {
+    padding: 18px 20px 20px;
+    background: #FAF7F3;
+}
+
+/* Amount band */
+.txd-hero {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+    padding: 16px 20px;
+    border-radius: 14px;
+    background: #4A3525;
+    color: #FFFFFF;
+}
+
+.txd-hero-label {
+    color: rgba(255, 255, 255, .7);
+    font-size: .7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .4px;
+}
+
+.txd-hero-amount {
+    margin-top: 2px;
+    font-size: 1.85rem;
+    font-weight: 700;
+    letter-spacing: -.4px;
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+}
+
+.txd-hero-side {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+}
+
+.txd-hero-meta {
+    color: rgba(255, 255, 255, .72);
+    font-size: .74rem;
+}
+
+.txd-pay {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    font-size: .76rem;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.txd-pay.is-cash {
+    background: #F7F1E8;
+    color: #6F4E37;
+}
+
+.txd-pay.is-gcash {
+    background: #E7F1FF;
+    color: #1677FF;
+}
+
+/* Two columns */
+.txd-columns {
+    display: grid;
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    gap: 14px;
+    align-items: start;
+}
+
+.txd-col {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-width: 0;
+}
+
+.txd-card {
+    padding: 14px 16px;
+    border: 1px solid #E8DED4;
+    border-radius: 14px;
+    background: #FFFFFF;
+}
+
+.txd-card-title {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin: 0 0 12px;
+    color: #4A3525;
+    font-size: .72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .4px;
+}
+
+.txd-card-title i {
+    color: #6F4E37;
+    font-size: .9rem;
+}
+
+.txd-count {
+    margin-left: auto;
+    min-width: 22px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: #F7F1E8;
+    color: #6F4E37;
+    font-size: .68rem;
+    text-align: center;
+    letter-spacing: 0;
+}
+
+.txd-muted {
+    color: #8A7F75;
+    font-size: .8rem;
+}
+
+/* Customer */
+.txd-customer {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.txd-avatar {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    background: #F7F1E8;
+    border: 1px solid #D9C5B4;
+    color: #6F4E37;
+    font-size: 1rem;
+    font-weight: 700;
+}
+
+.txd-customer-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.txd-customer-text strong {
+    color: #2C221E;
+    font-size: .92rem;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.txd-customer-text a {
+    color: #6F4E37;
+    font-size: .8rem;
+    text-decoration: none;
+}
+
+.txd-customer-text a:hover {
+    text-decoration: underline;
+}
+
+/* Key / value pairs */
+.txd-kv {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin: 0;
+}
+
+.txd-kv dt {
+    color: #8A7F75;
+    font-size: .68rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .3px;
+}
+
+.txd-kv dd {
+    margin: 2px 0 0;
+    color: #2C221E;
+    font-size: .86rem;
+    font-weight: 600;
+}
+
+/* Timeline */
+.txd-timeline {
+    position: relative;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.txd-timeline li {
+    position: relative;
+    display: flex;
+    gap: 12px;
+    padding-bottom: 14px;
+}
+
+.txd-timeline li:last-child {
+    padding-bottom: 0;
+}
+
+.txd-timeline li::before {
+    content: "";
+    position: absolute;
+    left: 5px;
+    top: 14px;
+    bottom: -2px;
+    width: 2px;
+    background: #E8DED4;
+}
+
+.txd-timeline li:last-child::before {
+    display: none;
+}
+
+.txd-tl-dot {
+    position: relative;
+    z-index: 1;
+    flex: 0 0 auto;
+    width: 12px;
+    height: 12px;
+    margin-top: 3px;
+    border-radius: 50%;
+    border: 2px solid #CDB9A8;
+    background: #FFFFFF;
+}
+
+.txd-timeline li.is-done .txd-tl-dot {
+    border-color: #2F6E3E;
+    background: #2F6E3E;
+}
+
+.txd-timeline strong {
+    display: block;
+    color: #2C221E;
+    font-size: .82rem;
+    font-weight: 600;
+    line-height: 1.2;
+}
+
+.txd-timeline small {
+    display: block;
+    margin-top: 2px;
+    color: #8A7F75;
+    font-size: .74rem;
+}
+
+.txd-duration {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 12px;
+    padding: 5px 10px;
+    border-radius: 999px;
+    background: #F7F1E8;
+    color: #6F4E37;
+    font-size: .72rem;
+    font-weight: 600;
+}
+
+/* Items */
+.txd-items {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.txd-item {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 12px;
+    padding: 12px 0;
+    border-bottom: 1px dashed #E8DED4;
+}
+
+.txd-item:first-child {
+    padding-top: 0;
+}
+
+.txd-item:last-child {
+    padding-bottom: 0;
+    border-bottom: 0;
+}
+
+.txd-item-qty {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 34px;
+    height: 26px;
+    padding: 0 7px;
+    border-radius: 8px;
+    background: #F7F1E8;
+    color: #6F4E37;
+    font-size: .78rem;
+    font-weight: 700;
+}
+
+.txd-item-name {
+    color: #2C221E;
+    font-size: .9rem;
+    font-weight: 600;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+}
+
+.txd-free {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: #EAF6EE;
+    color: #2F6E3E;
+    font-size: .6rem;
+    font-weight: 700;
+    letter-spacing: .4px;
+    vertical-align: middle;
+}
+
+.txd-item-unit {
+    margin-top: 2px;
+    color: #8A7F75;
+    font-size: .74rem;
+}
+
+.txd-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 8px;
+}
+
+.txd-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 9px;
+    border: 1px solid #E8DED4;
+    border-radius: 999px;
+    background: #FBF8F4;
+    color: #6F4E37;
+    font-size: .7rem;
+    font-weight: 500;
+    line-height: 1.3;
+}
+
+.txd-chip i {
+    font-size: .7rem;
+}
+
+.txd-chip-addon {
+    background: #FFF7E8;
+    border-color: #F0DDB8;
+    color: #8A5A12;
+}
+
+.txd-cups {
+    margin: 8px 0 0;
+    padding: 8px 10px;
+    list-style: none;
+    border-radius: 8px;
+    background: #FBF8F4;
+    color: #6F4E37;
+    font-size: .74rem;
+}
+
+.txd-cups li + li {
+    margin-top: 3px;
+}
+
+.txd-item-price {
+    color: #2C221E;
+    font-size: .9rem;
+    font-weight: 700;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+.txd-item-price.is-free {
+    color: #A39A91;
+    text-decoration: line-through;
+    font-weight: 500;
+}
+
+/* Totals */
+.txd-summary {
+    background: #FFFCF9;
+}
+
+.txd-line {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 5px 0;
+    color: #6F665F;
+    font-size: .82rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.txd-line.is-discount {
+    color: #2F6E3E;
+}
+
+.txd-line.txd-total {
+    margin-top: 6px;
+    padding-top: 12px;
+    border-top: 1px solid #E8DED4;
+    color: #2C221E;
+    font-size: .9rem;
+    font-weight: 600;
+}
+
+.txd-line.txd-total strong {
+    color: #4A3525;
+    font-size: 1.2rem;
+    font-weight: 700;
+}
+
+/* Proof */
+.txd-proof {
+    position: relative;
+    display: block;
+    overflow: hidden;
+    border: 1px solid #E8DED4;
+    border-radius: 12px;
+    background: #FBF8F4;
+    text-align: center;
+}
+
+.txd-proof img {
+    display: block;
+    max-width: 100%;
+    max-height: 320px;
+    margin: 0 auto;
+    object-fit: contain;
+}
+
+.txd-proof-hint {
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 9px;
+    border-radius: 999px;
+    background: rgba(44, 34, 30, .78);
+    color: #FFFFFF;
+    font-size: .68rem;
+    opacity: 0;
+    transition: opacity .15s ease;
+}
+
+.txd-proof:hover .txd-proof-hint,
+.txd-proof:focus-visible .txd-proof-hint {
+    opacity: 1;
+}
+
+/* Modal footer */
+.transaction-detail-modal .modal-footer {
+    justify-content: flex-end;
+}
+
+/* Modal: stack on tablets and phones */
+@media (max-width: 767.98px) {
+    .txd-columns {
+        grid-template-columns: 1fr;
+    }
+
+    .txd-header {
+        flex-wrap: wrap;
+        padding: 14px 16px;
+    }
+
+    .txd-status {
+        order: 3;
+    }
+
+    .txd-body {
+        padding: 14px;
+    }
+
+    .txd-hero {
+        padding: 14px 16px;
+    }
+
+    .txd-hero-amount {
+        font-size: 1.55rem;
+    }
+
+    .txd-hero-side {
+        align-items: flex-start;
+    }
+}
+
+@media (max-width: 575.98px) {
+    .txd-item {
+        grid-template-columns: auto minmax(0, 1fr);
+    }
+
+    .txd-item-price {
+        grid-column: 2;
+        justify-self: start;
+    }
+}
+
 </style>
 
 
@@ -3486,84 +4289,6 @@ body {
 
                         </div>
 
-                        <!-- OVERVIEW HIGHLIGHTS -->
-                        <div class="overview-highlights">
-
-                            <div class="overview-highlight">
-                                <small>Best <?= $periodUnitLabel ?></small>
-                                <strong>
-                                    <?= ($bestPeriod && $bestPeriod['sales'] > 0)
-                                        ? htmlspecialchars($bestPeriod['label']) . ' – ₱' . number_format($bestPeriod['sales'], 2)
-                                        : 'N/A' ?>
-                                </strong>
-                            </div>
-
-                            <div class="overview-highlight">
-                                <small>Average per <?= $periodUnitLabel ?></small>
-                                <strong>₱<?= number_format($averagePerPeriod, 2) ?></strong>
-                            </div>
-
-                            <div class="overview-highlight">
-                                <small>Active Periods</small>
-                                <strong><?= $activePeriods ?> of <?= count($salesOverview) ?></strong>
-                            </div>
-
-                        </div>
-
-                        <!-- OVERVIEW DETAILS TABLE -->
-                        <div class="table-responsive mt-3">
-
-                            <table class="table overview-detail-table">
-
-                                <thead>
-                                    <tr>
-                                        <th><?= $report_mode === 'daily' ? 'Date' : $periodUnitLabel ?></th>
-                                        <th class="text-end">Orders</th>
-                                        <th class="text-end">Sales</th>
-                                        <th class="text-end">Avg. Order</th>
-                                        <th class="text-end">% of Total</th>
-                                    </tr>
-                                </thead>
-
-                                <tbody>
-
-                                    <?php foreach ($salesOverview as $period): ?>
-
-                                        <?php
-                                        $pAvg   = $period['orders'] > 0
-                                            ? $period['sales'] / $period['orders']
-                                            : 0;
-                                        $pShare = $totalSales > 0
-                                            ? ($period['sales'] / $totalSales) * 100
-                                            : 0;
-                                        ?>
-
-                                        <tr class="<?= $period['sales'] <= 0 ? 'is-empty' : '' ?>">
-                                            <td><?= htmlspecialchars($period['label']) ?></td>
-                                            <td class="text-end"><?= (int)$period['orders'] ?></td>
-                                            <td class="text-end">₱<?= number_format($period['sales'], 2) ?></td>
-                                            <td class="text-end">₱<?= number_format($pAvg, 2) ?></td>
-                                            <td class="text-end"><?= number_format($pShare, 1) ?>%</td>
-                                        </tr>
-
-                                    <?php endforeach; ?>
-
-                                </tbody>
-
-                                <tfoot>
-                                    <tr>
-                                        <td>Total</td>
-                                        <td class="text-end"><?= (int)$overviewTotalOrders ?></td>
-                                        <td class="text-end">₱<?= number_format($totalSales, 2) ?></td>
-                                        <td class="text-end">₱<?= number_format($averageOrder, 2) ?></td>
-                                        <td class="text-end">100%</td>
-                                    </tr>
-                                </tfoot>
-
-                            </table>
-
-                        </div>
-
                     <?php endif; ?>
 
                 </div>
@@ -3577,8 +4302,16 @@ body {
 
                 <div class="transaction-section">
 
-                    <div class="transaction-title">
-                        Completed Sales Transactions
+                    <div class="transaction-head">
+                        <div class="transaction-title">
+                            <i class="bi bi-receipt"></i>
+                            Completed Sales Transactions
+                        </div>
+                        <span class="sr-chip">
+                            <?= number_format($completedTransactionCount) ?>
+                            transaction<?= $completedTransactionCount !== 1 ? 's' : '' ?>
+                            • ₱<?= number_format($completedTransactionSalesTotal, 2) ?>
+                        </span>
                     </div>
 
                     <form
@@ -3592,17 +4325,29 @@ body {
                                 Search
                             </label>
 
-                            <input
-                                type="search"
-                                id="completedTransactionSearch"
-                                class="completed-transaction-filter-search"
-                                data-completed-transaction-search
-                                name="completed_q"
-                                value="<?= htmlspecialchars($completed_search) ?>"
-                                maxlength="100"
-                                placeholder="Order, claim, customer, phone..."
-                                autocomplete="off"
-                            >
+                            <div class="completed-transaction-search-wrap">
+                                <input
+                                    type="text"
+                                    id="completedTransactionSearch"
+                                    class="completed-transaction-filter-search"
+                                    data-completed-transaction-search
+                                    name="completed_q"
+                                    value="<?= htmlspecialchars($completed_search) ?>"
+                                    maxlength="100"
+                                    placeholder="Order, claim, customer, phone..."
+                                    autocomplete="off"
+                                >
+                                <button
+                                    type="button"
+                                    class="completed-transaction-search-clear"
+                                    data-completed-transaction-search-clear
+                                    aria-label="Clear search text"
+                                    title="Clear search text"
+                                    <?= $completed_search !== '' ? '' : 'hidden' ?>
+                                >
+                                    &times;
+                                </button>
+                            </div>
                         </div>
 
                         <div class="completed-transaction-filter-group">
@@ -3646,30 +4391,6 @@ body {
                             >
                         </div>
 
-                        <div class="completed-transaction-filter-actions">
-                            <button
-                                type="submit"
-                                class="btn btn-dark"
-                            >
-                                <i class="bi bi-search me-1"></i>
-                                Search
-                            </button>
-
-                            <a
-                                href="<?= htmlspecialchars(
-                                    'sales-reports.php?' . http_build_query([
-                                        'start_date' => $start_date,
-                                        'end_date' => $end_date,
-                                        'mode' => $report_mode,
-                                        'transaction_page' => 1
-                                    ])
-                                ) ?>"
-                                class="btn completed-transaction-filter-clear"
-                                data-completed-transaction-clear
-                            >
-                                Clear
-                            </a>
-                        </div>
                     </form>
 
                     <?php if (empty($filteredSalesTransactions)): ?>
@@ -3806,6 +4527,12 @@ body {
                                                         $sale['claim_number'] ?? 'N/A'
                                                     ) ?>
                                                 </div>
+                                                <?php if (trim((string)($sale['customer_name'] ?? '')) !== ''): ?>
+                                                    <div class="transaction-customer">
+                                                        <i class="bi bi-person"></i>
+                                                        <?= htmlspecialchars((string)$sale['customer_name']) ?>
+                                                    </div>
+                                                <?php endif; ?>
                                             </td>
 
                                             <td
@@ -3876,6 +4603,63 @@ body {
 
 
                                         <!-- TRANSACTION DETAILS MODAL -->
+                                        <?php
+                                        /* ---------- values used only by this modal ---------- */
+                                        $txdTotal = (float)$sale['total_amount'];
+                                        $txdSubtotal = ($sale['subtotal'] ?? null) !== null
+                                            ? (float)$sale['subtotal']
+                                            : null;
+                                        $txdDiscountAmount = (float)($sale['discount_amount'] ?? 0);
+                                        $txdDiscountType = strtolower(trim((string)($sale['discount_type'] ?? 'none')));
+                                        $txdDiscountRate = (float)($sale['discount_rate'] ?? 0);
+
+                                        $txdDiscountLabel = $txdDiscountType === 'pwd'
+                                            ? 'PWD discount'
+                                            : ($txdDiscountType === 'senior' ? 'Senior Citizen discount' : 'Discount');
+                                        if ($txdDiscountRate > 0) {
+                                            $txdDiscountLabel .= ' (' . rtrim(rtrim(number_format($txdDiscountRate, 2), '0'), '.') . '%)';
+                                        }
+
+                                        /* Promotion savings are not stored on the order row, so derive them. */
+                                        $txdPromoDiscount = $txdSubtotal !== null
+                                            ? max(0.0, round($txdSubtotal - $txdDiscountAmount - $txdTotal, 2))
+                                            : 0.0;
+
+                                        $txdItemCount = 0;
+                                        foreach ($saleItems as $txdCountItem) {
+                                            $txdItemCount += (int)($txdCountItem['quantity'] ?? 0);
+                                        }
+
+                                        $txdPickupTs = ($salePickupDate !== 'N/A') ? strtotime($salePickupDate) : false;
+                                        $txdPickupDateLabel = $txdPickupTs !== false
+                                            ? date('D, M d, Y', $txdPickupTs)
+                                            : 'N/A';
+
+                                        $txdCreatedTs = !empty($sale['created_at']) ? strtotime($sale['created_at']) : false;
+                                        $txdClosedTs = !empty($sale['closed_at']) ? strtotime($sale['closed_at']) : false;
+
+                                        $txdDuration = '';
+                                        if ($txdCreatedTs !== false && $txdClosedTs !== false && $txdClosedTs >= $txdCreatedTs) {
+                                            $txdMinutes = (int)round(($txdClosedTs - $txdCreatedTs) / 60);
+                                            if ($txdMinutes < 60) {
+                                                $txdDuration = $txdMinutes . ' min';
+                                            } elseif ($txdMinutes < 1440) {
+                                                $txdDuration = floor($txdMinutes / 60) . ' hr ' . ($txdMinutes % 60) . ' min';
+                                            } else {
+                                                $txdDuration = floor($txdMinutes / 1440) . ' day(s)';
+                                            }
+                                        }
+
+                                        $txdIsGcash = strtolower((string)($sale['payment_method'] ?? '')) === 'gcash';
+                                        $txdHasProof = $txdIsGcash && !empty($sale['payment_screenshot']);
+
+                                        $txdCustomerName = trim((string)($sale['customer_name'] ?? ''));
+                                        $txdInitial = $txdCustomerName !== ''
+                                            ? mb_strtoupper(mb_substr($txdCustomerName, 0, 1))
+                                            : '?';
+                                        $txdPhone = trim((string)($sale['contact_number'] ?? ''));
+                                        $txdTel = preg_replace('/[^0-9+]/', '', $txdPhone);
+                                        ?>
                                         <div
                                             class="modal fade no-print"
                                             id="transactionDetailsModal<?= $saleOrderId ?>"
@@ -3888,15 +4672,31 @@ body {
 
                                                 <div class="modal-content transaction-detail-modal">
 
-                                                    <div class="modal-header">
+                                                    <!-- HEADER -->
+                                                    <div class="modal-header txd-header">
 
-                                                        <h5
-                                                            class="modal-title"
-                                                            id="transactionDetailsLabel<?= $saleOrderId ?>"
-                                                        >
-                                                            <i class="bi bi-receipt me-2"></i>
-                                                            Transaction Details
-                                                        </h5>
+                                                        <span class="txd-header-icon" aria-hidden="true">
+                                                            <i class="bi bi-receipt"></i>
+                                                        </span>
+
+                                                        <div class="txd-header-text">
+                                                            <h5
+                                                                class="modal-title"
+                                                                id="transactionDetailsLabel<?= $saleOrderId ?>"
+                                                            >
+                                                                Transaction Details
+                                                            </h5>
+                                                            <div class="txd-header-sub">
+                                                                <span><?= htmlspecialchars($sale['order_number'] ?? 'N/A') ?></span>
+                                                                <i class="txd-sep"></i>
+                                                                <span><?= htmlspecialchars($sale['claim_number'] ?? 'N/A') ?></span>
+                                                            </div>
+                                                        </div>
+
+                                                        <span class="txd-status">
+                                                            <i class="bi bi-check-circle-fill"></i>
+                                                            Completed
+                                                        </span>
 
                                                         <button
                                                             type="button"
@@ -3908,293 +4708,278 @@ body {
                                                     </div>
 
 
-                                                    <div class="modal-body">
+                                                    <div class="modal-body txd-body">
 
-                                                        <div class="transaction-detail-section">
+                                                        <!-- AMOUNT BAND -->
+                                                        <div class="txd-hero">
 
-                                                            <div class="transaction-detail-section-title">
-                                                                <i class="bi bi-bag-check"></i>
-                                                                Order Information
+                                                            <div>
+                                                                <div class="txd-hero-label">Total Amount</div>
+                                                                <div class="txd-hero-amount">
+                                                                    ₱<?= number_format($txdTotal, 2) ?>
+                                                                </div>
                                                             </div>
 
-                                                            <div class="transaction-detail-grid">
-
-                                                                <div class="transaction-detail-box highlight">
-                                                                    <small>Order Number</small>
-                                                                    <strong>
-                                                                        <?= htmlspecialchars(
-                                                                            $sale['order_number'] ?? 'N/A'
-                                                                        ) ?>
-                                                                    </strong>
-                                                                </div>
-
-                                                                <div class="transaction-detail-box highlight">
-                                                                    <small>Claim Number</small>
-                                                                    <strong>
-                                                                        <?= htmlspecialchars(
-                                                                            $sale['claim_number'] ?? 'N/A'
-                                                                        ) ?>
-                                                                    </strong>
-                                                                </div>
-
-                                                                <div class="transaction-detail-box">
-                                                                    <small>Customer</small>
-                                                                    <strong>
-                                                                        <?= htmlspecialchars(
-                                                                            $sale['customer_name'] ?? 'N/A'
-                                                                        ) ?>
-                                                                    </strong>
-                                                                </div>
-
-                                                                <div class="transaction-detail-box">
-                                                                    <small>Contact Number</small>
-                                                                    <strong>
-                                                                        <?= htmlspecialchars(
-                                                                            $sale['contact_number'] ?? 'N/A'
-                                                                        ) ?>
-                                                                    </strong>
-                                                                </div>
-
-                                                                <div class="transaction-detail-box">
-                                                                    <small>Pick-up Date</small>
-                                                                    <strong>
-                                                                        <?= htmlspecialchars($salePickupDate) ?>
-                                                                    </strong>
-                                                                </div>
-
-                                                                <div class="transaction-detail-box">
-                                                                    <small>Pick-up Time</small>
-                                                                    <strong>
-                                                                        <?= htmlspecialchars($salePickupTime) ?>
-                                                                    </strong>
-                                                                </div>
-
+                                                            <div class="txd-hero-side">
+                                                                <span class="txd-pay <?= $txdIsGcash ? 'is-gcash' : 'is-cash' ?>">
+                                                                    <i class="bi <?= $txdIsGcash ? 'bi-phone' : 'bi-cash-coin' ?>"></i>
+                                                                    <?= htmlspecialchars($payment) ?>
+                                                                </span>
+                                                                <span class="txd-hero-meta">
+                                                                    <?= $txdItemCount ?> item<?= $txdItemCount === 1 ? '' : 's' ?>
+                                                                    <?php if ($txdClosedTs !== false): ?>
+                                                                        • <?= date('M d, Y', $txdClosedTs) ?>
+                                                                    <?php endif; ?>
+                                                                </span>
                                                             </div>
 
                                                         </div>
 
 
-                                                        <div class="transaction-detail-section">
+                                                        <div class="txd-columns">
 
-                                                            <div class="transaction-detail-section-title">
-                                                                <i class="bi bi-receipt"></i>
-                                                                Transaction Information
-                                                            </div>
+                                                            <!-- LEFT: who / when -->
+                                                            <div class="txd-col">
 
-                                                            <div class="transaction-detail-grid">
+                                                                <section class="txd-card">
+                                                                    <h6 class="txd-card-title">
+                                                                        <i class="bi bi-person"></i> Customer
+                                                                    </h6>
 
-                                                                <div class="transaction-detail-box">
-                                                                    <small>Payment Method</small>
-                                                                    <strong>
-                                                                        <span class="transaction-payment-value">
-                                                                            <?= htmlspecialchars($payment) ?>
+                                                                    <div class="txd-customer">
+                                                                        <span class="txd-avatar" aria-hidden="true">
+                                                                            <?= htmlspecialchars($txdInitial) ?>
                                                                         </span>
-                                                                    </strong>
-                                                                </div>
-
-                                                                <div class="transaction-detail-box">
-                                                                    <small>Status</small>
-                                                                    <strong>
-                                                                        <span class="transaction-status-completed">
-                                                                            <i class="bi bi-check-circle me-1"></i>
-                                                                            Completed
-                                                                        </span>
-                                                                    </strong>
-                                                                </div>
-
-                                                                <div class="transaction-detail-box">
-                                                                    <small>Order Date</small>
-                                                                    <strong>
-                                                                        <?= htmlspecialchars($saleCreatedDate) ?>
-                                                                    </strong>
-                                                                </div>
-
-                                                                <div class="transaction-detail-box">
-                                                                    <small>Completed At</small>
-                                                                    <strong>
-                                                                        <?= htmlspecialchars($saleClosedDate) ?>
-                                                                    </strong>
-                                                                </div>
-
-                                                            </div>
-
-                                                        </div>
+                                                                        <div class="txd-customer-text">
+                                                                            <strong>
+                                                                                <?= $txdCustomerName !== '' ? htmlspecialchars($txdCustomerName) : 'N/A' ?>
+                                                                            </strong>
+                                                                            <?php if ($txdPhone !== ''): ?>
+                                                                                <a href="tel:<?= htmlspecialchars($txdTel) ?>">
+                                                                                    <i class="bi bi-telephone"></i>
+                                                                                    <?= htmlspecialchars($txdPhone) ?>
+                                                                                </a>
+                                                                            <?php else: ?>
+                                                                                <span class="txd-muted">No contact number</span>
+                                                                            <?php endif; ?>
+                                                                        </div>
+                                                                    </div>
+                                                                </section>
 
 
-                                                        <div class="transaction-detail-section">
+                                                                <section class="txd-card">
+                                                                    <h6 class="txd-card-title">
+                                                                        <i class="bi bi-bag-check"></i> Pick-up
+                                                                    </h6>
 
-                                                            <div class="transaction-detail-section-title">
-                                                                <i class="bi bi-cup-hot"></i>
-                                                                Order Items
-                                                            </div>
-
-                                                            <div class="transaction-items-card">
-
-                                                        <?php if (empty($saleItems)): ?>
-
-                                                            <div class="text-muted small">
-                                                                No order items found.
-                                                            </div>
-
-                                                        <?php else: ?>
-
-                                                            <?php foreach ($saleItems as $item): ?>
-
-                                                                <?php
-
-                                                                $itemInfoParts = [];
-
-                                                                if (!empty($item['size'])) {
-                                                                    $itemInfoParts[] =
-                                                                        'Size: ' .
-                                                                        $item['size'];
-                                                                }
-
-                                                                if (!empty($item['sugar_level'])) {
-                                                                    $itemInfoParts[] =
-                                                                        'Sugar: ' .
-                                                                        $item['sugar_level'];
-                                                                }
-
-                                                                $addonText = formatOrderAddons(
-                                                                    $item['addons'] ?? null
-                                                                );
-
-                                                                if ($addonText !== '') {
-
-                                                                    $itemInfoParts[] =
-                                                                        'Add-ons: ' .
-                                                                        $addonText;
-                                                                }
-
-                                                                ?>
-
-                                                                <div class="transaction-detail-item">
-
-                                                                    <div class="d-flex justify-content-between align-items-start gap-3">
-
+                                                                    <dl class="txd-kv">
                                                                         <div>
-
-                                                                            <div class="transaction-detail-item-name">
-
-                                                                                <?= htmlspecialchars(
-                                                                                    $item['quantity']
-                                                                                ) ?>
-                                                                                ×
-                                                                                <?= htmlspecialchars(
-                                                                                    $item['product_name']
-                                                                                ) ?>
-
-                                                                            </div>
-
-                                                                            <div class="transaction-detail-item-info">
-
-                                                                                ₱<?= number_format(
-                                                                                    (float)$item['unit_price'],
-                                                                                    2
-                                                                                ) ?>
-                                                                                each
-
-                                                                                <?php if (!empty($itemInfoParts)): ?>
-                                                                                    <br>
-                                                                                    <?= htmlspecialchars(
-                                                                                        implode(
-                                                                                            ' • ',
-                                                                                            $itemInfoParts
-                                                                                        )
-                                                                                    ) ?>
-                                                                                <?php endif; ?>
-
-                                                                            </div>
-
+                                                                            <dt>Date</dt>
+                                                                            <dd><?= htmlspecialchars($txdPickupDateLabel) ?></dd>
                                                                         </div>
-
-
-                                                                        <div class="transaction-detail-item-price">
-
-                                                                            ₱<?= number_format(
-                                                                                (float)$item['subtotal'],
-                                                                                2
-                                                                            ) ?>
-
+                                                                        <div>
+                                                                            <dt>Time</dt>
+                                                                            <dd><?= htmlspecialchars($salePickupTime) ?></dd>
                                                                         </div>
+                                                                    </dl>
+                                                                </section>
 
-                                                                    </div>
 
-                                                                </div>
+                                                                <section class="txd-card">
+                                                                    <h6 class="txd-card-title">
+                                                                        <i class="bi bi-clock-history"></i> Timeline
+                                                                    </h6>
 
-                                                            <?php endforeach; ?>
+                                                                    <ol class="txd-timeline">
+                                                                        <li>
+                                                                            <span class="txd-tl-dot"></span>
+                                                                            <div>
+                                                                                <strong>Order placed</strong>
+                                                                                <small><?= htmlspecialchars($saleCreatedDate) ?></small>
+                                                                            </div>
+                                                                        </li>
+                                                                        <li class="is-done">
+                                                                            <span class="txd-tl-dot"></span>
+                                                                            <div>
+                                                                                <strong>Completed</strong>
+                                                                                <small><?= htmlspecialchars($saleClosedDate) ?></small>
+                                                                            </div>
+                                                                        </li>
+                                                                    </ol>
 
-                                                        <?php endif; ?>
+                                                                    <?php if ($txdDuration !== ''): ?>
+                                                                        <div class="txd-duration">
+                                                                            <i class="bi bi-stopwatch"></i>
+                                                                            Fulfilled in <?= htmlspecialchars($txdDuration) ?>
+                                                                        </div>
+                                                                    <?php endif; ?>
+                                                                </section>
 
                                                             </div>
 
-                                                        </div>
+
+                                                            <!-- RIGHT: what was bought -->
+                                                            <div class="txd-col">
+
+                                                                <section class="txd-card">
+                                                                    <h6 class="txd-card-title">
+                                                                        <i class="bi bi-cup-hot"></i> Order Items
+                                                                        <span class="txd-count"><?= $txdItemCount ?></span>
+                                                                    </h6>
+
+                                                                    <?php if (empty($saleItems)): ?>
+
+                                                                        <div class="txd-muted">No order items found.</div>
+
+                                                                    <?php else: ?>
+
+                                                                        <ul class="txd-items">
+
+                                                                            <?php foreach ($saleItems as $item): ?>
+
+                                                                                <?php
+                                                                                $itemName = trim((string)($item['product_name'] ?? ''));
+                                                                                $itemIsFree = false;
+
+                                                                                if (preg_match('/\s*\(FREE\)\s*$/i', $itemName)) {
+                                                                                    $itemIsFree = true;
+                                                                                    $itemName = trim(preg_replace('/\s*\(FREE\)\s*$/i', '', $itemName));
+                                                                                }
+
+                                                                                $itemQty = (int)($item['quantity'] ?? 0);
+
+                                                                                $itemCups = [];
+                                                                                $itemAddonChips = [];
+
+                                                                                foreach (orderAddonParts($item['addons'] ?? null) as $addonPart) {
+                                                                                    if (preg_match('/^Cup\s+\d+\s*:/i', $addonPart)) {
+                                                                                        $itemCups[] = $addonPart;
+                                                                                    } else {
+                                                                                        $itemAddonChips[] = $addonPart;
+                                                                                    }
+                                                                                }
+                                                                                ?>
+
+                                                                                <li class="txd-item">
+
+                                                                                    <span class="txd-item-qty"><?= $itemQty ?>×</span>
+
+                                                                                    <div class="txd-item-main">
+
+                                                                                        <div class="txd-item-name">
+                                                                                            <?= htmlspecialchars($itemName) ?>
+                                                                                            <?php if ($itemIsFree): ?>
+                                                                                                <span class="txd-free">FREE</span>
+                                                                                            <?php endif; ?>
+                                                                                        </div>
+
+                                                                                        <div class="txd-item-unit">
+                                                                                            ₱<?= number_format((float)$item['unit_price'], 2) ?> each
+                                                                                        </div>
+
+                                                                                        <?php if (!empty($item['size']) || !empty($item['sugar_level']) || $itemAddonChips): ?>
+                                                                                            <div class="txd-chips">
+                                                                                                <?php if (!empty($item['size'])): ?>
+                                                                                                    <span class="txd-chip"><i class="bi bi-cup"></i> <?= htmlspecialchars($item['size']) ?></span>
+                                                                                                <?php endif; ?>
+                                                                                                <?php if (!empty($item['sugar_level'])): ?>
+                                                                                                    <span class="txd-chip"><i class="bi bi-droplet"></i> <?= htmlspecialchars($item['sugar_level']) ?> sugar</span>
+                                                                                                <?php endif; ?>
+                                                                                                <?php foreach ($itemAddonChips as $addonChip): ?>
+                                                                                                    <span class="txd-chip txd-chip-addon"><i class="bi bi-plus-lg"></i> <?= htmlspecialchars($addonChip) ?></span>
+                                                                                                <?php endforeach; ?>
+                                                                                            </div>
+                                                                                        <?php endif; ?>
+
+                                                                                        <?php if ($itemCups): ?>
+                                                                                            <ul class="txd-cups">
+                                                                                                <?php foreach ($itemCups as $cupLine): ?>
+                                                                                                    <li><?= htmlspecialchars($cupLine) ?></li>
+                                                                                                <?php endforeach; ?>
+                                                                                            </ul>
+                                                                                        <?php endif; ?>
+
+                                                                                    </div>
+
+                                                                                    <div class="txd-item-price <?= $itemIsFree ? 'is-free' : '' ?>">
+                                                                                        ₱<?= number_format((float)$item['subtotal'], 2) ?>
+                                                                                    </div>
+
+                                                                                </li>
+
+                                                                            <?php endforeach; ?>
+
+                                                                        </ul>
+
+                                                                    <?php endif; ?>
+                                                                </section>
 
 
-                                                        <div class="transaction-detail-total">
+                                                                <section class="txd-card txd-summary">
 
-                                                            <span>
-                                                                Total Amount
-                                                            </span>
+                                                                    <?php if ($txdSubtotal !== null && ($txdPromoDiscount > 0 || $txdDiscountAmount > 0)): ?>
+                                                                        <div class="txd-line">
+                                                                            <span>Subtotal</span>
+                                                                            <span>₱<?= number_format($txdSubtotal, 2) ?></span>
+                                                                        </div>
+                                                                    <?php endif; ?>
 
-                                                            <strong>
-                                                                ₱<?= number_format(
-                                                                    (float)$sale['total_amount'],
-                                                                    2
-                                                                ) ?>
-                                                            </strong>
+                                                                    <?php if ($txdPromoDiscount > 0): ?>
+                                                                        <div class="txd-line is-discount">
+                                                                            <span>Promotion</span>
+                                                                            <span>−₱<?= number_format($txdPromoDiscount, 2) ?></span>
+                                                                        </div>
+                                                                    <?php endif; ?>
 
-                                                        </div>
+                                                                    <?php if ($txdDiscountAmount > 0): ?>
+                                                                        <div class="txd-line is-discount">
+                                                                            <span><?= htmlspecialchars($txdDiscountLabel) ?></span>
+                                                                            <span>−₱<?= number_format($txdDiscountAmount, 2) ?></span>
+                                                                        </div>
+                                                                    <?php endif; ?>
+
+                                                                    <div class="txd-line txd-total">
+                                                                        <span>Total Amount</span>
+                                                                        <strong>₱<?= number_format($txdTotal, 2) ?></strong>
+                                                                    </div>
+
+                                                                </section>
 
 
-                                                        <?php if (
-                                                            strtolower(
-                                                                $sale['payment_method']
-                                                                ?? ''
-                                                            ) === 'gcash'
-                                                            &&
-                                                            !empty(
-                                                                $sale['payment_screenshot']
-                                                            )
-                                                        ): ?>
+                                                                <?php if ($txdHasProof): ?>
 
-                                                            <div class="transaction-payment-proof">
+                                                                    <section class="txd-card transaction-payment-proof">
+                                                                        <h6 class="txd-card-title">
+                                                                            <i class="bi bi-image"></i> GCash Payment Proof
+                                                                        </h6>
 
-                                                                <h6>
-                                                                    <i class="bi bi-image me-1"></i>
-                                                                    GCash Payment Proof
-                                                                </h6>
-
-                                                                <button
-                                                                    type="button"
-                                                                    class="btn-view-payment-proof"
-                                                                    data-bs-toggle="collapse"
-                                                                    data-bs-target="#gcashProofDropdown<?= $saleOrderId ?>"
-                                                                    aria-expanded="false"
-                                                                    aria-controls="gcashProofDropdown<?= $saleOrderId ?>"
-                                                                >
-                                                                    <i class="bi bi-eye me-1"></i>
-                                                                    View GCash Payment Proof
-                                                                    <i class="bi bi-chevron-down gcash-proof-chevron"></i>
-                                                                </button>
-
-                                                                <div
-                                                                    class="collapse"
-                                                                    id="gcashProofDropdown<?= $saleOrderId ?>"
-                                                                >
-                                                                    <div class="gcash-proof-dropdown">
-                                                                        <img
-                                                                            src="../<?= htmlspecialchars(
-                                                                                $sale['payment_screenshot']
-                                                                            ) ?>"
-                                                                            alt="GCash Payment Proof"
+                                                                        <a
+                                                                            class="txd-proof"
+                                                                            href="../<?= htmlspecialchars($sale['payment_screenshot']) ?>"
+                                                                            target="_blank"
+                                                                            rel="noopener"
+                                                                            title="Open full image in a new tab"
                                                                         >
-                                                                    </div>
-                                                                </div>
+                                                                            <img
+                                                                                src="../<?= htmlspecialchars($sale['payment_screenshot']) ?>"
+                                                                                alt="GCash Payment Proof for order <?= htmlspecialchars(
+                                                                                    $sale['order_number'] ?? (string)$saleOrderId,
+                                                                                    ENT_QUOTES,
+                                                                                    'UTF-8'
+                                                                                ) ?>"
+                                                                                loading="lazy"
+                                                                            >
+                                                                            <span class="txd-proof-hint">
+                                                                                <i class="bi bi-arrows-fullscreen"></i> View full size
+                                                                            </span>
+                                                                        </a>
+                                                                    </section>
+
+                                                                <?php endif; ?>
 
                                                             </div>
-                                                        <?php endif; ?>
+
+                                                        </div>
 
                                                     </div>
 
@@ -4226,155 +5011,110 @@ body {
                         </div>
 
 
-                        <!-- TRANSACTION PAGINATION -->
+                        <!-- TRANSACTION PAGINATION: follows the current Admin Orders pagination style -->
                         <?php if ($totalTransactionPages > 1): ?>
 
                             <?php
-
                             $paginationParams = [
                                 'start_date' => $start_date,
-                                'end_date'   => $end_date,
-                                'mode'       => $report_mode,
+                                'end_date' => $end_date,
+                                'mode' => $report_mode,
                                 'completed_q' => $completed_search,
                                 'completed_period' => $completed_period,
                                 'completed_month' => $completed_period === 'specific_month'
                                     ? $completed_month
-                                    : '',
-                                'transaction_page' => $transactionPage
+                                    : ''
                             ];
 
+                            $transactionPaginationUrl = static function (int $targetPage) use ($paginationParams): string {
+                                $params = $paginationParams;
+                                $params['transaction_page'] = $targetPage;
+                                return '?' . http_build_query($params);
+                            };
+
+                            /*
+                             * Keep page 1 and the last page visible, with a
+                             * small window around the current page. Gaps use
+                             * an ellipsis, matching Admin Orders.
+                             */
+                            $visibleTransactionPages = [1];
+
+                            for (
+                                $paginationCandidate = max(2, $transactionPage - 2);
+                                $paginationCandidate <= min(
+                                    $totalTransactionPages - 1,
+                                    $transactionPage + 2
+                                );
+                                $paginationCandidate++
+                            ) {
+                                $visibleTransactionPages[] = $paginationCandidate;
+                            }
+
+                            $visibleTransactionPages[] = $totalTransactionPages;
+                            $visibleTransactionPages = array_values(
+                                array_unique($visibleTransactionPages)
+                            );
+
+                            $previousTransactionPage = 0;
                             ?>
 
-                            <div class="transaction-pagination">
+                            <div class="transaction-pagination pagination-wrap">
 
-                                <a
-                                    href="?<?= http_build_query(
-                                        array_merge(
-                                            $paginationParams,
-                                            [
-                                                'transaction_page' =>
-                                                    $transactionPage - 1
-                                            ]
-                                        )
-                                    ) ?>"
-                                    class="transaction-page-link <?= $transactionPage <= 1 ? 'disabled' : '' ?>"
-                                    data-preserve-scroll="1"
-                                >
-                                    <i class="bi bi-chevron-left"></i>
-                                </a>
+                                <nav aria-label="Completed sales transaction pagination">
 
+                                    <ul class="pagination mb-0">
 
-                                <?php
+                                        <li class="page-item <?= $transactionPage <= 1 ? 'disabled' : '' ?>">
+                                            <a
+                                                class="page-link transaction-page-link <?= $transactionPage <= 1 ? 'disabled' : '' ?>"
+                                                href="<?= htmlspecialchars($transactionPaginationUrl(max(1, $transactionPage - 1)), ENT_QUOTES, 'UTF-8') ?>"
+                                                data-preserve-scroll="1"
+                                                <?= $transactionPage <= 1 ? 'aria-disabled="true" tabindex="-1"' : '' ?>
+                                            >
+                                                Previous
+                                            </a>
+                                        </li>
 
-                                /*
-                                 * Keep page 1 visible at all times. For longer
-                                 * result sets, show nearby pages plus ellipses
-                                 * and the final page.
-                                 */
-                                if ($totalTransactionPages <= 7) {
+                                        <?php foreach ($visibleTransactionPages as $paginationPage): ?>
 
-                                    $visibleTransactionPages = range(
-                                        1,
-                                        $totalTransactionPages
-                                    );
+                                            <?php if (
+                                                $previousTransactionPage > 0
+                                                && $paginationPage > $previousTransactionPage + 1
+                                            ): ?>
+                                                <li class="page-item disabled" aria-hidden="true">
+                                                    <span class="page-link">...</span>
+                                                </li>
+                                            <?php endif; ?>
 
-                                } else {
+                                            <li class="page-item <?= $paginationPage === $transactionPage ? 'active' : '' ?>">
+                                                <a
+                                                    class="page-link transaction-page-link"
+                                                    href="<?= htmlspecialchars($transactionPaginationUrl($paginationPage), ENT_QUOTES, 'UTF-8') ?>"
+                                                    data-preserve-scroll="1"
+                                                    <?= $paginationPage === $transactionPage ? 'aria-current="page"' : '' ?>
+                                                >
+                                                    <?= $paginationPage ?>
+                                                </a>
+                                            </li>
 
-                                    $visibleTransactionPages = [1];
+                                            <?php $previousTransactionPage = $paginationPage; ?>
 
-                                    if ($transactionPage <= 4) {
-                                        $visibleTransactionPages = [
-                                            1,
-                                            2,
-                                            3,
-                                            4,
-                                            5,
-                                            $totalTransactionPages
-                                        ];
+                                        <?php endforeach; ?>
 
-                                    } elseif (
-                                        $transactionPage >= $totalTransactionPages - 3
-                                    ) {
-                                        $visibleTransactionPages = [
-                                            1,
-                                            $totalTransactionPages - 4,
-                                            $totalTransactionPages - 3,
-                                            $totalTransactionPages - 2,
-                                            $totalTransactionPages - 1,
-                                            $totalTransactionPages
-                                        ];
+                                        <li class="page-item <?= $transactionPage >= $totalTransactionPages ? 'disabled' : '' ?>">
+                                            <a
+                                                class="page-link transaction-page-link <?= $transactionPage >= $totalTransactionPages ? 'disabled' : '' ?>"
+                                                href="<?= htmlspecialchars($transactionPaginationUrl(min($totalTransactionPages, $transactionPage + 1)), ENT_QUOTES, 'UTF-8') ?>"
+                                                data-preserve-scroll="1"
+                                                <?= $transactionPage >= $totalTransactionPages ? 'aria-disabled="true" tabindex="-1"' : '' ?>
+                                            >
+                                                Next
+                                            </a>
+                                        </li>
 
-                                    } else {
-                                        $visibleTransactionPages = [
-                                            1,
-                                            $transactionPage - 1,
-                                            $transactionPage,
-                                            $transactionPage + 1
-                                        ];
-                                    }
+                                    </ul>
 
-                                    $visibleTransactionPages = array_values(
-                                        array_unique($visibleTransactionPages)
-                                    );
-                                }
-
-                                $previousPage = null;
-
-                                foreach ($visibleTransactionPages as $paginationPage):
-
-                                    if (
-                                        $previousPage !== null &&
-                                        $paginationPage > $previousPage + 1
-                                    ):
-                                    ?>
-
-                                        <span
-                                            class="transaction-page-link disabled"
-                                            aria-hidden="true"
-                                        >
-                                            …
-                                        </span>
-
-                                    <?php endif; ?>
-
-                                    <a
-                                        href="?<?= http_build_query(
-                                            array_merge(
-                                                $paginationParams,
-                                                [
-                                                    'transaction_page' =>
-                                                        $paginationPage
-                                                ]
-                                            )
-                                        ) ?>"
-                                        class="transaction-page-link <?= $paginationPage === $transactionPage ? 'active' : '' ?>"
-                                        data-preserve-scroll="1"
-                                    >
-                                        <?= $paginationPage ?>
-                                    </a>
-
-                                    <?php
-                                    $previousPage = $paginationPage;
-
-                                endforeach;
-                                ?>
-
-
-                                <a
-                                    href="?<?= http_build_query(
-                                        array_merge(
-                                            $paginationParams,
-                                            [
-                                                'transaction_page' =>
-                                                    $transactionPage + 1
-                                            ]
-                                        )
-                                    ) ?>"
-                                    class="transaction-page-link <?= $transactionPage >= $totalTransactionPages ? 'disabled' : '' ?>"
-                                    data-preserve-scroll="1"
-                                >
-                                    <i class="bi bi-chevron-right"></i>
-                                </a>
+                                </nav>
 
                             </div>
 
@@ -4887,6 +5627,59 @@ body {
                 : 'none';
     }
 
+    function updateCompletedSearchClearButton(searchInput) {
+        if (!searchInput) {
+            return;
+        }
+
+        const clearButton = searchInput
+            .closest('.completed-transaction-search-wrap')
+            ?.querySelector('[data-completed-transaction-search-clear]');
+
+        if (clearButton) {
+            clearButton.hidden = searchInput.value.length === 0;
+        }
+    }
+
+    updateCompletedSearchClearButton(
+        document.querySelector('[data-completed-transaction-search]')
+    );
+
+    /* The X clears only the text. It does not search until Enter is pressed. */
+    document.addEventListener('input', function (event) {
+        const searchInput = event.target.closest(
+            '[data-completed-transaction-search]'
+        );
+
+        if (searchInput) {
+            updateCompletedSearchClearButton(searchInput);
+        }
+    });
+
+    document.addEventListener('click', function (event) {
+        const clearButton = event.target.closest(
+            '[data-completed-transaction-search-clear]'
+        );
+
+        if (!clearButton) {
+            return;
+        }
+
+        event.preventDefault();
+
+        const searchInput = clearButton
+            .closest('.completed-transaction-search-wrap')
+            ?.querySelector('[data-completed-transaction-search]');
+
+        if (!searchInput) {
+            return;
+        }
+
+        searchInput.value = '';
+        updateCompletedSearchClearButton(searchInput);
+        searchInput.focus();
+    });
+
     function buildCompletedTransactionUrl(overrides = {}) {
         const url = new URL(window.location.href);
 
@@ -4906,9 +5699,10 @@ body {
             '[data-completed-transaction-month]'
         );
 
+        /* Use only the last submitted search term. Text currently being
+           typed is not applied until the Admin presses Enter. */
         const search =
             overrides.completed_q ??
-            searchInput?.value ??
             url.searchParams.get('completed_q') ??
             '';
 
@@ -4965,7 +5759,6 @@ body {
         return url;
     }
 
-    let completedSearchTimer = null;
     let completedRequestId = 0;
 
     async function loadCompletedTransactions(
@@ -5005,6 +5798,10 @@ body {
 
             updateCompletedMonthVisibility(
                 newSection
+            );
+
+            updateCompletedSearchClearButton(
+                newSection.querySelector('[data-completed-transaction-search]')
             );
 
             if (pushHistory) {
@@ -5106,9 +5903,14 @@ body {
         }
     );
 
+    /* Search is manual: typing does nothing until Enter is pressed. */
     document.addEventListener(
-        'input',
+        'keydown',
         function (event) {
+            if (event.key !== 'Enter' || event.isComposing) {
+                return;
+            }
+
             const searchInput = event.target.closest(
                 '[data-completed-transaction-search]'
             );
@@ -5117,43 +5919,15 @@ body {
                 return;
             }
 
-            clearTimeout(completedSearchTimer);
+            event.preventDefault();
 
-            completedSearchTimer = setTimeout(
-                function () {
-                    const periodSelect = document.querySelector(
-                        '[data-completed-transaction-period]'
-                    );
-
-                    const monthInput = document.querySelector(
-                        '[data-completed-transaction-month]'
-                    );
-
-                    const targetUrl =
-                        buildCompletedTransactionUrl({
-                            completed_period:
-                                periodSelect?.value || 'today',
-                            completed_month:
-                                monthInput?.value || '',
-                            completed_q:
-                                searchInput.value,
-                            transaction_page: 1
-                        });
-
-                    /* Live search replaces the URL state without
-                       creating one history entry per keystroke. */
-                    navigateUrlWithoutReload(
-                        targetUrl,
-                        true
-                    );
-
-                    loadCompletedTransactions(
-                        targetUrl,
-                        false
-                    );
-                },
-                300
+            const form = searchInput.closest(
+                '[data-completed-transaction-filter-form]'
             );
+
+            if (form && typeof form.requestSubmit === 'function') {
+                form.requestSubmit();
+            }
         }
     );
 
@@ -5206,46 +5980,6 @@ body {
     document.addEventListener(
         'click',
         function (event) {
-            const clearLink = event.target.closest(
-                '[data-completed-transaction-clear]'
-            );
-
-            if (clearLink) {
-                if (
-                    event.ctrlKey ||
-                    event.metaKey ||
-                    event.shiftKey ||
-                    event.altKey ||
-                    clearLink.target === '_blank'
-                ) {
-                    return;
-                }
-
-                event.preventDefault();
-
-                const url = new URL(
-                    clearLink.href,
-                    window.location.href
-                );
-
-                url.searchParams.delete('completed_q');
-                url.searchParams.set(
-                    'completed_period',
-                    'today'
-                );
-                url.searchParams.delete('completed_month');
-                url.searchParams.set(
-                    'transaction_page',
-                    '1'
-                );
-
-                loadCompletedTransactions(
-                    url,
-                    true
-                );
-                return;
-            }
-
             const paginationLink = event.target.closest(
                 '.transaction-page-link[href]'
             );
@@ -5509,4 +6243,3 @@ body {
 })();
 
 </script>
-

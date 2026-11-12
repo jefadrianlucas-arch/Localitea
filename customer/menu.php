@@ -44,11 +44,19 @@ if ($isAjaxRequest) {
                 </p>
             </div>
         <?php else: ?>
-            <div class="row g-4 pb-5">
+            <div class="row row-cols-2 row-cols-md-3 row-cols-lg-4 row-cols-xl-5 g-4 pb-5">
                 <?php foreach ($products as $prod): ?>
                     <?php $isAvailable = (int)$prod['is_available'] === 1; ?>
-                    <div class="col-xl-3 col-lg-4 col-md-4 col-sm-6 col-6">
-                        <div class="card product-card h-100 <?= $isAvailable ? '' : 'unavailable' ?>">
+                    <div class="col">
+                        <?php if ($isAvailable): ?>
+                            <a
+                                href="product-view.php?id=<?= (int)$prod['id'] ?>"
+                                class="card product-card product-card-link h-100"
+                                aria-label="View <?= htmlspecialchars($prod['name']) ?>"
+                            >
+                        <?php else: ?>
+                            <div class="card product-card unavailable h-100">
+                        <?php endif; ?>
                             <div class="product-image-wrap">
                                 <img
                                     src="../assets/uploads/products/<?= htmlspecialchars($prod['image'] ?: 'default.jpg') ?>"
@@ -77,26 +85,12 @@ if ($isAjaxRequest) {
                                 <div class="product-price my-2">
                                     ₱<?= number_format($prod['price'],2) ?>
                                 </div>
-
-                                <?php if ($isAvailable): ?>
-                                    <a
-                                        href="product-view.php?id=<?= (int)$prod['id'] ?>"
-                                        class="btn btn-order btn-sm mt-auto"
-                                    >
-                                        Order Now
-                                    </a>
-                                <?php else: ?>
-                                    <button
-                                        type="button"
-                                        class="btn btn-order out-of-stock btn-sm mt-auto"
-                                        disabled
-                                        aria-disabled="true"
-                                    >
-                                        Out of Stock
-                                    </button>
-                                <?php endif; ?>
                             </div>
-                        </div>
+                        <?php if ($isAvailable): ?>
+                            </a>
+                        <?php else: ?>
+                            </div>
+                        <?php endif; ?>
                     </div>
                 <?php endforeach; ?>
             </div>
@@ -319,31 +313,73 @@ body {
 }
 
 .product-card {
-    border: none;
-    border-radius: 16px;
-    box-shadow: 0 4px 12px rgba(0,0,0,.08);
-    transition: .25s;
+    position: relative;
+    border: 1px solid #E6E0DA;
+    border-radius: 18px;
+    overflow: hidden;
+    background: #fff;
+    box-shadow: 0 6px 16px rgba(74,53,37,.07);
+    transition: transform .22s ease, box-shadow .22s ease, border-color .22s ease;
+    height: 100%;
 }
 
+/* Match the lift, border highlight, and shadow used by index.php best sellers. */
 .product-card:hover {
     transform: translateY(-6px);
-    box-shadow: 0 12px 25px rgba(0,0,0,.12);
+    border-color: #CDBBAA;
+    box-shadow: 0 10px 20px rgba(74,53,37,.11);
 }
 
 .product-card.unavailable:hover {
     transform: none;
-    box-shadow: 0 4px 12px rgba(0,0,0,.08);
+    border-color: #E6E0DA;
+    box-shadow: 0 6px 16px rgba(74,53,37,.07);
 }
 
 .product-image-wrap {
     position: relative;
+    overflow: hidden;
+    background: #fff;
+}
+
+/* Available product cards are links across their full area. */
+.product-card-link {
+    display: flex;
+    flex-direction: column;
+    color: inherit;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.product-card-link:hover,
+.product-card-link:focus-visible {
+    color: inherit;
+    text-decoration: none;
+}
+
+.product-card-link:focus-visible {
+    outline: 3px solid #6F4E37;
+    outline-offset: 3px;
 }
 
 .product-card img {
     height: 150px;
     width: 100%;
     object-fit: contain;
+    object-position: center;
     display: block;
+}
+
+/* Keep product photos clean and white; distinguish the details area with a warm beige. */
+.product-card .card-body {
+    background: #F7EFE7;
+    border-top: 1px solid #E8D9CA;
+    transition: background-color .2s ease;
+}
+
+.product-card:not(.unavailable):hover .card-body,
+.product-card:not(.unavailable):focus-within .card-body {
+    background: #F1E5D8;
 }
 
 .product-card.unavailable img {
@@ -627,11 +663,19 @@ body {
                         </p>
                     </div>
                 <?php else: ?>
-                    <div class="row g-4 pb-5">
+                    <div class="row row-cols-2 row-cols-md-3 row-cols-lg-4 row-cols-xl-5 g-4 pb-5">
                         <?php foreach($products as $prod): ?>
                         <?php $isAvailable = (int)$prod['is_available'] === 1; ?>
-                        <div class="col-xl-3 col-lg-4 col-md-4 col-sm-6 col-6">
-                            <div class="card product-card h-100 <?= $isAvailable ? '' : 'unavailable' ?>">
+                        <div class="col">
+                            <?php if ($isAvailable): ?>
+                                <a
+                                    href="product-view.php?id=<?= (int)$prod['id'] ?>"
+                                    class="card product-card product-card-link h-100"
+                                    aria-label="View <?= htmlspecialchars($prod['name']) ?>"
+                                >
+                            <?php else: ?>
+                                <div class="card product-card unavailable h-100">
+                            <?php endif; ?>
                                 <div class="product-image-wrap">
                                     <img
                                         src="../assets/uploads/products/<?= htmlspecialchars($prod['image'] ?: 'default.jpg') ?>"
@@ -659,26 +703,12 @@ body {
                                     <div class="product-price my-2">
                                         ₱<?= number_format($prod['price'],2) ?>
                                     </div>
-
-                                    <?php if ($isAvailable): ?>
-                                        <a
-                                            href="product-view.php?id=<?= (int)$prod['id'] ?>"
-                                            class="btn btn-order btn-sm mt-auto"
-                                        >
-                                            Order Now
-                                        </a>
-                                    <?php else: ?>
-                                        <button
-                                            type="button"
-                                            class="btn btn-order out-of-stock btn-sm mt-auto"
-                                            disabled
-                                            aria-disabled="true"
-                                        >
-                                            Out of Stock
-                                        </button>
-                                    <?php endif; ?>
                                 </div>
-                            </div>
+                            <?php if ($isAvailable): ?>
+                                </a>
+                            <?php else: ?>
+                                </div>
+                            <?php endif; ?>
                         </div>
                         <?php endforeach; ?>
                     </div>
