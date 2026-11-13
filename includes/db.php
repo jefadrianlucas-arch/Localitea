@@ -3,11 +3,27 @@
 // Use Railway MySQL variables when deployed.
 // Fall back to XAMPP settings when running locally.
 
-$host = getenv('MYSQLHOST') ?: 'localhost';
-$port = getenv('MYSQLPORT') ?: '3307';
-$db   = getenv('MYSQLDATABASE') ?: 'milktea_db';
-$user = getenv('MYSQLUSER') ?: 'root';
-$pass = getenv('MYSQLPASSWORD') ?: '';
+/**
+ * Read an environment variable from every place PHP can expose it.
+ * Some PHP setups (for example PHP-FPM) do not fill getenv(), but do
+ * fill $_ENV or $_SERVER.
+ */
+function envValue(string $key, string $default = ''): string
+{
+    $value = getenv($key);
+
+    if ($value === false || $value === '') {
+        $value = $_ENV[$key] ?? $_SERVER[$key] ?? '';
+    }
+
+    return ($value !== '' && $value !== null) ? (string) $value : $default;
+}
+
+$host = envValue('MYSQLHOST', 'localhost');
+$port = envValue('MYSQLPORT', '3307');
+$db   = envValue('MYSQLDATABASE', 'milktea_db');
+$user = envValue('MYSQLUSER', 'root');
+$pass = envValue('MYSQLPASSWORD', '');
 $charset = 'utf8mb4';
 
 $dsn = "mysql:host=$host;port=$port;dbname=$db;charset=$charset";
