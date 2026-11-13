@@ -69,6 +69,7 @@ $success = '';
 $duplicateDiscountId = false;
 $password_error = '';
 $confirm_error = '';
+$name_error = '';
 
 $name = '';
 $email = '';
@@ -84,7 +85,8 @@ $discount_id_image = null;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
-    $name = trim($_POST['name'] ?? '');
+    /* Collapse repeated spaces so "Juan   Dela  Cruz" becomes "Juan Dela Cruz". */
+    $name = trim(preg_replace('/\s+/u', ' ', (string)($_POST['name'] ?? '')));
     $email = strtolower(trim($_POST['email'] ?? ''));
     $mobile = trim($_POST['mobile'] ?? '');
     $password = $_POST['password'] ?? '';
@@ -104,6 +106,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($name === '' || $email === '' || $mobile === '' || $password === '') {
 
         $error = "Please fill in all required fields.";
+
+    } elseif (!preg_match('/^[\p{L}\p{M}]+(?: [\p{L}\p{M}]+)*$/u', $name)) {
+
+        /* Letters and single spaces only: no numbers, no special characters. */
+        $name_error = "Full name can only contain letters and spaces. Numbers and special characters are not allowed.";
+
+    } elseif (mb_strlen($name) > 100) {
+
+        $name_error = "Full name must not exceed 100 characters.";
 
     } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
 
@@ -284,7 +295,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $pdo->commit();
 
                 $success =
-                    "Registration successful! Please check your email and click the verification link to activate your account.";
+                    "Registration successful! We sent a verification email. Open it and click 'Verify my email' to activate your account.";
 
             } catch (Throwable $e) {
                 // Roll back account creation if any part of registration fails.
@@ -1032,6 +1043,50 @@ body {
         <!-- Right: form -->
         <section class="register-form-panel">
 
+            <?php if ($success): ?>
+                <?php $isGmail = (bool)preg_match('/@(gmail|googlemail)\.com$/i', $email); ?>
+                <div class="register-verify-notice" role="status">
+                    <div class="register-verify-icon" aria-hidden="true">
+                        <i class="bi bi-envelope-check"></i>
+                    </div>
+
+                    <h1 class="register-title">Check your email</h1>
+
+                    <p class="register-verify-text">
+                        We sent a verification email to
+                        <strong><?= htmlspecialchars($email, ENT_QUOTES, 'UTF-8') ?></strong>.
+                    </p>
+
+                    <p class="register-verify-text">
+                        Open your <?= $isGmail ? 'Gmail' : 'email' ?> inbox and click
+                        <strong>Verify my email</strong> in the message to activate your account.
+                    </p>
+
+                    <p class="register-verify-hint">
+                        Can't find it? Check your Spam or Promotions folder.
+                        The link expires in 30 minutes.
+                    </p>
+
+                    <?php if ($isGmail): ?>
+                        <a
+                            href="https://mail.google.com/"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            class="btn btn-register register-verify-btn"
+                        >
+                            Open Gmail
+                        </a>
+                    <?php endif; ?>
+
+                    <a href="login.php" class="btn-register-secondary">
+                        Go to Log in
+                    </a>
+                </div>
+            <?php endif; ?>
+
+            <!-- Form stays in the DOM (hidden after success) so the page scripts keep working. -->
+            <div id="registerFormWrap"<?= $success ? ' hidden' : '' ?>>
+
             <h1 class="register-title">Sign Up</h1>
 
             <form id="registerForm" method="POST" enctype="multipart/form-data" novalidate>
@@ -1048,13 +1103,24 @@ body {
                         type="text"
                         id="registerName"
                         name="name"
-                        class="register-input"
+                        class="register-input<?= $name_error ? ' field-error' : '' ?>"
+                        <?= $name_error ? 'aria-invalid="true"' : '' ?>
                         placeholder="Juan Dela Cruz"
                         autocomplete="name"
                         maxlength="100"
                         value="<?= htmlspecialchars($name, ENT_QUOTES, 'UTF-8') ?>"
                         required
                     >
+
+                    <div
+                        class="register-field-error"
+                        id="nameError"
+                        role="alert"
+                        <?= $name_error ? '' : 'hidden' ?>
+                    >
+                        <i class="bi bi-exclamation-circle" aria-hidden="true"></i>
+                        <span><?= htmlspecialchars($name_error, ENT_QUOTES, 'UTF-8') ?></span>
+                    </div>
                 </div>
 
                 <div class="mb-3">
@@ -1378,6 +1444,8 @@ body {
                 Already have an account? Log in
             </a>
 
+            </div><!-- /#registerFormWrap -->
+
         </section>
 
     </div>
@@ -1505,6 +1573,11 @@ document.addEventListener('DOMContentLoaded', function () {
     const passwordMsg = document.getElementById('passwordError');
     const confirmMsg = document.getElementById('confirmPasswordError');
     const termsMsg = document.getElementById('termsError');
+    const nameMsg = document.getElementById('nameError');
+
+    /* Full name: letters (including accents such as ñ) and single spaces only. */
+    const NAME_PATTERN = /^[\p{L}\p{M}]+(?: [\p{L}\p{M}]+)*$/u;
+    const NAME_MESSAGE = 'Full name can only contain letters and spaces. Numbers and special characters are not allowed.';
 
     if (!form) {
         return;
@@ -1641,11 +1714,13 @@ document.addEventListener('DOMContentLoaded', function () {
     function showFieldMessage(field, message) {
 
         const box =
-            field === password
-                ? passwordMsg
-                : field === confirmPassword
-                    ? confirmMsg
-                    : termsMsg;
+            field === nameInput
+                ? nameMsg
+                : field === password
+                    ? passwordMsg
+                    : field === confirmPassword
+                        ? confirmMsg
+                        : termsMsg;
 
         if (!field || !box) {
             return;
@@ -1662,6 +1737,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     function clearFieldErrors() {
 
+        showFieldMessage(nameInput, '');
         showFieldMessage(password, '');
         showFieldMessage(confirmPassword, '');
         showFieldMessage(terms, '');
@@ -1763,6 +1839,34 @@ document.addEventListener('DOMContentLoaded', function () {
             });
 
         });
+
+    /* ---------------------------------------------------------
+       FULL NAME (no numbers / special characters)
+    --------------------------------------------------------- */
+
+    if (nameInput) {
+
+        nameInput.addEventListener('input', function () {
+
+            const cleaned = this.value.replace(/[^\p{L}\p{M} ]/gu, '');
+
+            if (cleaned !== this.value) {
+
+                /* Typed or pasted an invalid character: remove it and explain why. */
+                this.value = cleaned;
+                markFieldError(nameInput);
+                showFieldMessage(nameInput, NAME_MESSAGE);
+
+            } else {
+
+                nameInput.classList.remove('field-error');
+                nameInput.removeAttribute('aria-invalid');
+                showFieldMessage(nameInput, '');
+            }
+
+        });
+
+    }
 
     /* ---------------------------------------------------------
        MOBILE NUMBER
@@ -2146,9 +2250,21 @@ document.addEventListener('DOMContentLoaded', function () {
 
         let valid = true;
 
-        if (!nameInput || nameInput.value.trim() === '') {
+        const nameValue = nameInput
+            ? nameInput.value.trim().replace(/\s+/g, ' ')
+            : '';
+
+        const nameInlineError = nameValue !== '' && !NAME_PATTERN.test(nameValue);
+
+        if (nameValue === '') {
 
             markFieldError(nameInput);
+            valid = false;
+
+        } else if (nameInlineError) {
+
+            markFieldError(nameInput);
+            showFieldMessage(nameInput, NAME_MESSAGE);
             valid = false;
 
         }
@@ -2264,6 +2380,11 @@ document.addEventListener('DOMContentLoaded', function () {
                 emailInput,
                 mobileInput
             ].some(function (field) {
+                /* An invalid name already has its own inline message. */
+                if (field === nameInput && nameInlineError) {
+                    return false;
+                }
+
                 return field && field.classList.contains('field-error');
             });
 
@@ -2331,11 +2452,6 @@ document.addEventListener('DOMContentLoaded', function () {
 
 
 <style>
-    /* Keep the page width stable whether or not a modal locks scrolling. */
-    html {
-        scrollbar-gutter: stable;
-    }
-
     /* The PWD / Senior modal sits inside the form panel, so it was inheriting the
        page's compact spacing. Give it its own steady spacing. */
     .register-discount-body {
@@ -2377,6 +2493,51 @@ document.addEventListener('DOMContentLoaded', function () {
     .register-discount-footer .btn-register,
     .register-discount-footer .btn-register-secondary {
         min-height: 42px;
+    }
+
+    /* "Check your email" notice shown after a successful sign up */
+    #registerFormWrap[hidden] {
+        display: none;
+    }
+
+    .register-verify-notice {
+        text-align: center;
+    }
+
+    .register-verify-icon {
+        width: 64px;
+        height: 64px;
+        margin: 0 auto 14px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        background: #F7F1E8;
+        color: #6F4E37;
+        font-size: 1.9rem;
+    }
+
+    .register-verify-text {
+        margin: 0 0 10px;
+        color: #4A3525;
+        font-size: 0.86rem;
+        line-height: 1.5;
+        overflow-wrap: anywhere;
+    }
+
+    .register-verify-hint {
+        margin: 4px 0 18px;
+        color: #756960;
+        font-size: 0.74rem;
+        line-height: 1.45;
+    }
+
+    .register-verify-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-decoration: none;
+        margin-bottom: 10px;
     }
 </style>
 

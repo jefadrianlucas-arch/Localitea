@@ -473,6 +473,11 @@ if (
         $accountActionErrors[] = 'Please provide a valid email address.';
     }
 
+    /* Customers change their own password from their Profile. */
+    if ($source === 'customers') {
+        $newPassword = '';
+    }
+
     if (
         $newPassword !== '' &&
         strlen($newPassword) < 8
@@ -7596,7 +7601,7 @@ document.addEventListener('DOMContentLoaded', function () {
                                     ></select>
                                 </div>
 
-                                <div class="col-12">
+                                <div class="col-12" id="userAccountEditPasswordWrap">
                                     <label
                                         class="form-label"
                                         for="userAccountEditPassword"
@@ -7719,6 +7724,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
             const passwordInput =
                 document.getElementById('userAccountEditPassword');
+
+            const passwordWrap =
+                document.getElementById('userAccountEditPasswordWrap');
 const addModalForm =
                 document.getElementById('userAccountAddForm');
             if (addModalElement) {
@@ -7761,6 +7769,11 @@ const addModalForm =
 
                 roleSelect.innerHTML = '';
                 roleSelect.disabled = false;
+
+                /* Customers change their own password from their Profile. */
+                const isCustomer = source === 'customers';
+                passwordWrap.classList.toggle('d-none', isCustomer);
+                passwordInput.disabled = isCustomer;
 
                 if (source === 'customers') {
 
