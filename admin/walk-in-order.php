@@ -492,7 +492,11 @@ function walkinRenderProducts(array $products, array $productAddons, string $cat
                         >
                             <div class="walkin-product-image-wrap">
                                 <img
-                                    src="../assets/uploads/products/<?= htmlspecialchars($product['image'] ?: 'default.jpg') ?>"
+                                    src="<?= htmlspecialchars(
+                                        (empty($product['image']) || $product['image'] === 'default-product.png' || $product['image'] === 'default.jpg')
+                                            ? '../assets/image/default-product.png'
+                                            : '../assets/uploads/products/' . $product['image']
+                                    ) ?>"
                                     alt="<?= htmlspecialchars($product['name']) ?>"
                                     loading="lazy"
                                 >
@@ -1742,7 +1746,11 @@ body { background: #F8F4EF; }
                     <div class="walkin-cart-item">
                         <div class="d-flex align-items-start gap-2">
                             <div class="walkin-cart-item-image">
-                                <img src="../assets/uploads/products/<?= htmlspecialchars($item['image'] ?: 'default.jpg') ?>" alt="<?= htmlspecialchars($item['name']) ?>">
+                                <img src="<?= htmlspecialchars(
+                                    (empty($item['image']) || $item['image'] === 'default-product.png' || $item['image'] === 'default.jpg')
+                                        ? '../assets/image/default-product.png'
+                                        : '../assets/uploads/products/' . $item['image']
+                                ) ?>" alt="<?= htmlspecialchars($item['name']) ?>">
                             </div>
                             <div class="flex-grow-1" style="min-width:0">
                                 <div class="walkin-cart-item-name"><?= htmlspecialchars($item['name']) ?></div>

@@ -6,7 +6,8 @@
 |
 | Put this file in the same folder as orders.php (admin/).
 |
-| ID photos live in storage/discount-ids/, which is blocked from direct
+| ID photos live in assets/uploads/discount-ids/ (inside the Railway
+| volume), which is blocked from direct
 | URL access. This script checks that the viewer is a logged-in admin,
 | then streams the ID photo of one customer account:
 |
@@ -49,7 +50,7 @@ if (strpos($relativePath, 'storage/discount-ids/') !== 0) {
     exit('No ID photo for this customer.');
 }
 
-$fullPath = dirname(__DIR__) . '/storage/discount-ids/' . basename($relativePath);
+$fullPath = dirname(__DIR__) . '/assets/uploads/discount-ids/' . basename($relativePath);
 
 if (!is_file($fullPath)) {
     http_response_code(404);

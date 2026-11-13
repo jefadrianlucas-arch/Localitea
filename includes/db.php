@@ -37,9 +37,21 @@ $options = [
 try {
     $pdo = new PDO($dsn, $user, $pass, $options);
 } catch (\PDOException $e) {
-    die("Database connection failed: " . $e->getMessage());
+
+    // Always keep the real error in the server log (Railway > Logs).
+    error_log('Database connection failed: ' . $e->getMessage());
+
+    http_response_code(500);
+
+    // On your own computer (XAMPP) show the real error to help debugging.
+    // On the live site never show it to visitors.
+    if ($host === 'localhost' || $host === '127.0.0.1') {
+        die('Database connection failed: ' . $e->getMessage());
+    }
+
+    die('Service temporarily unavailable. Please try again in a few minutes.');
 }
-    
+
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }

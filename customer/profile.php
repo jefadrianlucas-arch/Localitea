@@ -233,7 +233,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     throw new DomainException('DUPLICATE_DISCOUNT_ID');
                 }
 
-                $uploadDirectory = dirname(__DIR__) . '/storage/discount-ids/';
+                $uploadDirectory = dirname(__DIR__) . '/assets/uploads/discount-ids/';
                 if (!is_dir($uploadDirectory) && !mkdir($uploadDirectory, 0755, true) && !is_dir($uploadDirectory)) {
                     throw new RuntimeException('Unable to prepare the ID photo storage directory.');
                 }
@@ -299,7 +299,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $oldPhotoRelative !== '' &&
                     strpos($oldPhotoRelative, 'storage/discount-ids/') === 0
                 ) {
-                    $oldPhotoPath = dirname(__DIR__) . '/storage/discount-ids/' . basename($oldPhotoRelative);
+                    $oldPhotoPath = dirname(__DIR__) . '/assets/uploads/discount-ids/' . basename($oldPhotoRelative);
                     if (is_file($oldPhotoPath) && $oldPhotoPath !== $newPhotoFullPath) {
                         @unlink($oldPhotoPath);
                     }

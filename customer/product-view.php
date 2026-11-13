@@ -876,7 +876,11 @@ if ($menuBundleConfig) {
             <div class="pv-summary">
                 <div class="pv-media">
                     <div class="product-image-wrap">
-                        <img src="../assets/uploads/products/<?= htmlspecialchars($product['image'] ?: 'default.jpg') ?>"
+                        <img src="<?= htmlspecialchars(
+                                (empty($product['image']) || $product['image'] === 'default-product.png' || $product['image'] === 'default.jpg')
+                                    ? '../assets/image/default-product.png'
+                                    : '../assets/uploads/products/' . $product['image']
+                            ) ?>"
                              class="<?= !$isAvailable ? 'product-image-unavailable' : '' ?>"
                              alt="<?= htmlspecialchars($product['name']) ?>">
 

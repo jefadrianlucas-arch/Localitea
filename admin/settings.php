@@ -6799,10 +6799,11 @@ document.addEventListener('DOMContentLoaded', function () {
 
                                             <img
                                                 class="product-image"
-                                                src="../assets/uploads/products/<?= htmlspecialchars(
-                                                    $product['image']
-                                                    ?: 'default-product.png'
-                                                ) ?>"
+                                                src="<?= htmlspecialchars(
+                                                (empty($product['image']) || $product['image'] === 'default-product.png')
+                                                    ? '../assets/image/default-product.png'
+                                                    : '../assets/uploads/products/' . $product['image']
+                                            ) ?>"
                                                 alt="<?= htmlspecialchars(
                                                     $product['name']
                                                 ) ?>"
@@ -8827,7 +8828,7 @@ const addModalForm =
                             <div>
 
                                 <img
-                                    src="../assets/uploads/products/default-product.png"
+                                    src="../assets/image/default-product.png"
                                     id="editCurrentImage"
                                     class="current-product-image"
                                     alt="Current product image"
@@ -9331,11 +9332,12 @@ document.addEventListener('DOMContentLoaded', function () {
                 productType.value = '';
             }
 
-            document.getElementById(
+                        document.getElementById(
                 'editCurrentImage'
             ).src =
-                '../assets/uploads/products/' +
-                image;
+                (!image || image === 'default-product.png')
+                    ? '../assets/image/default-product.png'
+                    : '../assets/uploads/products/' + image;
 
             /*
              * Clear previously selected file.

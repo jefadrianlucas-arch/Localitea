@@ -2,3 +2,4 @@ includes/mail-config.php
 assets/uploads/receipts/
 assets/uploads/refunds/
 storage/discount-ids/
+assets/uploads/discount-ids/

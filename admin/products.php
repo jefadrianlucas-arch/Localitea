@@ -66,7 +66,11 @@ require_once '../includes/header.php';
                         <div class="card h-100 shadow-sm border-0">
 
                             <img
-                                src="../assets/uploads/products/<?= htmlspecialchars($product['image'] ?: 'default.jpg') ?>"
+                                src="<?= htmlspecialchars(
+                                    (empty($product['image']) || $product['image'] === 'default-product.png' || $product['image'] === 'default.jpg')
+                                        ? '../assets/image/default-product.png'
+                                        : '../assets/uploads/products/' . $product['image']
+                                ) ?>"
                                 class="card-img-top"
                                 style="height:180px; object-fit:cover;"
                                 alt="<?= htmlspecialchars($product['name']) ?>"
