@@ -40,4 +40,31 @@ fi
 # 4) A Railway volume is mounted as root; Apache/PHP run as www-data.
 chown -R "$OWNER" "$UPLOADS"
 
+# 5) Enforce a single Apache MPM at runtime.
+echo "[entrypoint] Checking Apache MPM configuration..."
+
+echo "[entrypoint] MPM configuration links before cleanup:"
+ls -la /etc/apache2/mods-enabled/mpm_* 2>&1 || true
+
+echo "[entrypoint] Removing all enabled MPM configuration links..."
+rm -f /etc/apache2/mods-enabled/mpm_*.load \
+      /etc/apache2/mods-enabled/mpm_*.conf
+
+echo "[entrypoint] Enabling mpm_prefork..."
+a2enmod mpm_prefork
+
+echo "[entrypoint] Checking Apache modules before startup..."
+apache2ctl -M 2>&1
+
+MPM_COUNT="$(apache2ctl -M 2>&1 | grep -Ec 'mpm_(event|worker|prefork)_module' || true)"
+
+echo "[entrypoint] Loaded MPM count: $MPM_COUNT"
+
+if [ "$MPM_COUNT" -ne 1 ]; then
+    echo "[entrypoint] ERROR: Apache must have exactly one MPM loaded."
+    exit 1
+fi
+
+echo "[entrypoint] Apache MPM configuration is valid."
+
 exec "$@"
