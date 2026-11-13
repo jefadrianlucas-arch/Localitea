@@ -13,3 +13,6 @@ foreach (array_keys(array_merge(getenv(), $_SERVER)) as $n) {
         echo "- $n\n";
     }
 }
+
+echo "\nService: " . getenv('RAILWAY_SERVICE_NAME') . "\n";
+echo "Environment: " . getenv('RAILWAY_ENVIRONMENT_NAME') . "\n";
