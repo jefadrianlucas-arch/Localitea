@@ -4,6 +4,19 @@ use PHPMailer\PHPMailer\PHPMailer;
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
+if (!function_exists('envValue')) {
+    function envValue(string $key): string
+    {
+        $value = getenv($key);
+
+        if ($value === false || $value === '') {
+            $value = $_ENV[$key] ?? $_SERVER[$key] ?? '';
+        }
+
+        return trim((string) $value);
+    }
+}
+
 /**
  * Email message adapter.
  * Uses Resend's HTTPS API when RESEND_API_KEY is configured.
@@ -34,7 +47,7 @@ class LocaliteaEmailMessage
 
     public function send(): bool
     {
-        $apiKey = trim((string) getenv('RESEND_API_KEY'));
+        $apiKey = envValue('RESEND_API_KEY');
 
         if ($apiKey !== '') {
             return $this->sendViaResend($apiKey);
@@ -58,20 +71,19 @@ class LocaliteaEmailMessage
     private function sendViaResend(string $apiKey): bool
     {
         $payload = [
-            /*
-             * onboarding@resend.dev is Resend's sandbox sender and can only
-             * deliver to the Resend account owner's own email. Set RESEND_FROM
-             * to an address on a domain verified in Resend, for example:
-             * Localitea <orders@yourdomain.com>
-             */
-            'from' => (trim((string) getenv('RESEND_FROM')) !== '')
-                ? trim((string) getenv('RESEND_FROM'))
-                : 'Localitea <onboarding@resend.dev>',
-            'to' => [$this->recipientEmail],
-            'subject' => $this->Subject,
-            'html' => $this->Body,
-            'text' => $this->AltBody,
-        ];
+    /*
+     * onboarding@resend.dev is Resend's sandbox sender and can only
+     * deliver to the Resend account owner's own email. Set RESEND_FROM
+     * to an address on a domain verified in Resend.
+     */
+    'from' => envValue('RESEND_FROM') !== ''
+        ? envValue('RESEND_FROM')
+        : 'Local Milktea House <onboarding@resend.dev>',
+    'to' => [$this->recipientEmail],
+    'subject' => $this->Subject,
+    'html' => $this->Body,
+    'text' => $this->AltBody,
+];
 
         $jsonPayload = json_encode(
             $payload,
