@@ -264,9 +264,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                  * `php -S localhost:PORT`, or anything else.
                  */
                 $protocol = (
-                    !empty($_SERVER['HTTPS']) &&
-                    $_SERVER['HTTPS'] !== 'off'
-                ) ? 'https' : 'http';
+                (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ||
+                (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https')
+            ) ? 'https' : 'http';
 
                 $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
 
