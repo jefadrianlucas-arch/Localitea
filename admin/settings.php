@@ -6800,8 +6800,8 @@ document.addEventListener('DOMContentLoaded', function () {
                                             <img
                                                 class="product-image"
                                                 src="<?= htmlspecialchars(
-                                                (empty($product['image']) || $product['image'] === 'default-product.png')
-                                                    ? '../assets/image/default-product.png'
+                                                (empty($product['image']) || $product['image'] === 'default-product.png' || $product['image'] === 'default.jpg')
+                                                    ? '../assets/images/default-product.png'
                                                     : '../assets/uploads/products/' . $product['image']
                                             ) ?>"
                                                 alt="<?= htmlspecialchars(
@@ -8828,7 +8828,7 @@ const addModalForm =
                             <div>
 
                                 <img
-                                    src="../assets/image/default-product.png"
+                                    src="../assets/images/default-product.png"
                                     id="editCurrentImage"
                                     class="current-product-image"
                                     alt="Current product image"
@@ -9335,8 +9335,8 @@ document.addEventListener('DOMContentLoaded', function () {
                         document.getElementById(
                 'editCurrentImage'
             ).src =
-                (!image || image === 'default-product.png')
-                    ? '../assets/image/default-product.png'
+                (!image || image === 'default-product.png' || image === 'default.jpg')
+                    ? '../assets/images/default-product.png'
                     : '../assets/uploads/products/' + image;
 
             /*

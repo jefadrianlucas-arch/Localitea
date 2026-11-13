@@ -6,8 +6,10 @@ require_once '../includes/mailer.php';
 |--------------------------------------------------------------------------
 | PWD / SENIOR ID PHOTO HELPERS
 |--------------------------------------------------------------------------
-| Photos are saved in storage/discount-ids/ (blocked from direct URL
-| access). Admin views them through admin/view-discount-id.php.
+| Photos are saved in assets/uploads/discount-ids/ (inside the Railway
+| volume; blocked from direct URL access). The database still stores
+| the key 'storage/discount-ids/<file>'. Admin views them through
+| admin/view-discount-id.php.
 */
 
 /* Returns '' when the upload is acceptable, otherwise an error message. */
@@ -37,7 +39,7 @@ function saveDiscountIdPhoto(array $file): ?string
     $finfo = new finfo(FILEINFO_MIME_TYPE);
     $extension = $finfo->file($file['tmp_name']) === 'image/png' ? 'png' : 'jpg';
 
-    $directory = dirname(__DIR__) . '/storage/discount-ids/';
+    $directory = dirname(__DIR__) . '/assets/uploads/discount-ids/';
 
     if (!is_dir($directory) && !mkdir($directory, 0755, true)) {
         return null;
@@ -296,7 +298,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     is_string($discount_id_image) &&
                     $discount_id_image !== ''
                 ) {
-                    $orphanedPhoto = dirname(__DIR__) . '/' . ltrim($discount_id_image, '/');
+                    $orphanedPhoto = dirname(__DIR__) . '/assets/uploads/discount-ids/' . basename($discount_id_image);
                     if (is_file($orphanedPhoto)) {
                         @unlink($orphanedPhoto);
                     }

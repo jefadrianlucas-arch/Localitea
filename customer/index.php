@@ -160,7 +160,7 @@ function customerImagePath(?string $image): string
     $image = trim((string)$image);
 
     if ($image === '' || $image === 'default-product.png' || $image === 'default.jpg') {
-        return '../assets/image/default-product.png';
+        return '../assets/images/default-product.png';
     }
 
     // Support either a filename or a stored relative upload path.
@@ -183,7 +183,7 @@ function customerPromotionImagePath(?string $image): string
     $image = trim((string)$image);
 
     if ($image === '' || $image === 'default-product.png' || $image === 'default.jpg') {
-        return '../assets/image/default-product.png';
+        return '../assets/images/default-product.png';
     }
 
     $image = str_replace('\\', '/', $image);
@@ -1703,7 +1703,7 @@ body{
                             <img
                                 src="<?= htmlspecialchars(customerImagePath($prod['image'])) ?>"
                                 alt="<?= htmlspecialchars($prod['name']) ?>"
-                                onerror="this.onerror=null;this.src='../assets/image/default-product.png';"
+                                onerror="this.onerror=null;this.src='../assets/images/default-product.png';"
                             >
                         </a>
                     </div>
@@ -1753,7 +1753,7 @@ body{
                                 <img
                                     src="<?= htmlspecialchars(customerPromotionImagePath($promotion['image'])) ?>"
                                     alt="<?= htmlspecialchars($promotion['title']) ?>"
-                                    onerror="this.onerror=null;this.src='../assets/image/default-product.png';"
+                                    onerror="this.onerror=null;this.src='../assets/images/default-product.png';"
                                 >
                             </div>
 

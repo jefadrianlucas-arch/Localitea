@@ -61,7 +61,7 @@ if ($isAjaxRequest) {
                                 <img
                                     src="<?= htmlspecialchars(
                                         (empty($prod['image']) || $prod['image'] === 'default-product.png' || $prod['image'] === 'default.jpg')
-                                            ? '../assets/image/default-product.png'
+                                            ? '../assets/images/default-product.png'
                                             : '../assets/uploads/products/' . $prod['image']
                                     ) ?>"
                                     class="card-img-top"
@@ -684,7 +684,7 @@ body {
                                     <img
                                         src="<?= htmlspecialchars(
                                             (empty($prod['image']) || $prod['image'] === 'default-product.png' || $prod['image'] === 'default.jpg')
-                                                ? '../assets/image/default-product.png'
+                                                ? '../assets/images/default-product.png'
                                                 : '../assets/uploads/products/' . $prod['image']
                                         ) ?>"
                                         class="card-img-top"

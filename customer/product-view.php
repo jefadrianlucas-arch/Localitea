@@ -878,7 +878,7 @@ if ($menuBundleConfig) {
                     <div class="product-image-wrap">
                         <img src="<?= htmlspecialchars(
                                 (empty($product['image']) || $product['image'] === 'default-product.png' || $product['image'] === 'default.jpg')
-                                    ? '../assets/image/default-product.png'
+                                    ? '../assets/images/default-product.png'
                                     : '../assets/uploads/products/' . $product['image']
                             ) ?>"
                              class="<?= !$isAvailable ? 'product-image-unavailable' : '' ?>"

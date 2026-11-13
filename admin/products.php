@@ -68,7 +68,7 @@ require_once '../includes/header.php';
                             <img
                                 src="<?= htmlspecialchars(
                                     (empty($product['image']) || $product['image'] === 'default-product.png' || $product['image'] === 'default.jpg')
-                                        ? '../assets/image/default-product.png'
+                                        ? '../assets/images/default-product.png'
                                         : '../assets/uploads/products/' . $product['image']
                                 ) ?>"
                                 class="card-img-top"
