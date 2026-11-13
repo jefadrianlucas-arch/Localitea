@@ -6528,7 +6528,7 @@ document.addEventListener('DOMContentLoaded', function () {
         } elseif (isset($_GET['availability_error']) && $_GET['availability_error']==='promotion_active') {
             $settingsToast = ['type'=>'warning','icon'=>'bi-exclamation-triangle','message'=>'This product cannot be set to Out of Stock while it is used by an active promotion. Deactivate or update the promotion first.'];
         } elseif (isset($_GET['delete_success'])) {
-            $settingsToast = ['type'=>'success','icon'=>'bi-archive','message'=>'Product archived successfully!'];
+            $settingsToast = ['type'=>'success','icon'=>'bi-archive','message'=>'Product deleted successfully!'];
         } elseif (isset($_GET['delete_error']) && $_GET['delete_error']==='promotion_active') {
             $settingsToast = ['type'=>'warning','icon'=>'bi-exclamation-triangle','message'=>'This product cannot be archived while it is used by an active promotion. Deactivate or update the promotion first.'];
         } elseif (isset($_GET['delete_error']) && $_GET['delete_error']==='not_found') {
