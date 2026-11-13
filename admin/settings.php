@@ -7047,21 +7047,18 @@ document.addEventListener('DOMContentLoaded', function () {
 
                                                     <li>
 
-                                                        <a
-                                                            class="dropdown-item text-danger"
-                                                            href="settings.php?delete_product=1&id=<?= (int)$product['id'] ?>&category=<?= urlencode($selectedCategory) ?>"
-                                                            onclick="
-                                                                return confirm(
-                                                                    'Delete this product? It will be archived and kept in the database instead of being permanently deleted.'
-                                                                );
-                                                            "
+                                                        <button
+                                                            type="button"
+                                                            class="dropdown-item text-danger product-delete-btn"
+                                                            data-delete-url="settings.php?delete_product=1&id=<?= (int)$product['id'] ?>&category=<?= urlencode($selectedCategory) ?>"
+                                                            data-product-name="<?= htmlspecialchars($product['name'], ENT_QUOTES) ?>"
                                                         >
 
                                                             <i class="bi bi-trash me-2"></i>
 
                                                             Delete Product
 
-                                                        </a>
+                                                        </button>
 
                                                     </li>
 
@@ -7970,6 +7967,79 @@ const addModalForm =
         </div>
     </div>
 </div>
+
+<!-- =========================================================
+     PRODUCT DELETE CONFIRMATION MODAL
+========================================================= -->
+<div class="modal fade promotion-delete-modal" id="productDeleteModal" tabindex="-1" aria-labelledby="productDeleteTitle" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-body">
+                <div class="promotion-delete-icon" aria-hidden="true">
+                    <i class="bi bi-trash3"></i>
+                </div>
+
+                <h5 class="promotion-delete-title" id="productDeleteTitle">
+                    Delete this product?
+                </h5>
+
+                <p class="promotion-delete-message">
+                    It will be archived and kept in the database instead of being permanently deleted.
+                    <span class="promotion-delete-name" id="productDeleteName"></span>
+                </p>
+            </div>
+
+            <div class="modal-footer">
+                <button type="button" class="btn promotion-delete-cancel" data-bs-dismiss="modal">
+                    Cancel
+                </button>
+
+                <button type="button" class="btn promotion-delete-confirm" id="confirmProductDeleteBtn">
+                    <i class="bi bi-trash3 me-1"></i>Delete
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const modalEl = document.getElementById('productDeleteModal');
+    const nameEl = document.getElementById('productDeleteName');
+    const confirmBtn = document.getElementById('confirmProductDeleteBtn');
+    let pendingUrl = '';
+
+    if (!modalEl || !confirmBtn) return;
+
+    document.addEventListener('click', function (event) {
+        const trigger = event.target.closest('.product-delete-btn');
+        if (!trigger) return;
+
+        event.preventDefault();
+        pendingUrl = trigger.getAttribute('data-delete-url') || '';
+        nameEl.textContent = trigger.getAttribute('data-product-name') || '';
+        bootstrap.Modal.getOrCreateInstance(modalEl).show();
+    });
+
+    confirmBtn.addEventListener('click', function () {
+        if (!pendingUrl) return;
+
+        confirmBtn.disabled = true;
+
+        /* A real link click lets the page-position saver run before navigating. */
+        const link = document.createElement('a');
+        link.href = pendingUrl;
+        link.style.display = 'none';
+        document.body.appendChild(link);
+        link.click();
+    });
+
+    modalEl.addEventListener('hidden.bs.modal', function () {
+        pendingUrl = '';
+        confirmBtn.disabled = false;
+    });
+});
+</script>
 
 <!-- =========================================================
      PROMOTION MODAL
