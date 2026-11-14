@@ -323,7 +323,14 @@ if (
     }
 
     $unitPrice = round($basePrice + $addonsTotal, 2);
-    $quantity = max(1, (int)($cartItem['quantity'] ?? 1));
+    $lineQuantity = max(1, (int)($cartItem['quantity'] ?? 1));
+
+    /* Promotion and bundle lines are edited as a whole; normal lines can be split. */
+    $isLockedLine = (int)($cartItem['promotion_source_id'] ?? 0) > 0 || !empty($cartItem['bundle_picks']);
+    $quantity = $lineQuantity;
+    if (!$isLockedLine && isset($_POST['change_qty'])) {
+        $quantity = max(1, min($lineQuantity, (int)$_POST['change_qty']));
+    }
 
     $newCartKey = md5(
         $productId .
@@ -357,14 +364,23 @@ if (
     }
 
     if ($newCartKey !== $cartKey) {
+        /* Options changed: move only the chosen cups to the new line. */
+        $remainingQuantity = $lineQuantity - $quantity;
+        if ($remainingQuantity > 0) {
+            $_SESSION['cart'][$cartKey]['quantity'] = $remainingQuantity;
+        } else {
+            unset($_SESSION['cart'][$cartKey]);
+        }
+
         if (isset($_SESSION['cart'][$newCartKey])) {
             $_SESSION['cart'][$newCartKey]['quantity'] =
                 (int)($_SESSION['cart'][$newCartKey]['quantity'] ?? 0) + $quantity;
         } else {
             $_SESSION['cart'][$newCartKey] = $updatedItem;
         }
-        unset($_SESSION['cart'][$cartKey]);
     } else {
+        /* Same options: update the line in place. */
+        $updatedItem['quantity'] = $lineQuantity;
         $_SESSION['cart'][$cartKey] = $updatedItem;
     }
 
@@ -1169,6 +1185,25 @@ require_once '../includes/navbar.php';
     a.cart-remove-link:hover {
         background: #FCEBEA;
         color: #8E2820 !important;
+    }
+    button.cart-remove-link {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 5px;
+        height: 30px;
+        padding: 0 12px;
+        border-radius: 50px;
+        font-size: .74rem;
+        font-weight: 500;
+        border: 1.5px solid transparent;
+        background: transparent;
+        color: #B3382F;
+        cursor: pointer;
+    }
+    button.cart-remove-link:hover {
+        background: #FCEBEA;
+        color: #8E2820;
     }
 
     /* Totals */
@@ -2084,14 +2119,21 @@ require_once '../includes/navbar.php';
                                                     <i class="bi bi-pencil"></i> Edit
                                                 </a>
                                             <?php endif; ?>
-                                            <a
-                                                href="remove-from-cart.php?key=<?= urlencode($key) ?>"
+                                            <?php
+                                                $removeIsLocked = (int)($item['promotion_source_id'] ?? 0) > 0 || !empty($item['bundle_picks']);
+                                                $removeLabel = ($itemQuantity > 1 && !$removeIsLocked) ? 'Remove 1' : 'Remove';
+                                            ?>
+                                            <button
+                                                type="submit"
+                                                form="removeCartForm"
+                                                name="key"
+                                                value="<?= htmlspecialchars((string)$key, ENT_QUOTES) ?>"
                                                 class="cart-remove-link"
-                                                title="Remove item"
-                                                aria-label="Remove item"
+                                                title="Remove one"
+                                                formnovalidate
                                             >
-                                                <i class="bi bi-trash"></i> Remove
-                                            </a>
+                                                <i class="bi bi-trash"></i> <?= $removeLabel ?>
+                                            </button>
                                         </div>
                                     </div>
                                 <?php endif; ?>
@@ -2154,14 +2196,17 @@ require_once '../includes/navbar.php';
                                                     <i class="bi bi-pencil"></i> Edit
                                                 </a>
                                             <?php endif; ?>
-                                            <a
-                                                href="remove-from-cart.php?key=<?= urlencode($key) ?>"
+                                            <button
+                                                type="submit"
+                                                form="removeCartForm"
+                                                name="key"
+                                                value="<?= htmlspecialchars((string)$key, ENT_QUOTES) ?>"
                                                 class="cart-remove-link"
                                                 title="Remove free item"
-                                                aria-label="Remove free item"
+                                                formnovalidate
                                             >
                                                 <i class="bi bi-trash"></i> Remove
-                                            </a>
+                                            </button>
                                         </div>
                                     </div>
                                 <?php endif; ?>
@@ -2310,6 +2355,10 @@ require_once '../includes/navbar.php';
 
             </form>
 
+            <form id="removeCartForm" method="POST" action="remove-from-cart.php">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($cartCsrfToken, ENT_QUOTES, 'UTF-8') ?>">
+            </form>
+
                                 <?php foreach ($_SESSION['cart'] as $key => $item): ?>
                                     <?php
                                         $itemProductId = (int)($item['product_id'] ?? 0);
@@ -2380,6 +2429,29 @@ require_once '../includes/navbar.php';
                                                     <input type="hidden" name="cart_key" value="<?= htmlspecialchars($key, ENT_QUOTES) ?>">
 
                                                     <div class="modal-body">
+                                                        <?php
+                                                            $modalLineQty = (int)($item['quantity'] ?? 1);
+                                                            $modalLocked = (int)($item['promotion_source_id'] ?? 0) > 0 || !empty($item['bundle_picks']);
+                                                        ?>
+                                                        <?php if ($modalLineQty > 1 && !$modalLocked): ?>
+                                                            <div class="mb-3">
+                                                                <label class="form-label" for="<?= htmlspecialchars($editModalId) ?>_qty">
+                                                                    Cups to change (you have <?= $modalLineQty ?>)
+                                                                </label>
+                                                                <input
+                                                                    type="number"
+                                                                    class="form-control"
+                                                                    name="change_qty"
+                                                                    id="<?= htmlspecialchars($editModalId) ?>_qty"
+                                                                    min="1"
+                                                                    max="<?= $modalLineQty ?>"
+                                                                    value="1"
+                                                                    required
+                                                                >
+                                                                <div class="small text-muted mt-1">The other cups keep their current options.</div>
+                                                            </div>
+                                                        <?php endif; ?>
+
                                                         <?php if ($itemBundleSlot && count($itemBundleSlot['flavors']) > 1): ?>
                                                             <div class="mb-3">
                                                                 <label class="form-label" for="<?= htmlspecialchars($editModalId) ?>_flavor">Flavor</label>
