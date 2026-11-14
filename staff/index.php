@@ -2059,6 +2059,14 @@ function staffAssetPath(?string $path): string {
         return $path;
     }
 
+    /* Payment proofs are served by payment-proof.php, which reads the file
+       with PHP so the image does not depend on Apache file permissions. */
+    $proofName = basename(str_replace('\\', '/', $path));
+
+    if (preg_match('/\A[A-Za-z0-9._-]+\.(?:png|jpe?g)\z/i', $proofName)) {
+        return 'payment-proof.php?f=' . rawurlencode($proofName);
+    }
+
     if (str_starts_with($path, 'assets/')) {
         return '../' . $path;
     }
