@@ -3504,6 +3504,36 @@ require_once '../includes/header.php';
     color: #FFFFFF;
 }
 
+.refund-quick-reasons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.refund-quick-reason-btn {
+    padding: 5px 11px;
+    border: 1.5px solid #D5C6BA;
+    border-radius: 50px;
+    background: #ffffff;
+    color: #4A3525;
+    font-size: .76rem;
+    font-weight: 500;
+    line-height: 1.3;
+    cursor: pointer;
+}
+
+.refund-quick-reason-btn:hover {
+    background: #F3EADF;
+    border-color: #4A3525;
+}
+
+.refund-quick-reason-btn.is-selected {
+    background: #332317;
+    border-color: #332317;
+    color: #ffffff;
+}
+
 .refund-proof-upload-info {
     display: flex;
     align-items: flex-start;
@@ -8092,6 +8122,25 @@ require_once '../includes/header.php';
                                 <div class="modal-header"><div><h5 class="modal-title fw-bold mb-1">Reject Refund Request</h5><div class="small text-muted"><?= htmlspecialchars($pendingRefundIdentifier) ?></div></div><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
                                 <div class="modal-body">
                                     <label class="form-label small fw-semibold" for="refundRejectionReason<?= $pending_refund_order_id ?>">Reason for rejection</label>
+                                    <div class="refund-quick-reasons" role="group" aria-label="Quick rejection reasons">
+                                        <?php
+                                        $refundQuickReasons = [
+                                            'GCash name/number mismatch' => 'The GCash account name or mobile number you submitted does not match, so the refund could not be sent. Please contact the store with the correct details.',
+                                            'Payment not verified' => 'We could not verify your original GCash payment for this order, so a refund cannot be issued.',
+                                            'Order already prepared' => 'Your order was already prepared before it was cancelled, so it is not eligible for a refund.',
+                                            'Duplicate request' => 'This is a duplicate refund request. Your earlier request is already being handled.',
+                                            'Incomplete details' => 'Your refund request is missing required details. Please contact the store so we can complete it.',
+                                        ];
+                                        foreach ($refundQuickReasons as $quickLabel => $quickText):
+                                        ?>
+                                            <button
+                                                type="button"
+                                                class="refund-quick-reason-btn"
+                                                data-reason="<?= htmlspecialchars($quickText, ENT_QUOTES) ?>"
+                                                onclick="var t=document.getElementById('refundRejectionReason<?= $pending_refund_order_id ?>');if(t){t.value=this.dataset.reason;t.focus();this.parentNode.querySelectorAll('.refund-quick-reason-btn').forEach(function(b){b.classList.remove('is-selected');});this.classList.add('is-selected');}"
+                                            ><?= htmlspecialchars($quickLabel) ?></button>
+                                        <?php endforeach; ?>
+                                    </div>
                                     <textarea id="refundRejectionReason<?= $pending_refund_order_id ?>" name="refund_rejection_reason" class="form-control" rows="3" maxlength="255" placeholder="Explain why this refund request is rejected."></textarea>
                                     <input type="hidden" name="reject_refund" value="1"><input type="hidden" name="order_id" value="<?= $pending_refund_order_id ?>"><input type="hidden" name="status_filter" value="<?= htmlspecialchars($selected_status) ?>"><input type="hidden" name="q" value="<?= htmlspecialchars($search) ?>"><input type="hidden" name="page" value="<?= (int)$page ?>">
                                 </div>
