@@ -1295,6 +1295,13 @@ if ($payment_method === 'gcash') {
         checkoutFail("Failed to upload the GCash payment screenshot.");
     }
 
+    /*
+     * Uploaded files can be created as 0600 (owner-only), which makes Apache
+     * answer 403 Forbidden when staff/admin open the screenshot. Make the
+     * stored proof readable by the web server.
+     */
+    @chmod($destination, 0644);
+
 
     /*
      * This is what will be stored in the database.
