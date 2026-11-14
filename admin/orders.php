@@ -4343,10 +4343,53 @@ require_once '../includes/header.php';
     }
 
     .payment-proof-image {
+        display: block;
+        margin: 0 auto;
         max-width: 100%;
-        max-height: 70vh;
+        max-height: calc(100vh - 230px);
+        width: auto;
+        height: auto;
         object-fit: contain;
         border-radius: 10px;
+    }
+
+    /*
+     * Payment proof modal: start below the fixed Admin navbar, stay inside
+     * the viewport, and scroll only the body if the image is still tall.
+     */
+    #adminPaymentProofModal {
+        padding: 78px 12px 12px;
+        overflow-x: hidden;
+        overflow-y: auto;
+    }
+
+    #adminPaymentProofModal .modal-dialog {
+        display: flex;
+        align-items: flex-start;
+        width: min(520px, calc(100vw - 24px));
+        max-width: 520px;
+        min-height: 0;
+        margin: 0 auto;
+    }
+
+    #adminPaymentProofModal .modal-content {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        max-height: calc(100vh - 90px);
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    #adminPaymentProofModal .modal-header {
+        flex: 0 0 auto;
+    }
+
+    #adminPaymentProofModal .modal-body {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+        padding: 14px 16px;
     }
 
     /*
@@ -6221,6 +6264,11 @@ require_once '../includes/header.php';
                     'type' => 'cancel',
                     'icon' => 'bi-x-circle',
                     'message' => 'Order cancelled successfully.'
+                ],
+                'refunded' => [
+                    'type' => 'success',
+                    'icon' => 'bi-cash-coin',
+                    'message' => 'Refund successful!'
                 ]
             ];
 
