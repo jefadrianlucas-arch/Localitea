@@ -1640,7 +1640,47 @@ require_once '../includes/navbar.php';
         background: #FFFFFF;
     }
 
+    .guest-refund-status--done { background: #E4F3E9; color: #1F6B3B; }
+    .guest-refund-status--rejected { background: #FBE6E6; color: #9B2C2C; }
+
+    /* One toast at a time; a new toast replaces the current one. */
+    .guest-toast {
+        position: fixed;
+        top: 16px;
+        right: 16px;
+        z-index: 2000;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        max-width: min(380px, calc(100vw - 24px));
+        padding: 12px 14px;
+        border: 1px solid transparent;
+        border-radius: 12px;
+        box-shadow: 0 8px 24px rgba(44, 34, 30, .16);
+        font-size: .88rem;
+        font-weight: 600;
+        animation: guestToastIn .22s ease-out;
+    }
+    .guest-toast--success { background: #E8F4EC; border-color: #BFE0CB; color: #1F6B3B; }
+    .guest-toast--error { background: #FBEAEA; border-color: #F0C2C2; color: #9B2C2C; }
+    .guest-toast i { font-size: 1.05rem; }
+    .guest-toast button {
+        margin-left: auto;
+        padding: 0 4px;
+        border: 0;
+        background: transparent;
+        color: inherit;
+        font-size: 1.2rem;
+        line-height: 1;
+        cursor: pointer;
+    }
+    @keyframes guestToastIn {
+        from { opacity: 0; transform: translateY(-8px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
     @media (max-width: 767.98px) {
+        .guest-toast { top: 10px; right: 12px; left: 12px; max-width: none; }
         .order-status-wrap {
             padding-top: 28px;
             padding-bottom: 28px;
@@ -2252,32 +2292,91 @@ require_once '../includes/navbar.php';
                     $guestRefundSupportingUrl = $guestRefundSupportingPath !== '' ? '../' . ltrim($guestRefundSupportingPath, '/') : '';
                 ?>
 
-                <?php if ($guestRefundFlash): ?>
-                    <div class="alert alert-<?= htmlspecialchars((string)$guestRefundFlash['type'], ENT_QUOTES, 'UTF-8') ?> border-0 mt-3 mb-2" role="status">
-                        <?= htmlspecialchars((string)$guestRefundFlash['message'], ENT_QUOTES, 'UTF-8') ?>
-                    </div>
-                <?php endif; ?>
+                <?php
+                    $guestToastFlash = $guestRefundFlash
+                        ? [
+                            'type' => ((string)$guestRefundFlash['type'] === 'success') ? 'success' : 'error',
+                            'message' => (string)$guestRefundFlash['message'],
+                        ]
+                        : null;
+                ?>
+                <script>
+                (function () {
+                    function showToast(message, type) {
+                        if (!message) return;
+
+                        /* Only one toast is ever shown; remove the previous one first. */
+                        var old = document.getElementById('guestToast');
+                        if (old) old.remove();
+                        window.clearTimeout(window.localiteaGuestToastTimer);
+
+                        var isSuccess = type === 'success';
+                        var toast = document.createElement('div');
+                        toast.id = 'guestToast';
+                        toast.className = 'guest-toast ' + (isSuccess ? 'guest-toast--success' : 'guest-toast--error');
+                        toast.setAttribute('role', 'status');
+                        toast.setAttribute('aria-live', 'polite');
+
+                        var icon = document.createElement('i');
+                        icon.className = 'bi ' + (isSuccess ? 'bi-check-circle-fill' : 'bi-exclamation-circle-fill');
+
+                        var text = document.createElement('span');
+                        text.textContent = message;
+
+                        var close = document.createElement('button');
+                        close.type = 'button';
+                        close.setAttribute('aria-label', 'Close notification');
+                        close.innerHTML = '&times;';
+                        close.addEventListener('click', function () { toast.remove(); });
+
+                        toast.appendChild(icon);
+                        toast.appendChild(text);
+                        toast.appendChild(close);
+                        document.body.appendChild(toast);
+
+                        window.localiteaGuestToastTimer = window.setTimeout(function () { toast.remove(); }, 6000);
+                    }
+
+                    window.localiteaGuestToast = showToast;
+
+                    var flash = <?= json_encode($guestToastFlash, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+                    var pending = null;
+                    try {
+                        pending = JSON.parse(window.sessionStorage.getItem('guestRefundToast') || 'null');
+                        window.sessionStorage.removeItem('guestRefundToast');
+                    } catch (error) {
+                        pending = null;
+                    }
+
+                    var toShow = flash || pending;
+                    if (toShow && toShow.message) {
+                        showToast(String(toShow.message), toShow.type === 'success' ? 'success' : 'error');
+                    }
+
+                    /* Prevent double submissions that would queue up duplicate messages. */
+                    var refundForm = document.querySelector('.guest-refund-form');
+                    if (refundForm) {
+                        refundForm.addEventListener('submit', function () {
+                            var button = refundForm.querySelector('button[type="submit"]');
+                            if (button) window.setTimeout(function () { button.disabled = true; }, 0);
+                        });
+                    }
+                })();
+                </script>
 
                 <?php if ($guestRefundEligible): ?>
                     <section class="guest-refund-panel" id="guestRefundPanel" aria-labelledby="guestRefundTitle">
                         <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">
                             <div>
                                 <h3 id="guestRefundTitle"><i class="bi bi-arrow-counterclockwise me-1"></i> GCash Refund</h3>
-                                <div class="small text-muted mt-1">This order was cancelled and is eligible for a GCash refund.</div>
+                                <div class="small text-muted mt-1">
+                                    <?= $guestRefundDetailsSubmitted
+                                        ? 'Your GCash details are saved. You can update them while the refund is pending.'
+                                        : 'Enter the GCash account where you want to receive your refund.' ?>
+                                </div>
                             </div>
                             <span class="guest-refund-status">Refund Pending</span>
                         </div>
-
-                        <?php if ($guestRefundDetailsSubmitted): ?>
-                            <div class="alert alert-success py-2 small mb-3">
-                                <i class="bi bi-check-circle me-1"></i>
-                                Your GCash recipient details have been submitted. You may update them while the refund is pending.
-                            </div>
-                        <?php else: ?>
-                            <div class="alert alert-warning py-2 small mb-3">
-                                Please provide the GCash account details where you want to receive the refund.
-                            </div>
-                        <?php endif; ?>
 
                         <form method="POST" action="monitor-guest-order.php" enctype="multipart/form-data" class="guest-refund-form">
                             <input type="hidden" name="submit_guest_refund_details" value="1">
@@ -2313,13 +2412,15 @@ require_once '../includes/navbar.php';
                     </section>
                 <?php elseif ($guestRefundApplies && in_array($guestRefundStatus, ['refunded', 'rejected'], true)): ?>
                     <section class="guest-refund-panel" id="guestRefundPanel" aria-labelledby="guestRefundTitle">
-                        <h3 id="guestRefundTitle" class="mb-3"><i class="bi bi-arrow-counterclockwise me-1"></i> GCash Refund</h3>
+                        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+                            <h3 id="guestRefundTitle"><i class="bi bi-arrow-counterclockwise me-1"></i> GCash Refund</h3>
+                            <span class="guest-refund-status <?= $guestRefundStatus === 'refunded' ? 'guest-refund-status--done' : 'guest-refund-status--rejected' ?>">
+                                <?= $guestRefundStatus === 'refunded' ? 'Refunded' : 'Refund Rejected' ?>
+                            </span>
+                        </div>
 
                         <?php if ($guestRefundStatus === 'refunded'): ?>
-                            <div class="alert alert-success mb-3">
-                                <strong><i class="bi bi-check-circle me-1"></i> Refund processed.</strong>
-                                <div class="small mt-1">The store has recorded your refund as completed.</div>
-                            </div>
+                            <div class="small text-muted mb-3">The store has recorded your refund as completed.</div>
                             <?php if ($guestRefundProofUrl !== ''): ?>
                                 <div class="small fw-bold mb-2" style="color:#4A3525;">Store's Refund Proof</div>
                                 <a href="<?= htmlspecialchars($guestRefundProofUrl, ENT_QUOTES, 'UTF-8') ?>" target="_blank" rel="noopener" aria-label="Open store refund proof in a new tab">
@@ -2327,11 +2428,11 @@ require_once '../includes/navbar.php';
                                 </a>
                                 <div class="small text-muted mt-2">Select the image to view it full size.</div>
                             <?php else: ?>
-                                <div class="alert alert-warning small mb-0">The refund was marked as processed, but no refund screenshot was saved. Please contact the store administrator.</div>
+                                <div class="small text-muted">The refund was marked as processed, but no refund screenshot was saved. Please contact the store administrator.</div>
                             <?php endif; ?>
                         <?php else: ?>
-                            <div class="alert alert-danger mb-3">
-                                <strong>Refund rejected.</strong>
+                            <div class="small mb-3">
+                                <strong>Reason:</strong>
                                 <?= htmlspecialchars(trim((string)($order['refund_rejection_reason'] ?? '')) ?: 'Please contact the store for more information.', ENT_QUOTES, 'UTF-8') ?>
                             </div>
                         <?php endif; ?>
@@ -2354,7 +2455,7 @@ require_once '../includes/navbar.php';
                                 <div class="small mt-2"><i class="bi bi-paperclip me-1"></i>Your supporting screenshot: <a href="<?= htmlspecialchars($guestRefundSupportingUrl, ENT_QUOTES, 'UTF-8') ?>" target="_blank" rel="noopener">View supporting screenshot</a></div>
                             <?php endif; ?>
                         <?php else: ?>
-                            <div class="alert alert-warning small mb-0">No GCash recipient details were submitted for this order.</div>
+                            <div class="small text-muted">No GCash recipient details were submitted for this order.</div>
                         <?php endif; ?>
                     </section>
                 <?php endif; ?>
@@ -2590,7 +2691,20 @@ require_once '../includes/navbar.php';
 
                             const latestRefundStatus = String(data.refund_status || 'none').toLowerCase();
                             if (latestRefundStatus !== currentRefundStatus) {
-                                // Reload the selected order so the customer sees the form, proof, or rejection message that matches the saved refund state.
+                                // Remember a single toast to show after the reload instead of stacking alert boxes.
+                                try {
+                                    var toastType = latestRefundStatus === 'refunded' ? 'success' : 'error';
+                                    var toastMessage = latestRefundStatus === 'refunded'
+                                        ? 'Your GCash refund has been processed.'
+                                        : (latestRefundStatus === 'rejected'
+                                            ? 'Your refund request was rejected. See the details below.'
+                                            : '');
+                                    if (toastMessage) {
+                                        window.sessionStorage.setItem('guestRefundToast', JSON.stringify({ type: toastType, message: toastMessage }));
+                                    }
+                                } catch (storageError) { /* Toast is optional. */ }
+
+                                // Reload the selected order so the customer sees the proof or rejection details that match the saved refund state.
                                 window.location.reload();
                                 return;
                             }
