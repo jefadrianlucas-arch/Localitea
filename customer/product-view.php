@@ -1029,7 +1029,7 @@ if ($menuBundleConfig) {
                                 <?= ($fixedPromotionSize === 'Regular' || ($fixedPromotionSize === '' && $regularPrice > 0)) ? 'checked' : '' ?>
                                 required
                                 onchange="calculateTotal()"
-                                <?= ($isPromotionGet && $fixedPromotionSize !== '' && $fixedPromotionSize !== 'Regular') || (!$isAvailable) ? 'disabled' : '' ?>
+                                <?= ($fixedPromotionSize !== '' && $fixedPromotionSize !== 'Regular') || (!$isAvailable) ? 'disabled' : '' ?>
                             >
                             <label class="form-check-label" for="size1">
                                 <span class="pv-choice-name">Regular</span>
@@ -1050,7 +1050,7 @@ if ($menuBundleConfig) {
                                 <?= ($fixedPromotionSize === 'Grande' || ($fixedPromotionSize === '' && $regularPrice <= 0)) ? 'checked' : '' ?>
                                 required
                                 onchange="calculateTotal()"
-                                <?= ($isPromotionGet && $fixedPromotionSize !== '' && $fixedPromotionSize !== 'Grande') || (!$isAvailable) ? 'disabled' : '' ?>
+                                <?= ($fixedPromotionSize !== '' && $fixedPromotionSize !== 'Grande') || (!$isAvailable) ? 'disabled' : '' ?>
                             >
                             <label class="form-check-label" for="size2">
                                 <span class="pv-choice-name">Grande</span>
@@ -1064,6 +1064,12 @@ if ($menuBundleConfig) {
                         <div class="pv-note">
                             <i class="bi bi-lock-fill me-1"></i>
                             Promotion size: <strong><?= htmlspecialchars($fixedPromotionSize) ?></strong>
+                            &mdash; this promotion applies to <?= htmlspecialchars($fixedPromotionSize) ?> only.
+                        </div>
+                    <?php elseif ($promotion && $regularPrice > 0 && $grandePrice > 0): ?>
+                        <div class="pv-note">
+                            <i class="bi bi-check-circle me-1"></i>
+                            This promotion applies to both Regular and Grande.
                         </div>
                     <?php endif; ?>
                 </div>

@@ -1824,7 +1824,7 @@ function settingsPromotionNormalizeSize(?string $size): ?string
     return in_array($size, ['regular', 'grande'], true) ? $size : null;
 }
 
-function settingsPromotionProductSupportsSize(PDO $pdo, int $productId, ?string $size): bool
+function settingsPromotionProductSupportsSize(PDO $pdo, int $productId, ?string $size, bool $allowAllSizes = false): bool
 {
     $size = settingsPromotionNormalizeSize($size);
     if ($productId <= 0) {
@@ -1844,6 +1844,12 @@ function settingsPromotionProductSupportsSize(PDO $pdo, int $productId, ?string 
      * promoted without a size. A product that does have sizes still needs one.
      */
     if ($size === null) {
+        /* "All sizes": the promotion applies to whichever size the customer picks. */
+        if ($allowAllSizes) {
+            return (float)($product['regular_price'] ?? 0) > 0
+                || (float)($product['grande_price'] ?? 0) > 0;
+        }
+
         return (float)($product['regular_price'] ?? 0) <= 0
             && (float)($product['grande_price'] ?? 0) <= 0
             && (float)($product['price'] ?? 0) > 0;
@@ -1992,7 +1998,9 @@ function settingsPromotionRuleInput(PDO $pdo, string $ruleType): array
 
     if ($ruleType === 'percentage') {
         $productId = (int)($_POST['discount_product_id'] ?? 0);
-        $size = settingsPromotionNormalizeSize($_POST['discount_size'] ?? null);
+        /* 'all' means no size restriction (stored as NULL): Regular and Grande both qualify. */
+        $allSizes = strtolower(trim((string)($_POST['discount_size'] ?? ''))) === 'all';
+        $size = $allSizes ? null : settingsPromotionNormalizeSize($_POST['discount_size'] ?? null);
         $valid = settingsPromotionProductIds($pdo, [$productId]);
         $discountValue = (float)($_POST['discount_value'] ?? 0);
 
@@ -2000,7 +2008,7 @@ function settingsPromotionRuleInput(PDO $pdo, string $ruleType): array
             return [null, ['Select a valid product for the percentage discount.']];
         }
 
-        if (!settingsPromotionProductSupportsSize($pdo, $valid[0], $size)) {
+        if (!settingsPromotionProductSupportsSize($pdo, $valid[0], $size, $allSizes)) {
             return [null, ['Select a valid size for the selected product.']];
         }
 
@@ -2020,7 +2028,9 @@ function settingsPromotionRuleInput(PDO $pdo, string $ruleType): array
 
     if ($ruleType === 'fixed') {
         $productId = (int)($_POST['discount_product_id'] ?? 0);
-        $size = settingsPromotionNormalizeSize($_POST['discount_size'] ?? null);
+        /* 'all' means no size restriction (stored as NULL): Regular and Grande both qualify. */
+        $allSizes = strtolower(trim((string)($_POST['discount_size'] ?? ''))) === 'all';
+        $size = $allSizes ? null : settingsPromotionNormalizeSize($_POST['discount_size'] ?? null);
         $valid = settingsPromotionProductIds($pdo, [$productId]);
         $discountValue = (float)($_POST['discount_value'] ?? 0);
 
@@ -2028,7 +2038,7 @@ function settingsPromotionRuleInput(PDO $pdo, string $ruleType): array
             return [null, ['Select a valid product for the fixed discount.']];
         }
 
-        if (!settingsPromotionProductSupportsSize($pdo, $valid[0], $size)) {
+        if (!settingsPromotionProductSupportsSize($pdo, $valid[0], $size, $allSizes)) {
             return [null, ['Select a valid size for the selected product.']];
         }
 
@@ -10271,7 +10281,13 @@ document.addEventListener('DOMContentLoaded', function () {
         placeholder.textContent = sizes.length > 1 ? 'Select size' : 'Size';
         sizeSelect.appendChild(placeholder);
 
-        sizes.forEach(function (size) {
+        /* Percentage/fixed discounts can apply to every size of a product. */
+        const choices = sizes.slice();
+        if (sizeSelect.id === 'discountSize' && sizes.length > 1) {
+            choices.push({ value: 'all', label: 'All sizes (Regular & Grande)', price: 0 });
+        }
+
+        choices.forEach(function (size) {
             const option = document.createElement('option');
             option.value = size.value;
             option.textContent = size.price > 0
@@ -10280,7 +10296,7 @@ document.addEventListener('DOMContentLoaded', function () {
             sizeSelect.appendChild(option);
         });
 
-        if (selectedSize && sizes.some(function (size) { return size.value === String(selectedSize).toLowerCase(); })) {
+        if (selectedSize && choices.some(function (size) { return size.value === String(selectedSize).toLowerCase(); })) {
             sizeSelect.value = String(selectedSize).toLowerCase();
         } else if (autoSelectSingle && sizes.length === 1) {
             sizeSelect.value = sizes[0].value;
@@ -10446,7 +10462,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
             if (item.role === 'qualifying') {
                 const picker = singleProductPickers.find(function (p) { return p.productId === 'discountProductId'; });
-                populatePicker(picker, product.category, item.product_id, size);
+                /* A saved promotion with no size on a two-size product means "All sizes". */
+                const discountSize = size || ((product.has_regular && product.has_grande) ? 'all' : '');
+                populatePicker(picker, product.category, item.product_id, discountSize);
             }
 
         });
