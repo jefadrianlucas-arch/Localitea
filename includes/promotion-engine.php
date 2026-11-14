@@ -35,6 +35,53 @@ function localiteaPromotionSizeLabel(?string $size): string
 }
 
 /**
+ * Clean a cart line's add-on list into a plain list of non-empty names.
+ * Tolerates strings, nulls and nested values without throwing.
+ */
+function localiteaNormalizeAddonNames($addons): array
+{
+    if (!is_array($addons)) {
+        $addons = [$addons];
+    }
+
+    $names = [];
+
+    foreach ($addons as $addon) {
+        if (!is_scalar($addon)) {
+            continue;
+        }
+
+        $name = trim((string)$addon);
+
+        if ($name !== '') {
+            $names[] = $name;
+        }
+    }
+
+    return array_values(array_unique($names));
+}
+
+/**
+ * Sum of base (drink-only) prices for a product's cart lines, add-ons
+ * excluded, so percentage/fixed promos never discount add-ons.
+ */
+function localiteaGetProductBaseSubtotal(
+    PDO $pdo,
+    array $cart,
+    int $productId,
+    ?string $size = null
+): float {
+    $total = 0.0;
+
+    foreach (localiteaGetProductCartLines($cart, $productId, $size) as $line) {
+        $pricing = localiteaCalculateItemPricing($pdo, $line['item']);
+        $total += $pricing['base_unit_price'] * $line['quantity'];
+    }
+
+    return round($total, 2);
+}
+
+/**
  * Return the stored cart line's base price and add-on price separately.
  *
  * Buy/Get promotions make only the drink itself free. Add-ons selected on
@@ -87,16 +134,7 @@ function localiteaCalculateItemPricing(PDO $pdo, array $item): array
     }
 
     $addonsUnitPrice = 0.0;
-    $addons = $item['addons'] ?? [];
-
-    if (!is_array($addons)) {
-        $addons = [$addons];
-    }
-
-    $addons = array_values(array_filter(
-        array_map('trim', $addons),
-        static fn($addon): bool => $addon !== ''
-    ));
+    $addons = localiteaNormalizeAddonNames($item['addons'] ?? []);
 
     if ($productId > 0 && !empty($addons)) {
         $placeholders = implode(',', array_fill(0, count($addons), '?'));
@@ -126,7 +164,9 @@ function localiteaCalculateItemPricing(PDO $pdo, array $item): array
 
 function localiteaGetActivePromotionDefinitions(PDO $pdo, ?string $date = null): array
 {
-    $date = $date ?: date('Y-m-d');
+    /* Promotion dates are Philippine calendar dates; servers often run UTC. */
+    $date = $date ?: (new DateTimeImmutable('now', new DateTimeZone('Asia/Manila')))
+        ->format('Y-m-d');
 
     $stmt = $pdo->prepare("
         SELECT
@@ -487,9 +527,9 @@ function localiteaBuildFreeRewardAtSize(
      * configured target-size base price plus the same valid add-ons.
      */
     $addonsTotal = 0.0;
-    $addons = $item['addons'] ?? [];
+    $addons = localiteaNormalizeAddonNames($item['addons'] ?? []);
 
-    if (is_array($addons) && $addons) {
+    if ($addons) {
         $placeholders = implode(',', array_fill(0, count($addons), '?'));
         $addonStmt = $pdo->prepare("
             SELECT COALESCE(SUM(a.price), 0)
@@ -655,6 +695,11 @@ function localiteaEvaluatePromotion(
         }
 
         if (!$buyItem || !$getItem) {
+            error_log(
+                'Promotion ' . (int)($promotion['id'] ?? 0) .
+                ' skipped: its buy or get product is missing, archived or unavailable.'
+            );
+
             return $result;
         }
 
@@ -815,6 +860,8 @@ function localiteaEvaluatePromotion(
                 ];
             }
 
+            $fallbackFreeUnits = $desiredFreeUnits;
+
             if ($customGetLines) {
                 $remainingFree = $desiredFreeUnits;
 
@@ -854,6 +901,8 @@ function localiteaEvaluatePromotion(
                     $result['discount'] += $freeBaseSubtotal;
                     $remainingFree -= $freeQty;
                 }
+
+                $fallbackFreeUnits = $remainingFree;
 
                 if ($remainingFree <= 0) {
                     $result['discount'] = round($result['discount'], 2);
@@ -900,7 +949,7 @@ function localiteaEvaluatePromotion(
                 $reward = localiteaBuildFreeRewardAtSize(
                     $pdo,
                     $templateLine,
-                    $desiredFreeUnits,
+                    $fallbackFreeUnits,
                     $getSize
                 );
 
@@ -913,18 +962,18 @@ function localiteaEvaluatePromotion(
                     $reward
                 );
                 $baseSubtotal = round(
-                    $pricing['base_unit_price'] * $desiredFreeUnits,
+                    $pricing['base_unit_price'] * $fallbackFreeUnits,
                     2
                 );
                 $reward['base_subtotal'] = $baseSubtotal;
                 $reward['addons_subtotal'] = round(
-                    $pricing['addons_unit_price'] * $desiredFreeUnits,
+                    $pricing['addons_unit_price'] * $fallbackFreeUnits,
                     2
                 );
                 $result['reward_items'][] = $reward;
-                $result['discount'] = $baseSubtotal;
+                $result['discount'] = round($result['discount'] + $baseSubtotal, 2);
                 $result['added_reward_value'] = round(
-                    (float)$reward['subtotal'],
+                    $result['added_reward_value'] + (float)$reward['subtotal'],
                     2
                 );
 
@@ -959,7 +1008,7 @@ function localiteaEvaluatePromotion(
 
             $reward = localiteaBuildFreeRewardFromCartLine(
                 $templateLine,
-                $desiredFreeUnits
+                $fallbackFreeUnits
             );
 
             $pricing = localiteaCalculateItemPricing(
@@ -967,18 +1016,18 @@ function localiteaEvaluatePromotion(
                 $reward
             );
             $baseSubtotal = round(
-                $pricing['base_unit_price'] * $desiredFreeUnits,
+                $pricing['base_unit_price'] * $fallbackFreeUnits,
                 2
             );
             $reward['base_subtotal'] = $baseSubtotal;
             $reward['addons_subtotal'] = round(
-                $pricing['addons_unit_price'] * $desiredFreeUnits,
+                $pricing['addons_unit_price'] * $fallbackFreeUnits,
                 2
             );
             $result['reward_items'][] = $reward;
-            $result['discount'] = $baseSubtotal;
+            $result['discount'] = round($result['discount'] + $baseSubtotal, 2);
             $result['added_reward_value'] = round(
-                (float)$reward['subtotal'],
+                $result['added_reward_value'] + (float)$reward['subtotal'],
                 2
             );
 
@@ -1080,6 +1129,12 @@ function localiteaEvaluatePromotion(
 
             if (!$defaultReward) {
                 /* The promotion cannot be fulfilled safely. */
+                error_log(
+                    'Promotion ' . (int)($promotion['id'] ?? 0) .
+                    ' skipped: free item product ' . $getProductId .
+                    ' is unavailable or has no price for the configured size.'
+                );
+
                 return [
                     'discount' => 0.0,
                     'reward_items' => [],
@@ -1150,6 +1205,36 @@ function localiteaEvaluatePromotion(
 
             if ($lineSlot > 0) {
                 $slotLines[$lineSlot][] = $bundleCartItem;
+            }
+        }
+
+        /*
+         * Editing a promotion recreates its rule items with new IDs, so a
+         * cart built before the edit carries stale slot IDs. When none of
+         * them match and the slot count is unchanged, map old slots to new
+         * ones in order.
+         */
+        if ($slotLines) {
+            $currentSlotIds = array_map(
+                static fn(array $i): int => (int)($i['item_id'] ?? 0),
+                $items
+            );
+            $cartSlotIds = array_keys($slotLines);
+
+            if (
+                !array_intersect($cartSlotIds, $currentSlotIds) &&
+                count($cartSlotIds) === count($currentSlotIds)
+            ) {
+                sort($cartSlotIds);
+                sort($currentSlotIds);
+                $slotMap = array_combine($cartSlotIds, $currentSlotIds);
+                $remapped = [];
+
+                foreach ($slotLines as $oldSlotId => $oldLines) {
+                    $remapped[$slotMap[$oldSlotId]] = $oldLines;
+                }
+
+                $slotLines = $remapped;
             }
         }
 
@@ -1334,8 +1419,9 @@ function localiteaEvaluatePromotion(
             $productId,
             $size
         );
-        $productSubtotal = (float)(
-            $productSummary['subtotal'] ?? 0
+        $productSubtotal = min(
+            (float)($productSummary['subtotal'] ?? 0),
+            localiteaGetProductBaseSubtotal($pdo, $cart, $productId, $size)
         );
 
         $percentage = max(
@@ -1379,8 +1465,9 @@ function localiteaEvaluatePromotion(
             $productId,
             $size
         );
-        $productSubtotal = (float)(
-            $productSummary['subtotal'] ?? 0
+        $productSubtotal = min(
+            (float)($productSummary['subtotal'] ?? 0),
+            localiteaGetProductBaseSubtotal($pdo, $cart, $productId, $size)
         );
 
         $discount = max(
@@ -1761,20 +1848,6 @@ function localiteaApplyBestPromotion(
     }
 
     $rewardItems = $bestEvaluation['reward_items'] ?? [];
-
-    /*
-     * Recalculate reward value from the returned reward lines so the
-     * snapshot, subtotal, and order item handling stay consistent.
-     */
-    $rewardValue = 0.0;
-
-    foreach ($rewardItems as $rewardItem) {
-        $rewardValue += round(
-            (float)($rewardItem['price'] ?? 0) *
-            (int)($rewardItem['quantity'] ?? 0),
-            2
-        );
-    }
 
     $result['promotion_id'] = (int)$bestPromotion['id'];
     $result['promotion_title'] =

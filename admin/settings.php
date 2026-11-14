@@ -1827,16 +1827,26 @@ function settingsPromotionNormalizeSize(?string $size): ?string
 function settingsPromotionProductSupportsSize(PDO $pdo, int $productId, ?string $size): bool
 {
     $size = settingsPromotionNormalizeSize($size);
-    if ($productId <= 0 || $size === null) {
+    if ($productId <= 0) {
         return false;
     }
 
-    $stmt = $pdo->prepare("\n        SELECT regular_price, grande_price\n        FROM products\n        WHERE id = ?\n          AND is_archived = 0\n        LIMIT 1\n    ");
+    $stmt = $pdo->prepare("\n        SELECT price, regular_price, grande_price\n        FROM products\n        WHERE id = ?\n          AND is_archived = 0\n        LIMIT 1\n    ");
     $stmt->execute([$productId]);
     $product = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if (!$product) {
         return false;
+    }
+
+    /*
+     * Products without Regular/Grande sizes (snacks, single-price items) are
+     * promoted without a size. A product that does have sizes still needs one.
+     */
+    if ($size === null) {
+        return (float)($product['regular_price'] ?? 0) <= 0
+            && (float)($product['grande_price'] ?? 0) <= 0
+            && (float)($product['price'] ?? 0) > 0;
     }
 
     if ($size === 'regular') {
@@ -2170,6 +2180,7 @@ function settingsPromotionHandleSave(PDO $pdo, bool $editing, array $promotionRu
                 unlink($newPath);
             }
         }
+        error_log('Promotion save failed: ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine());
         return [['Failed to save promotion.'], null];
     }
 }
