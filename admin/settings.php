@@ -1656,35 +1656,17 @@ function renderUserAccountFilterFragment(
                                                 </form>
 
                                                 <?php if ($canPermanentlyDelete): ?>
-                                                    <form
-                                                        method="POST"
-                                                        class="d-inline"
-                                                        onsubmit="return confirm('Permanently delete this archived account and free its email? Customer orders and feedback will be preserved without the account link. Staff verification history will keep payment records but remove this staff account reference. This cannot be undone.');"
+                                                    <button
+                                                        type="button"
+                                                        class="btn btn-sm btn-outline-danger user-account-permanent-delete-btn"
+                                                        data-account-source="<?= htmlspecialchars($account['source'], ENT_QUOTES, 'UTF-8') ?>"
+                                                        data-account-id="<?= (int)$account['id'] ?>"
+                                                        data-account-name="<?= htmlspecialchars((string)($account['full_name'] ?? ''), ENT_QUOTES, 'UTF-8') ?>"
+                                                        data-account-email="<?= htmlspecialchars((string)($account['email'] ?? ''), ENT_QUOTES, 'UTF-8') ?>"
                                                     >
-                                                        <input
-                                                            type="hidden"
-                                                            name="account_source"
-                                                            value="<?= htmlspecialchars($account['source']) ?>"
-                                                        >
-                                                        <input
-                                                            type="hidden"
-                                                            name="account_id"
-                                                            value="<?= (int)$account['id'] ?>"
-                                                        >
-                                                        <input
-                                                            type="hidden"
-                                                            name="permanent_delete_csrf"
-                                                            value="<?= htmlspecialchars((string)($_SESSION['admin_user_account_csrf'] ?? ''), ENT_QUOTES, 'UTF-8') ?>"
-                                                        >
-                                                        <button
-                                                            type="submit"
-                                                            name="permanently_delete_user_account"
-                                                            class="btn btn-sm btn-outline-danger"
-                                                        >
-                                                            <i class="bi bi-trash3 me-1"></i>
-                                                            Delete Permanently
-                                                        </button>
-                                                    </form>
+                                                        <i class="bi bi-trash3 me-1"></i>
+                                                        Delete Permanently
+                                                    </button>
                                                 <?php endif; ?>
 
                                             <?php else: ?>
@@ -8200,6 +8182,89 @@ document.addEventListener('DOMContentLoaded', function () {
 
     modalEl.addEventListener('hidden.bs.modal', function () {
         pendingUrl = '';
+        confirmBtn.disabled = false;
+    });
+});
+</script>
+
+<!-- =========================================================
+     USER ACCOUNT PERMANENT DELETE CONFIRMATION MODAL
+========================================================= -->
+<div class="modal fade promotion-delete-modal" id="userAccountPermanentDeleteModal" tabindex="-1" aria-labelledby="userAccountPermanentDeleteTitle" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <form method="POST" class="modal-content" id="userAccountPermanentDeleteForm">
+            <input type="hidden" name="account_source" id="permanentDeleteAccountSource" value="">
+            <input type="hidden" name="account_id" id="permanentDeleteAccountId" value="">
+            <input type="hidden" name="permanent_delete_csrf" value="<?= htmlspecialchars((string)($_SESSION['admin_user_account_csrf'] ?? ''), ENT_QUOTES, 'UTF-8') ?>">
+            <input type="hidden" name="permanently_delete_user_account" value="1">
+
+            <div class="modal-body">
+                <div class="promotion-delete-icon" aria-hidden="true">
+                    <i class="bi bi-trash3"></i>
+                </div>
+
+                <h5 class="promotion-delete-title" id="userAccountPermanentDeleteTitle">
+                    Permanently delete this account?
+                </h5>
+
+                <p class="promotion-delete-message">
+                    This archived account will be deleted and its email will be freed.
+                    Customer orders and feedback will be preserved without the account link.
+                    Staff verification history will keep payment records but remove this staff account reference.
+                    This cannot be undone.
+                    <span class="promotion-delete-name" id="permanentDeleteAccountName"></span>
+                </p>
+            </div>
+
+            <div class="modal-footer">
+                <button type="button" class="btn promotion-delete-cancel" data-bs-dismiss="modal">
+                    Cancel
+                </button>
+
+                <button type="submit" class="btn promotion-delete-confirm" id="confirmPermanentDeleteBtn">
+                    <i class="bi bi-trash3 me-1"></i>Delete Permanently
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const modalEl = document.getElementById('userAccountPermanentDeleteModal');
+    const formEl = document.getElementById('userAccountPermanentDeleteForm');
+    const sourceEl = document.getElementById('permanentDeleteAccountSource');
+    const idEl = document.getElementById('permanentDeleteAccountId');
+    const nameEl = document.getElementById('permanentDeleteAccountName');
+    const confirmBtn = document.getElementById('confirmPermanentDeleteBtn');
+
+    if (!modalEl || !formEl) return;
+
+    document.addEventListener('click', function (event) {
+        const trigger = event.target.closest('.user-account-permanent-delete-btn');
+        if (!trigger) return;
+
+        event.preventDefault();
+
+        const name = trigger.getAttribute('data-account-name') || '';
+        const email = trigger.getAttribute('data-account-email') || '';
+
+        sourceEl.value = trigger.getAttribute('data-account-source') || '';
+        idEl.value = trigger.getAttribute('data-account-id') || '';
+        nameEl.textContent = name && email ? name + ' (' + email + ')' : (name || email);
+
+        bootstrap.Modal.getOrCreateInstance(modalEl).show();
+    });
+
+    formEl.addEventListener('submit', function () {
+        /* Disable after the browser has collected the form data. */
+        setTimeout(function () { confirmBtn.disabled = true; }, 0);
+    });
+
+    modalEl.addEventListener('hidden.bs.modal', function () {
+        sourceEl.value = '';
+        idEl.value = '';
+        nameEl.textContent = '';
         confirmBtn.disabled = false;
     });
 });
