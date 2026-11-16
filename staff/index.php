@@ -1225,10 +1225,15 @@ if (
 
             } else {
 
-                if (
+                $isGcashVerificationTransition = (
+                    $current_status === 'pending_verification'
+                    && $new_status === 'order_queue'
+                );
+                $isProcessingTransition = (
                     in_array($new_status, ['confirmed', 'preparing'], true)
-                    && staffOrderPickupOverdue($orderData)
-                ) {
+                    || $isGcashVerificationTransition
+                );
+                if ($isProcessingTransition && staffOrderPickupOverdue($orderData)) {
                     throw new RuntimeException(
                         'This overdue order cannot be processed. Contact the customer and cancel the order if its pickup cannot be resolved.'
                     );
@@ -6323,6 +6328,11 @@ require_once '../includes/header.php';
                                                         data-source-filter="<?= htmlspecialchars($selected_source, ENT_QUOTES, 'UTF-8') ?>"
                                                         data-search="<?= htmlspecialchars($search, ENT_QUOTES, 'UTF-8') ?>"
                                                         data-page="<?= (int)$page ?>"
+                                                        data-pickup-overdue="<?= $isPickupOverdue ? '1' : '0' ?>"
+                                                        data-order-source="<?= htmlspecialchars($orderSource, ENT_QUOTES, 'UTF-8') ?>"
+                                                        data-pickup-date="<?= htmlspecialchars((string)($order['pickup_date'] ?? ''), ENT_QUOTES, 'UTF-8') ?>"
+                                                        data-pickup-time="<?= htmlspecialchars((string)($order['pickup_time'] ?? ''), ENT_QUOTES, 'UTF-8') ?>"
+                                                        data-pickup-label="<?= htmlspecialchars(($order['pickup_date'] ?? '') . ' ' . staffFormatTime($order['pickup_time'] ?? null), ENT_QUOTES, 'UTF-8') ?>"
                                                         aria-label="Review GCash payment for <?= htmlspecialchars($order['order_number'] ?: 'order ' . $order_id, ENT_QUOTES, 'UTF-8') ?>"
                                                     >
                                                         <i class="bi bi-shield-check" aria-hidden="true"></i>
@@ -7953,6 +7963,9 @@ require_once '../includes/header.php';
                     <div class="alert alert-info py-2 small mb-3" role="note">
                         Compare the screenshot with the actual GCash transaction history or account received by the store. A screenshot by itself does not prove that the money was received.
                     </div>
+                    <div class="alert alert-danger py-2 small mb-3" id="staffGcashOverdueNotice" role="alert" hidden>
+                        This overdue order cannot be verified or moved to the queue. Contact the customer; reject or cancel the order if pickup cannot be resolved.
+                    </div>
 
                     <div class="details-section-title mb-2">Uploaded GCash Payment Screenshot</div>
                     <div class="gcash-review-proof-frame">
@@ -8463,8 +8476,10 @@ document.addEventListener('DOMContentLoaded', function () {
     const gcashVerifyButton = document.getElementById('staffGcashVerifyButton');
     const gcashVerifyButtonDefaultHTML = gcashVerifyButton ? gcashVerifyButton.innerHTML : '';
     const gcashRejectButton = document.getElementById('staffGcashRejectPaymentButton');
+    const gcashOverdueNotice = document.getElementById('staffGcashOverdueNotice');
 
     let gcashReviewImageLoaded = false;
+    let gcashReviewOverdue = false;
 
     function syncGcashReviewButton() {
         if (!gcashVerifyButton) {
@@ -8472,7 +8487,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         /* Enable verification once the uploaded proof is visibly loaded. */
-        gcashVerifyButton.disabled = !gcashReviewImageLoaded;
+        gcashVerifyButton.disabled = !gcashReviewImageLoaded || gcashReviewOverdue;
     }
 
     function resetGcashVerifyAction() {
@@ -8492,6 +8507,8 @@ document.addEventListener('DOMContentLoaded', function () {
 
     function resetGcashReviewModal() {
         gcashReviewImageLoaded = false;
+        gcashReviewOverdue = false;
+        if (gcashOverdueNotice) gcashOverdueNotice.hidden = true;
 
         if (gcashReviewImage) {
             gcashReviewImage.onload = null;
@@ -8522,6 +8539,21 @@ document.addEventListener('DOMContentLoaded', function () {
         const claimNumber = button.getAttribute('data-claim-number') || 'N/A';
         const totalAmount = Number(button.getAttribute('data-total-amount') || 0);
         const proofSrc = button.getAttribute('data-proof-src') || '';
+
+        gcashReviewForm.dataset.pickupOverdue =
+            button.getAttribute('data-pickup-overdue') || '0';
+        gcashReviewForm.dataset.orderSource =
+            button.getAttribute('data-order-source') || 'online';
+        gcashReviewForm.dataset.pickupDate =
+            button.getAttribute('data-pickup-date') || '';
+        gcashReviewForm.dataset.pickupTime =
+            button.getAttribute('data-pickup-time') || '';
+        gcashReviewForm.dataset.pickupLabel =
+            button.getAttribute('data-pickup-label') || '';
+        gcashReviewForm.dataset.orderReference =
+            orderNumber + ' · Claim ' + claimNumber;
+        gcashReviewOverdue = gcashReviewForm.dataset.pickupOverdue === '1';
+        if (gcashOverdueNotice) gcashOverdueNotice.hidden = !gcashReviewOverdue;
 
         document.getElementById('staffGcashReviewOrderId').value = orderId;
         document.getElementById('staffGcashReviewStatusFilter').value =
@@ -11072,7 +11104,12 @@ document.addEventListener(
             const requestedStatus =
                 String(new FormData(form).get('status') || '');
             const isProcessingTransition =
-                requestedStatus === 'confirmed' || requestedStatus === 'preparing';
+                requestedStatus === 'confirmed'
+                || requestedStatus === 'preparing'
+                || (
+                    form.id === 'staffGcashReviewForm'
+                    && requestedStatus === 'order_queue'
+                );
 
             let pickupOverdue = form.dataset.pickupOverdue === '1';
             const pickupDate = form.dataset.pickupDate || '';
@@ -11094,6 +11131,13 @@ document.addEventListener(
                 isProcessingTransition
                 && pickupOverdue
             ) {
+                if (form.id === 'staffGcashReviewForm') {
+                    gcashReviewOverdue = true;
+                    if (gcashOverdueNotice) gcashOverdueNotice.hidden = false;
+                    syncGcashReviewButton();
+                    return;
+                }
+
                 const overdueModal = document.getElementById('staffOverdueOrderModal');
                 const orderReference = form.dataset.orderReference || 'This order';
                 const pickupLabel = form.dataset.pickupLabel || '';
