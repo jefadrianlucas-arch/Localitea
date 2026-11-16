@@ -69,6 +69,30 @@ $isAjaxCategory = ($_GET['ajax'] ?? '') === '1';
 /* =========================================================
    HELPERS
 ========================================================= */
+/* Store opening time (Asia/Manila). Walk-in orders are stamped with the
+   current time, so they must not be placed before the store opens. */
+const WALKIN_STORE_OPENING_TIME = '10:00:00';
+const WALKIN_STORE_OPENING_LABEL = '10:00 AM';
+
+function walkinStoreIsOpen(): bool
+{
+    $now = new DateTimeImmutable('now', new DateTimeZone('Asia/Manila'));
+    return $now->format('H:i:s') >= WALKIN_STORE_OPENING_TIME;
+}
+
+function walkinSecondsUntilOpening(): int
+{
+    $timezone = new DateTimeZone('Asia/Manila');
+    $now = new DateTimeImmutable('now', $timezone);
+    $opening = DateTimeImmutable::createFromFormat(
+        '!Y-m-d H:i:s',
+        $now->format('Y-m-d') . ' ' . WALKIN_STORE_OPENING_TIME,
+        $timezone
+    );
+
+    return $opening ? max(0, $opening->getTimestamp() - $now->getTimestamp()) : 0;
+}
+
 function walkinRedirect(string $location): void
 {
     header('Location: ' . $location);
@@ -845,6 +869,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     /* ---------------- PLACE ORDER ---------------- */
     if ($action === 'place_order') {
+        /* The server decides: a stale or tampered form cannot bypass opening time. */
+        if (!walkinStoreIsOpen()) {
+            walkinRedirect(walkinBackUrl(
+                $returnCategory,
+                'error=' . urlencode(
+                    'The store opens at ' . WALKIN_STORE_OPENING_LABEL
+                    . '. Walk-in orders cannot be placed before opening time.'
+                ) . '&cart=1'
+            ));
+        }
+
         if (empty($_SESSION['walkin_cart'])) {
             walkinRedirect(walkinBackUrl($returnCategory, 'error=' . urlencode('Please add at least one product.')));
         }
@@ -1933,6 +1968,7 @@ body { background: #F8F4EF; }
 #walkinProductModal .modal-body { min-height: 0; flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 
 .walkin-discount-note { color: #8A7A6C; font-size: .7rem; margin-top: 6px; }
+.walkin-closed-note { margin: 0 0 10px; padding: 9px 12px; border-radius: 10px; background: #FCE3E3; color: #8E2F2F; font-size: .78rem; font-weight: 600; line-height: 1.4; }
 .walkin-discount-details { margin-top: 10px; padding: 12px; border: 1px dashed #D8C9BD; border-radius: 10px; background: #FDF8F2; }
 .walkin-discount-details[hidden] { display: none; }
 .walkin-field-label { display: block; color: #6A5546; font-size: .74rem; margin-bottom: 4px; }
@@ -2295,7 +2331,15 @@ body { background: #F8F4EF; }
                 <strong>₱<?= number_format($walkinTotal, 2) ?></strong>
             </div>
 
-            <button type="button" class="btn walkin-place-btn" id="walkinPlaceBtn" <?= empty($_SESSION['walkin_cart']) ? 'disabled' : '' ?>>
+            <?php $walkinStoreOpen = walkinStoreIsOpen(); ?>
+            <?php if (!$walkinStoreOpen): ?>
+                <div class="walkin-closed-note" role="alert">
+                    <i class="bi bi-clock me-1" aria-hidden="true"></i>
+                    The store opens at <?= htmlspecialchars(WALKIN_STORE_OPENING_LABEL) ?>. Walk-in orders cannot be placed yet.
+                </div>
+            <?php endif; ?>
+
+            <button type="button" class="btn walkin-place-btn" id="walkinPlaceBtn" <?= (empty($_SESSION['walkin_cart']) || !$walkinStoreOpen) ? 'disabled' : '' ?><?= !$walkinStoreOpen ? ' title="Walk-in orders open at ' . htmlspecialchars(WALKIN_STORE_OPENING_LABEL, ENT_QUOTES, 'UTF-8') . '"' : '' ?>>
                 <i class="bi bi-check2-circle me-1"></i> Place Walk-in Order
             </button>
 
@@ -2423,6 +2467,13 @@ body { background: #F8F4EF; }
         </div>
     </div>
 </div>
+
+<?php if (!walkinStoreIsOpen()): ?>
+<script>
+/* Reload once the store opens so Place Walk-in Order becomes available. */
+window.setTimeout(function () { window.location.reload(); }, <?= (walkinSecondsUntilOpening() + 1) * 1000 ?>);
+</script>
+<?php endif; ?>
 
 <!-- WALK-IN CHECKOUT MODAL -->
 <div class="modal fade walkin-modal" id="walkinCheckoutModal" tabindex="-1" aria-hidden="true">
