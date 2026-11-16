@@ -3,6 +3,7 @@ session_start();
 date_default_timezone_set('Asia/Manila');
 
 require_once '../includes/db.php';
+require_once '../includes/walkin-promotions.php';
 
 /* =========================================================
    STAFF ACCESS ONLY
@@ -54,7 +55,8 @@ $categories = [
     'Fruit Tea',
     'Frappe',
     'Sip and Snack',
-    'Bundle'
+    'Bundle',
+    'Promotions'
 ];
 
 $category = trim((string)($_GET['category'] ?? 'Classic Milktea'));
@@ -520,6 +522,7 @@ function walkinRenderProducts(array $products, array $productAddons, string $cat
 }
 
 $discountRates = walkinDiscountRates($pdo);
+$activePromotions = localiteaGetActivePromotionDefinitions($pdo);
 
 /* =========================================================
    HANDLE WALK-IN CART ACTIONS
@@ -761,11 +764,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       }
     }
 
+    /* ---------------- ADD PROMOTION ---------------- */
+    if ($action === 'add_promotion') {
+        try {
+            $promotionId = (int)($_POST['promotion_id'] ?? 0);
+            walkinAddPromotionToCart($pdo, $_SESSION['walkin_cart'], $promotionId);
+            walkinRedirect(walkinBackUrl($returnCategory, 'promotion_added=1&cart=1'));
+        } catch (Throwable $e) {
+            error_log('Staff walk-in promotion error: ' . $e->getMessage());
+            $message = $e instanceof RuntimeException
+                ? $e->getMessage()
+                : 'Unable to add this promotion. Please refresh the page and try again.';
+            walkinRedirect(walkinBackUrl($returnCategory, 'error=' . urlencode($message) . '&cart=1'));
+        }
+    }
+
     /* ---------------- REMOVE ITEM ---------------- */
     if ($action === 'remove_item') {
         $cartKey = trim((string)($_POST['cart_key'] ?? ''));
         if ($cartKey !== '' && isset($_SESSION['walkin_cart'][$cartKey])) {
             unset($_SESSION['walkin_cart'][$cartKey]);
+        }
+        $selectedPromotionId = (int)($_SESSION['selected_promotion_id'] ?? 0);
+        $promotionStillInCart = false;
+        foreach ($_SESSION['walkin_cart'] as $cartItem) {
+            if ((int)($cartItem['promotion_source_id'] ?? 0) === $selectedPromotionId) {
+                $promotionStillInCart = true;
+                break;
+            }
+        }
+        if ($selectedPromotionId > 0 && !$promotionStillInCart) {
+            unset($_SESSION['selected_promotion_id']);
         }
         walkinRedirect(walkinBackUrl($returnCategory, 'updated=1&cart=1'));
     }
@@ -783,6 +812,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     /* ---------------- CLEAR CART ---------------- */
     if ($action === 'clear_cart') {
         $_SESSION['walkin_cart'] = [];
+        unset($_SESSION['selected_promotion_id']);
         walkinRedirect(walkinBackUrl($returnCategory, 'cleared=1'));
     }
 
@@ -860,20 +890,55 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ));
         }
 
-        $subtotal = (float)$cartValidation['subtotal'];
+        $baseSubtotal = (float)$cartValidation['subtotal'];
         $discountEligibleBase = (float)$cartValidation['discount_eligible_base'];
         $selectedDiscountTypes = $cartValidation['discount_types'];
         $discountIdName = (string)$cartValidation['discount_id_name'];
         $discountIdNumber = (string)$cartValidation['discount_id_number'];
         $lineData = $cartValidation['line_data'];
+        $walkinPricing = walkinCalculatePricing(
+            $pdo,
+            $_SESSION['walkin_cart'],
+            $baseSubtotal,
+            $discountEligibleBase,
+            $selectedDiscountTypes,
+            $discountRates
+        );
+        $subtotal = (float)$walkinPricing['subtotal'];
+        $discountType = (string)$walkinPricing['discount_type'];
+        $discountRate = (float)$walkinPricing['discount_rate'];
+        $discountAmount = (float)$walkinPricing['discount_amount'];
+        $totalAmount = (float)$walkinPricing['total'];
+        $appliedPromotion = $walkinPricing['promotion'];
+        $promotionDiscount = (float)$walkinPricing['promotion_discount'];
+        $promotionRewardItems = $walkinPricing['promotion_reward_items'];
 
-        $discountType = isset($selectedDiscountTypes['pwd'])
-            ? 'pwd'
-            : (isset($selectedDiscountTypes['senior']) ? 'senior' : 'none');
+        $taggedPromotionIds = [];
+        foreach ($_SESSION['walkin_cart'] as $cartItem) {
+            $taggedPromotionId = (int)($cartItem['promotion_source_id'] ?? 0);
+            if ($taggedPromotionId > 0) {
+                $taggedPromotionIds[$taggedPromotionId] = true;
+            }
+        }
+        if (
+            $taggedPromotionIds &&
+            $discountType === 'none' &&
+            (
+                empty($appliedPromotion['promotion_id']) ||
+                !isset($taggedPromotionIds[(int)$appliedPromotion['promotion_id']])
+            )
+        ) {
+            $pdo->rollBack();
+            walkinRedirect(walkinBackUrl(
+                $returnCategory,
+                'error=' . urlencode('The selected promotion is no longer available or the required items are missing. Review the cart and try again.') . '&cart=1'
+            ));
+        }
 
-        $discountRate = $discountType === 'none' ? 0.00 : (float)$discountRates[$discountType];
-        $discountAmount = round($discountEligibleBase * ($discountRate / 100), 2);
-        $totalAmount = round(max(0, $subtotal - $discountAmount), 2);
+        if ($discountType === 'none') {
+            $discountIdName = '';
+            $discountIdNumber = '';
+        }
 
         try {
 
@@ -961,6 +1026,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $pdo->prepare("UPDATE orders SET order_number = ?, claim_number = ? WHERE id = ?")
                 ->execute([$orderNumber, $claimNumber, $orderId]);
 
+            if (
+                !empty($appliedPromotion['promotion_id']) &&
+                $promotionDiscount > 0
+            ) {
+                $pdo->prepare("
+                    INSERT INTO order_promotions
+                    (
+                        order_id,
+                        promotion_id,
+                        promotion_title,
+                        rule_type,
+                        discount_amount,
+                        promotion_snapshot,
+                        created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, NOW())
+                ")->execute([
+                    $orderId,
+                    (int)$appliedPromotion['promotion_id'],
+                    (string)$appliedPromotion['promotion_title'],
+                    (string)$appliedPromotion['rule_type'],
+                    $promotionDiscount,
+                    $appliedPromotion['snapshot'] ?? null,
+                ]);
+            }
+
             $stmtItem = $pdo->prepare("
                 INSERT INTO order_items
                 (
@@ -997,6 +1088,69 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ]);
             }
 
+            foreach ($promotionRewardItems as $rewardItem) {
+                $rewardProductId = (int)($rewardItem['product_id'] ?? 0);
+                $rewardName = trim((string)($rewardItem['name'] ?? ''));
+                $rewardQuantity = (int)($rewardItem['quantity'] ?? 0);
+                $rewardUnitPrice = (float)($rewardItem['price'] ?? 0);
+
+                if (
+                    $rewardProductId <= 0 ||
+                    $rewardName === '' ||
+                    $rewardQuantity <= 0 ||
+                    $rewardQuantity > 50 ||
+                    !is_finite($rewardUnitPrice) ||
+                    $rewardUnitPrice < 0
+                ) {
+                    throw new RuntimeException('A promotion reward is invalid. Review the promotion and try again.');
+                }
+
+                $rewardAvailabilityStmt = $pdo->prepare("
+                    SELECT is_available, is_archived
+                    FROM products
+                    WHERE id = ?
+                    LIMIT 1
+                    FOR UPDATE
+                ");
+                $rewardAvailabilityStmt->execute([$rewardProductId]);
+                $rewardAvailability = $rewardAvailabilityStmt->fetch(PDO::FETCH_ASSOC);
+                if (
+                    !$rewardAvailability ||
+                    (int)$rewardAvailability['is_available'] !== 1 ||
+                    (int)$rewardAvailability['is_archived'] !== 0
+                ) {
+                    throw new RuntimeException('A free product in the promotion is no longer available.');
+                }
+
+                $rewardAddons = $rewardItem['addons'] ?? [];
+                if (!is_array($rewardAddons)) {
+                    $rewardAddons = [$rewardAddons];
+                }
+                $rewardAddonsJson = json_encode(
+                    array_values(array_filter(array_map('strval', $rewardAddons))),
+                    JSON_UNESCAPED_UNICODE
+                );
+                if ($rewardAddonsJson === false) {
+                    throw new RuntimeException('Unable to save the promotion reward details.');
+                }
+
+                $rewardSubtotal = round($rewardUnitPrice * $rewardQuantity, 2);
+                $stmtItem->execute([
+                    $orderId,
+                    $rewardProductId,
+                    $rewardName . ' (FREE)',
+                    $rewardQuantity,
+                    $rewardUnitPrice,
+                    $rewardSubtotal,
+                    !empty($rewardItem['size']) ? (string)$rewardItem['size'] : null,
+                    $rewardAddonsJson,
+                    !empty($rewardItem['sugar_level']) ? (string)$rewardItem['sugar_level'] : null,
+                    'none',
+                    0.00,
+                    0.00,
+                ]);
+            }
+
             /*
              * Walk-in payments are received at the counter, so they are
              * recorded as verified. payments.verified_by points to admins.id,
@@ -1022,6 +1176,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $pdo->commit();
 
             $_SESSION['walkin_cart'] = [];
+            unset($_SESSION['selected_promotion_id']);
             $_SESSION['walkin_success'] = [
                 'order_id' => $orderId,
                 'order_number' => $orderNumber,
@@ -1070,17 +1225,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 /* =========================================================
    LOAD PRODUCTS
 ========================================================= */
-$stmt = $pdo->prepare("
-    SELECT p.*, c.name AS category_name
-    FROM products p
-    INNER JOIN categories c ON p.category_id = c.id
-    WHERE c.name = ?
-      AND c.is_active = 1
-      AND p.is_archived = 0
-    ORDER BY p.name ASC
-");
-$stmt->execute([$category]);
-$products = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$products = [];
+if ($category !== 'Promotions') {
+    $stmt = $pdo->prepare("
+        SELECT p.*, c.name AS category_name
+        FROM products p
+        INNER JOIN categories c ON p.category_id = c.id
+        WHERE c.name = ?
+          AND c.is_active = 1
+          AND p.is_archived = 0
+        ORDER BY p.name ASC
+    ");
+    $stmt->execute([$category]);
+    $products = $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
 
 $productAddons = [];
 if (!empty($products)) {
@@ -1172,7 +1330,11 @@ if (!empty($products)) {
 
 /* AJAX category request: return only the products column. */
 if ($isAjaxCategory) {
-    walkinRenderProducts($products, $productAddons, $category, $productBundles);
+    if ($category === 'Promotions') {
+        walkinRenderPromotions($activePromotions, $staff_csrf_token, $category);
+    } else {
+        walkinRenderProducts($products, $productAddons, $category, $productBundles);
+    }
     exit;
 }
 
@@ -1207,8 +1369,35 @@ if (isset($walkinDiscountTypes['pwd']) && !isset($walkinDiscountTypes['senior'])
     $walkinDiscountRate = (float)$discountRates['senior'];
     $walkinDiscountLabel = 'Senior';
 }
-$walkinDiscountAmount = round($walkinDiscountEligibleBase * ($walkinDiscountRate / 100), 2);
-$walkinTotal = round(max(0, $walkinSubtotal - $walkinDiscountAmount), 2);
+$walkinPricing = walkinCalculatePricing(
+    $pdo,
+    $_SESSION['walkin_cart'],
+    $walkinSubtotal,
+    $walkinDiscountEligibleBase,
+    $walkinDiscountTypes,
+    $discountRates
+);
+$walkinSubtotal = (float)$walkinPricing['subtotal'];
+$walkinPromotionDiscount = (float)$walkinPricing['promotion_discount'];
+$walkinAppliedPromotion = $walkinPricing['promotion'];
+$walkinPromotionRewardItems = $walkinPricing['promotion_reward_items'];
+$walkinDiscountType = (string)$walkinPricing['discount_type'];
+$walkinDiscountRate = (float)$walkinPricing['discount_rate'];
+$walkinDiscountAmount = (float)$walkinPricing['discount_amount'];
+$walkinTotal = (float)$walkinPricing['total'];
+$walkinDiscountLabel = $walkinDiscountType === 'pwd'
+    ? 'PWD'
+    : ($walkinDiscountType === 'senior' ? 'Senior' : '');
+
+foreach ($walkinPromotionRewardItems as $rewardItem) {
+    $walkinCartCount += max(0, (int)($rewardItem['quantity'] ?? 0));
+}
+
+$walkinPromotionTitles = [];
+foreach ($activePromotions as $activePromotion) {
+    $walkinPromotionTitles[(int)$activePromotion['id']] =
+        (string)$activePromotion['title'];
+}
 
 /* Discount cardholder already recorded in the cart (used to auto-fill the modal). */
 $walkinActiveDiscount = ['type' => '', 'name' => '', 'id' => ''];
@@ -1387,6 +1576,16 @@ body { background: #F8F4EF; }
 .walkin-empty-state i { font-size: 2.8rem; color: #B8A08A; }
 .walkin-empty-state h5 { color: #4A3525; font-weight: 400; margin: 12px 0 5px; }
 .walkin-empty-state p { margin: 0; font-size: .82rem; }
+.walkin-promotion-card { height: 100%; padding: 18px; background: #FFFCF8; border: 1px solid #E2D7CE; border-radius: 14px; }
+.walkin-promotion-type { display: inline-flex; padding: 4px 9px; color: #6F4E37; background: #F1E8DF; border-radius: 999px; font-size: .7rem; font-weight: 700; }
+.walkin-promotion-card h3 { margin: 12px 0 4px; color: #2C221E; font-size: 1rem; font-weight: 600; }
+.walkin-promotion-summary { color: #6F4E37; font-weight: 700; }
+.walkin-promotion-card p { margin: 8px 0; color: #7B6D62; font-size: .82rem; }
+.walkin-promotion-items { margin: 10px 0 14px; color: #5F5148; font-size: .78rem; }
+.walkin-promotion-btn { width: 100%; color: #FFFFFF; background: #6F4E37; border: 0; }
+.walkin-promotion-btn:hover, .walkin-promotion-btn:focus { color: #FFFFFF; background: #543A2B; }
+.walkin-promotion-note { margin-top: 16px; color: #7B6D62; font-size: .76rem; }
+.walkin-cart-promotion-reward { margin: 8px 0; padding: 9px 10px; background: #F5F0E9; border-radius: 10px; font-size: .78rem; }
 
 /* ---------- Persistent current-order panel ---------- */
 .modal-backdrop { z-index: 1050; }
@@ -1722,7 +1921,11 @@ body { background: #F8F4EF; }
         </div>
 
         <div id="walkinProductsColumn">
-            <?php walkinRenderProducts($products, $productAddons, $category, $productBundles); ?>
+            <?php if ($category === 'Promotions'): ?>
+                <?php walkinRenderPromotions($activePromotions, $staff_csrf_token, $category); ?>
+            <?php else: ?>
+                <?php walkinRenderProducts($products, $productAddons, $category, $productBundles); ?>
+            <?php endif; ?>
         </div>
     </section>
         </div>
@@ -1769,6 +1972,10 @@ body { background: #F8F4EF; }
                     }
                     if (!empty($item['addons']) && is_array($item['addons'])) { $metaParts[] = 'Add-ons: ' . implode(', ', $item['addons']); }
                     if (($item['discount_type'] ?? 'none') !== 'none') { $metaParts[] = strtoupper((string)$item['discount_type']) . ' discount'; if (!empty($item['discount_id_number'])) { $metaParts[] = 'ID: ' . $item['discount_id_name'] . ' (' . $item['discount_id_number'] . ')'; } }
+                    $itemPromotionId = (int)($item['promotion_source_id'] ?? 0);
+                    if ($itemPromotionId > 0) {
+                        $metaParts[] = 'Promotion: ' . ($walkinPromotionTitles[$itemPromotionId] ?? 'Selected deal');
+                    }
                     ?>
                     <div class="walkin-cart-item">
                         <div class="d-flex align-items-start gap-2">
@@ -1819,6 +2026,18 @@ body { background: #F8F4EF; }
                         </div>
                     </div>
                 <?php endforeach; ?>
+                <?php foreach ($walkinPromotionRewardItems as $rewardItem): ?>
+                    <div class="walkin-cart-promotion-reward">
+                        <strong><?= htmlspecialchars((string)($rewardItem['name'] ?? 'Promotion reward')) ?> (FREE)</strong>
+                        <span class="float-end">×<?= max(0, (int)($rewardItem['quantity'] ?? 0)) ?></span>
+                        <div class="text-muted">
+                            Reward value: ₱<?= number_format((float)($rewardItem['subtotal'] ?? 0), 2) ?>
+                            <?php if ((float)($rewardItem['addons_subtotal'] ?? 0) > 0): ?>
+                                · Add-ons payable: ₱<?= number_format((float)$rewardItem['addons_subtotal'], 2) ?>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                <?php endforeach; ?>
             <?php endif; ?>
         </div>
 
@@ -1828,11 +2047,21 @@ body { background: #F8F4EF; }
                 <strong>₱<?= number_format($walkinSubtotal, 2) ?></strong>
             </div>
 
+            <?php if ($walkinPromotionDiscount > 0): ?>
+                <div class="walkin-total-row discount">
+                    <span><?= htmlspecialchars((string)($walkinAppliedPromotion['promotion_title'] ?? 'Promotion')) ?></span>
+                    <strong>-₱<?= number_format($walkinPromotionDiscount, 2) ?></strong>
+                </div>
+            <?php endif; ?>
+
             <?php if ($walkinDiscountAmount > 0): ?>
                 <div class="walkin-total-row discount">
                     <span><?= htmlspecialchars($walkinDiscountLabel) ?> Discount (<?= walkinFmtRate($walkinDiscountRate) ?>)</span>
                     <strong>-₱<?= number_format($walkinDiscountAmount, 2) ?></strong>
                 </div>
+            <?php endif; ?>
+            <?php if ($walkinDiscountAmount > 0 && !empty($walkinPricing['candidate_promotion']['promotion_id'])): ?>
+                <div class="walkin-promotion-note">The <?= htmlspecialchars($walkinDiscountLabel) ?> discount is larger, so the promotion is not applied.</div>
             <?php endif; ?>
 
             <div class="walkin-total-row grand">
@@ -2045,7 +2274,7 @@ body { background: #F8F4EF; }
     </div>
 </div>
 
-<?php if (isset($_GET['error'])): ?>
+<?php if (isset($_GET['error']) || isset($_GET['promotion_added']) || isset($_GET['added']) || isset($_GET['updated']) || isset($_GET['cleared'])): ?>
 <div class="walkin-toast" aria-live="polite" aria-atomic="true">
     <div class="toast <?= isset($_GET['error']) ? 'is-error' : '' ?>" role="status" data-bs-delay="3500">
         <div class="toast-header">
@@ -2058,6 +2287,8 @@ body { background: #F8F4EF; }
             <?php
             if (isset($_GET['error'])) {
                 $message = (string)$_GET['error'];
+            } elseif (isset($_GET['promotion_added'])) {
+                $message = 'Promotion added to the walk-in order.';
             } elseif (isset($_GET['added'])) {
                 $message = 'Item added to the walk-in order.';
             } elseif (isset($_GET['updated'])) {
