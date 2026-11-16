@@ -9,7 +9,8 @@ $approvedCustomerDiscount = null;
 $discountAlreadyUsed = false;
 $loggedInCustomerId = (int)($_SESSION['user_id'] ?? 0);
 $loggedInRole = strtolower((string)($_SESSION['user_role'] ?? ''));
-if ($loggedInCustomerId > 0 && $loggedInRole === 'customer') {
+$isLoggedInCustomer = $loggedInCustomerId > 0 && $loggedInRole === 'customer';
+if ($isLoggedInCustomer) {
     try {
         $discountStmt = $pdo->prepare("SELECT discount_type, discount_id_name, discount_id_number, discount_id_image, verification_status FROM customers WHERE id = ? LIMIT 1");
         $discountStmt->execute([$loggedInCustomerId]);
@@ -857,7 +858,7 @@ if ($menuBundleConfig) {
         <i class="bi bi-arrow-left"></i> Back to menu
     </a>
 
-    <form action="add-to-cart.php" method="POST" data-ajax-form="true" data-ajax-loading-text="Adding to cart...">
+    <form action="add-to-cart.php" method="POST" data-ajax-form="true" data-ajax-loading-text="Adding to cart..." data-customer-authenticated="<?= $isLoggedInCustomer ? '1' : '0' ?>">
         <input type="hidden" name="product_id" value="<?= $product['id'] ?>">
         <?php if ($promotion): ?>
             <input type="hidden" name="promotion_id" value="<?= (int)$promotion['id'] ?>">
@@ -1571,6 +1572,13 @@ document.addEventListener('DOMContentLoaded', function () {
         return;
     }
 
+    const loginRequiredModal = document.getElementById('loginRequiredModal');
+    const showLoginRequiredModal = function () {
+        if (loginRequiredModal && window.bootstrap) {
+            bootstrap.Modal.getOrCreateInstance(loginRequiredModal).show();
+        }
+    };
+
     /* ---------- PWD / Senior discount ----------
        ID details come from the verified sign-up record, so no fields are
        shown. The saved values are only sent while a discount is selected. */
@@ -1601,6 +1609,11 @@ document.addEventListener('DOMContentLoaded', function () {
 
             event.preventDefault();
             event.stopImmediatePropagation();
+
+            if (addToCartForm.dataset.customerAuthenticated !== '1') {
+                showLoginRequiredModal();
+                return;
+            }
 
             if (addingToCart) {
                 return;
@@ -1678,6 +1691,16 @@ document.addEventListener('DOMContentLoaded', function () {
                             !/[?&]error=/.test(data.redirect)
                         )
                     );
+
+                if (data && data.login_required) {
+                    addingToCart = false;
+                    if (submitButton) {
+                        submitButton.disabled = false;
+                        submitButton.innerHTML = originalButtonHTML;
+                    }
+                    showLoginRequiredModal();
+                    return;
+                }
 
                 if (!response.ok || !hasSuccessfulAdd) {
 

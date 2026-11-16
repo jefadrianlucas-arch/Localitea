@@ -629,15 +629,6 @@ body {
 
             </form>
 
-            <div class="login-divider">or</div>
-
-            <a
-                href="../customer/index.php?guest=1"
-                class="btn btn-localitea btn-localitea-outline mb-3"
-            >
-                Order as Guest
-            </a>
-
             <div class="login-signup">
                 Don't have an account?
                 <a href="register.php">Sign up</a>

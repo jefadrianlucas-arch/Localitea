@@ -131,14 +131,6 @@ if (isset($_GET['order_promotion'])) {
     exit;
 }
 
-if (isset($_GET['guest'])) {
-    $_SESSION['user_id'] = null;
-    $_SESSION['user_name'] = 'Guest Customer';
-    $_SESSION['user_role'] = 'guest';
-    header("Location: index.php");
-    exit;
-}
-
 /* =========================================================
    BEST SELLERS
 ========================================================= */

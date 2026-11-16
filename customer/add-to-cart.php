@@ -26,6 +26,32 @@ function customerRedirect(string $location, string $message = ''): void
 
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $customerId = filter_var(
+        $_SESSION['user_id'] ?? null,
+        FILTER_VALIDATE_INT,
+        ['options' => ['min_range' => 1]]
+    );
+    $isCustomer = ($_SESSION['user_role'] ?? '') === 'customer' && $customerId !== false;
+
+    if (!$isCustomer) {
+        $loginUrl = '../auth/login.php';
+        $message = 'Please log in to your customer account before adding products to your order.';
+
+        if ($isAjaxRequest) {
+            http_response_code(401);
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode([
+                'success' => false,
+                'login_required' => true,
+                'redirect' => $loginUrl,
+                'message' => $message
+            ]);
+            exit;
+        }
+
+        header('Location: ' . $loginUrl);
+        exit;
+    }
 
     $productId = isset($_POST['product_id'])
         ? (int)$_POST['product_id']

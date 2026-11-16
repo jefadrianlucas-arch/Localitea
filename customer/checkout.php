@@ -407,13 +407,10 @@ if (!in_array($payment_method, ['cash', 'gcash'], true)) {
 
 /*
 |--------------------------------------------------------------------------
-| CUSTOMER / GUEST SESSION
+| CUSTOMER SESSION
 |--------------------------------------------------------------------------
 |
-| Registered customers use their logged-in customer ID.
-| Guests are allowed to check out without an account, so their
-| customer_id is stored as NULL and their name/mobile are kept
-| directly on the order record.
+| Online orders require an authenticated customer account.
 |
 */
 
@@ -429,12 +426,12 @@ if ($hasCustomerRole && $sessionCustomerId === false) {
 }
 
 $isRegisteredCustomer = $hasCustomerRole && $sessionCustomerId !== false;
-$customer_id = $isRegisteredCustomer ? (int)$sessionCustomerId : null;
 
-if (!$isRegisteredCustomer && !empty($_SESSION['user_id'])) {
-    checkoutFail('Please sign in again before placing this order.');
+if (!$isRegisteredCustomer) {
+    checkoutFail('Please log in to your customer account before placing an order.', false, 401, 'login_required');
 }
 
+$customer_id = (int)$sessionCustomerId;
 
 /*
 |--------------------------------------------------------------------------

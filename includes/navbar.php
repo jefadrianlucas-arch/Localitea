@@ -596,7 +596,7 @@ if (
                         class="nav-link"
                         href="<?= (isset($_SESSION['user_id']) && ($_SESSION['user_role'] ?? '') === 'customer')
                             ? '../customer/dashboard.php'
-                            : '../customer/monitor-guest-order.php' ?>"
+                            : '../auth/login.php' ?>"
                     >
                        Order
                     </a>
@@ -757,6 +757,25 @@ if (
             <a href="../auth/logout.php" class="logout-confirm">
                 Log Out
             </a>
+        </div>
+    </div>
+</div>
+
+<!-- Login Required Modal -->
+<div class="modal fade" id="loginRequiredModal" tabindex="-1" aria-labelledby="loginRequiredModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="loginRequiredModalLabel">Log in to order</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                Please log in to your customer account before adding products to your order.
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Continue browsing</button>
+                <a href="../auth/login.php" class="btn btn-brown">Log In</a>
+            </div>
         </div>
     </div>
 </div>
