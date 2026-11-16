@@ -1558,7 +1558,10 @@ if (
                     status,
                     payment_method,
                     payment_screenshot,
-                    total_amount
+                    total_amount,
+                    order_source,
+                    pickup_date,
+                    pickup_time
                 FROM orders
                 WHERE id = ?
                 LIMIT 1
@@ -1655,6 +1658,15 @@ if (
                 ];
 
             } else {
+
+                if (
+                    in_array($new_status, ['confirmed', 'preparing'], true)
+                    && adminOrderPickupOverdue($orderData)
+                ) {
+                    throw new RuntimeException(
+                        'This overdue order cannot be processed. Contact the customer and cancel the order if its pickup cannot be resolved.'
+                    );
+                }
 
                 $allowed_transitions = [
                     'pending_verification' => ['order_queue'],
@@ -6908,9 +6920,6 @@ require_once '../includes/header.php';
                                                         data-source-filter="<?= htmlspecialchars($selected_source, ENT_QUOTES, 'UTF-8') ?>"
                                                         data-search="<?= htmlspecialchars($search, ENT_QUOTES, 'UTF-8') ?>"
                                                         data-page="<?= (int)$page ?>"
-                                                        data-pickup-overdue="<?= $isPickupOverdue ? '1' : '0' ?>"
-                                                        data-order-reference="<?= htmlspecialchars($order['order_number'] ?: 'ORD-' . $order_id, ENT_QUOTES, 'UTF-8') ?>"
-                                                        data-pickup-label="<?= htmlspecialchars(($order['pickup_date'] ?? '') . ' ' . adminFormatTime($order['pickup_time'] ?? null), ENT_QUOTES, 'UTF-8') ?>"
                                                         aria-label="Review GCash payment for <?= htmlspecialchars($order['order_number'] ?: 'order ' . $order_id, ENT_QUOTES, 'UTF-8') ?>"
                                                     >
                                                         <i class="bi bi-shield-check" aria-hidden="true"></i>
@@ -6937,6 +6946,9 @@ require_once '../includes/header.php';
                                                     data-pickup-overdue="<?= $isPickupOverdue ? '1' : '0' ?>"
                                                     data-order-reference="<?= htmlspecialchars($order['order_number'] ?: 'ORD-' . $order_id, ENT_QUOTES, 'UTF-8') ?>"
                                                     data-pickup-label="<?= htmlspecialchars(($order['pickup_date'] ?? '') . ' ' . adminFormatTime($order['pickup_time'] ?? null), ENT_QUOTES, 'UTF-8') ?>"
+                                                    data-order-source="<?= htmlspecialchars($orderSource, ENT_QUOTES, 'UTF-8') ?>"
+                                                    data-pickup-date="<?= htmlspecialchars((string)($order['pickup_date'] ?? ''), ENT_QUOTES, 'UTF-8') ?>"
+                                                    data-pickup-time="<?= htmlspecialchars((string)($order['pickup_time'] ?? ''), ENT_QUOTES, 'UTF-8') ?>"
                                                 >
                                                     <input type="hidden" name="order_id" value="<?= $order_id ?>">
                                                     <input type="hidden" name="status" value="<?= htmlspecialchars($tableNextAction['status'], ENT_QUOTES, 'UTF-8') ?>">
@@ -8996,6 +9008,24 @@ require_once '../includes/header.php';
     </div>
 </div>
 
+<div class="modal fade" id="adminOverdueOrderModal" tabindex="-1" aria-labelledby="adminOverdueOrderModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="adminOverdueOrderModalLabel">Pickup time has passed</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p class="fw-semibold mb-2" id="adminOverdueOrderReference"></p>
+                <p class="mb-0">This overdue order cannot be processed. Contact the customer. If the pickup cannot be resolved, close this message, open the order details, and cancel the order. Rescheduling is not currently available in the system.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- SHARED GCASH PAYMENT REVIEW MODAL -->
 <div class="modal fade" id="adminGcashReviewModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable modal-lg gcash-review-dialog">
@@ -9538,14 +9568,6 @@ document.addEventListener('DOMContentLoaded', function () {
         const claimNumber = button.getAttribute('data-claim-number') || 'N/A';
         const totalAmount = Number(button.getAttribute('data-total-amount') || 0);
         const proofSrc = button.getAttribute('data-proof-src') || '';
-
-        gcashReviewForm.dataset.pickupOverdue =
-            button.getAttribute('data-pickup-overdue') || '0';
-        gcashReviewForm.dataset.overdueConfirmed = '0';
-        gcashReviewForm.dataset.orderReference =
-            button.getAttribute('data-order-reference') || orderNumber;
-        gcashReviewForm.dataset.pickupLabel =
-            button.getAttribute('data-pickup-label') || '';
 
         document.getElementById('adminGcashReviewOrderId').value = orderId;
         document.getElementById('adminGcashReviewStatusFilter').value =
@@ -11249,6 +11271,10 @@ document.addEventListener(
                             );
 
                         if (newCard) {
+                            const newHref = newCard.getAttribute('href');
+                            if (newHref) {
+                                card.setAttribute('href', newHref);
+                            }
 
                             const currentCount =
                                 card.querySelector(
@@ -12119,19 +12145,47 @@ document.addEventListener(
                 return;
             }
 
+            const requestedStatus =
+                String(new FormData(form).get('status') || '');
+            const isProcessingTransition =
+                requestedStatus === 'confirmed' || requestedStatus === 'preparing';
+
+            let pickupOverdue = form.dataset.pickupOverdue === '1';
+            const pickupDate = form.dataset.pickupDate || '';
+
+            if (!pickupOverdue && form.dataset.orderSource === 'walk_in') {
+                const manilaToday = new Intl.DateTimeFormat('en-CA', {
+                    timeZone: 'Asia/Manila'
+                }).format(new Date());
+                pickupOverdue = pickupDate !== '' && pickupDate < manilaToday;
+            } else if (!pickupOverdue && pickupDate && form.dataset.pickupTime) {
+                const pickupTime = form.dataset.pickupTime.length === 5
+                    ? form.dataset.pickupTime + ':00'
+                    : form.dataset.pickupTime;
+                const pickupTimestamp = Date.parse(pickupDate + 'T' + pickupTime + '+08:00');
+                pickupOverdue = Number.isFinite(pickupTimestamp) && pickupTimestamp < Date.now();
+            }
+
             if (
-                form.dataset.pickupOverdue === '1'
-                && form.dataset.overdueConfirmed !== '1'
+                isProcessingTransition
+                && pickupOverdue
             ) {
+                const overdueModal = document.getElementById('adminOverdueOrderModal');
                 const orderReference = form.dataset.orderReference || 'This order';
-                const pickupLabel = form.dataset.pickupLabel || 'its scheduled pickup time';
-                if (!window.confirm(
-                    orderReference + ' was scheduled for pickup at ' + pickupLabel
-                    + ', which has already passed. Continue processing this order?'
-                )) {
-                    return;
+                const pickupLabel = form.dataset.pickupLabel || '';
+                const overdueReference = document.getElementById('adminOverdueOrderReference');
+
+                if (overdueReference) {
+                    overdueReference.textContent =
+                        orderReference + (pickupLabel ? ' · Pickup was scheduled for ' + pickupLabel : '');
                 }
-                form.dataset.overdueConfirmed = '1';
+
+                if (overdueModal && window.bootstrap && bootstrap.Modal) {
+                    bootstrap.Modal.getOrCreateInstance(overdueModal).show();
+                } else {
+                    console.error('Overdue order modal is unavailable.');
+                }
+                return;
             }
 
             /* Prevent repeated submits from this modal instance. */
@@ -12151,12 +12205,6 @@ document.addEventListener(
             /* Keep the requested action local to this form. The Start Preparing
              * button itself shows the spinner; no full-screen overlay or backdrop
              * is added, so Admin can still select text and use the rest of the page. */
-            const requestedStatus =
-                String(
-                    new FormData(form).get('status') ||
-                    ''
-                );
-
             const isPreparing =
                 requestedStatus === 'preparing';
 
