@@ -965,6 +965,22 @@ require_once '../includes/navbar.php';
         color: #A39485;
     }
 
+    /* ---------- "What happens next" note under pick-up time ---------- */
+    .ck-next-note {
+        display: flex;
+        gap: 10px;
+        margin-top: 14px;
+        padding: 12px 14px;
+        border: 1px solid #E0D3C4;
+        border-radius: 12px;
+        background: #FBF6EE;
+        color: #4A3525;
+        font-size: .82rem;
+    }
+    .ck-next-note > i { color: #6f4e37; font-size: 1.05rem; line-height: 1.4; }
+    .ck-next-note ol { margin: 4px 0 0; padding-left: 1.1rem; }
+    .ck-next-note li { margin-bottom: 3px; }
+
     /* ---------- Choice tiles (pick-up + payment) ----------
        The real radio stays in the DOM and covers the tile, so
        required-validation and the existing handlers still work. */
@@ -1958,6 +1974,18 @@ require_once '../includes/navbar.php';
                                     >
                                 </div>
 
+                            </div>
+
+                            <div class="ck-next-note">
+                                <i class="bi bi-info-circle"></i>
+                                <div>
+                                    <strong>What happens next</strong>
+                                    <ol>
+                                        <li>After you place your order, you get a <strong>claim number</strong>. Keep it.</li>
+                                        <li>The store confirms and prepares your order. The status changes to <strong>Ready for Pick-up</strong> when it is done.</li>
+                                        <li>Go to the counter at your pick-up time and show your claim number to the staff to receive your order.</li>
+                                    </ol>
+                                </div>
                             </div>
 
                         </div>

@@ -5,6 +5,7 @@ if (session_status() !== PHP_SESSION_ACTIVE) {
 }
 
 require_once '../includes/db.php';
+require_once '../includes/permanent-account-deletion.php';
 
 /* =========================================================
    STAFF ACCESS ONLY
@@ -239,6 +240,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         header('Location: ' . staffAccountsUrl());
+        exit;
+    }
+
+    /* ---------------- PERMANENTLY DELETE CUSTOMER ---------------- */
+    if (isset($_POST['permanently_delete_customer'])) {
+
+        if ($accountId <= 0) {
+            staffAccountsFlash('danger', 'Invalid account.');
+        } else {
+            try {
+                permanentlyDeleteArchivedCustomer($pdo, $accountId);
+                staffAccountsFlash(
+                    'success',
+                    'Customer account permanently deleted. Orders and feedback were preserved without the account link, and the email can be reused.'
+                );
+            } catch (PDOException $e) {
+                error_log('Staff permanent customer deletion failed: ' . $e->getMessage());
+                staffAccountsFlash('danger', 'Failed to permanently delete the customer account.');
+            } catch (RuntimeException $e) {
+                staffAccountsFlash('danger', $e->getMessage());
+            } catch (Throwable $e) {
+                error_log('Staff permanent customer deletion failed: ' . $e->getMessage());
+                staffAccountsFlash('danger', 'Failed to permanently delete the customer account.');
+            }
+        }
+
+        header('Location: ' . staffAccountsUrl(['status' => 'deleted']));
         exit;
     }
 
@@ -1066,6 +1094,15 @@ require_once '../includes/header.php';
                                             >
                                                 <i class="bi bi-arrow-counterclockwise me-1"></i>Restore
                                             </button>
+                                            <button
+                                                type="button"
+                                                class="btn btn-sm btn-outline-danger"
+                                                data-account-permanent-delete
+                                                data-id="<?= (int)$account['id'] ?>"
+                                                data-name="<?= h($account['full_name']) ?>"
+                                            >
+                                                <i class="bi bi-trash3 me-1"></i>Delete Permanently
+                                            </button>
                                         <?php endif; ?>
                                     </div>
                                 </td>
@@ -1207,6 +1244,40 @@ require_once '../includes/header.php';
 </div>
 
 <!-- =====================================================
+     PERMANENT DELETE CONFIRM MODAL
+====================================================== -->
+<div class="modal fade" id="accountPermanentDeleteModal" tabindex="-1" aria-labelledby="accountPermanentDeleteTitle" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <form method="POST" action="user-accounts.php" class="modal-content">
+            <input type="hidden" name="csrf_token" value="<?= h($csrfToken) ?>">
+            <input type="hidden" name="account_id" id="permanentDeleteAccountId" value="">
+            <input type="hidden" name="status" class="account-modal-status" value="<?= h($status) ?>">
+            <input type="hidden" name="q" class="account-modal-search" value="<?= h($search) ?>">
+            <input type="hidden" name="page" class="account-modal-page" value="<?= (int)$page ?>">
+
+            <div class="modal-header">
+                <h5 class="modal-title" id="accountPermanentDeleteTitle">
+                    <i class="bi bi-trash3 me-2"></i>Permanently delete customer?
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p class="mb-0">
+                    <strong id="permanentDeleteAccountName">This customer</strong>'s account and saved cart will be removed, and the email can be reused.
+                    Existing orders and feedback will be preserved but detached from the account. This cannot be undone.
+                </p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" name="permanently_delete_customer" value="1" class="btn btn-danger">
+                    <i class="bi bi-trash3 me-1"></i>Delete Permanently
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- =====================================================
      RESTORE CONFIRM MODAL
 ====================================================== -->
 <div class="modal fade" id="accountRestoreModal" tabindex="-1" aria-labelledby="accountRestoreTitle" aria-hidden="true">
@@ -1305,6 +1376,7 @@ require_once '../includes/header.php';
     var editModal = document.getElementById('accountEditModal');
     var deleteModal = document.getElementById('accountDeleteModal');
     var restoreModal = document.getElementById('accountRestoreModal');
+    var permanentDeleteModal = document.getElementById('accountPermanentDeleteModal');
 
     /* ---------------------------------------------------------
        AJAX account navigation.
@@ -1403,7 +1475,9 @@ require_once '../includes/header.php';
 
         if (deletedView) {
             actions = '<button type="button" class="btn btn-sm btn-outline-success" data-account-restore data-id="' +
-                Number(account.id) + '" data-name="' + escapeHtml(name) + '"><i class="bi bi-arrow-counterclockwise me-1"></i>Restore</button>';
+                Number(account.id) + '" data-name="' + escapeHtml(name) + '"><i class="bi bi-arrow-counterclockwise me-1"></i>Restore</button>' +
+                '<button type="button" class="btn btn-sm btn-outline-danger" data-account-permanent-delete data-id="' +
+                Number(account.id) + '" data-name="' + escapeHtml(name) + '"><i class="bi bi-trash3 me-1"></i>Delete Permanently</button>';
         } else {
             actions = '<button type="button" class="btn btn-sm btn-primary" data-account-edit data-id="' +
                 Number(account.id) + '" data-name="' + escapeHtml(name) + '" data-email="' + escapeHtml(account.email) +
@@ -1597,6 +1671,7 @@ require_once '../includes/header.php';
         var edit = event.target.closest('[data-account-edit]');
         var deleteButton = event.target.closest('[data-account-delete]');
         var restore = event.target.closest('[data-account-restore]');
+        var permanentDelete = event.target.closest('[data-account-permanent-delete]');
 
         if (edit && editModal) {
             document.getElementById('editAccountId').value = edit.dataset.id || '';
@@ -1616,6 +1691,12 @@ require_once '../includes/header.php';
             document.getElementById('restoreAccountId').value = restore.dataset.id || '';
             document.getElementById('restoreAccountName').textContent = restore.dataset.name || 'This customer';
             openModal(restoreModal);
+        }
+
+        if (permanentDelete && permanentDeleteModal) {
+            document.getElementById('permanentDeleteAccountId').value = permanentDelete.dataset.id || '';
+            document.getElementById('permanentDeleteAccountName').textContent = permanentDelete.dataset.name || 'This customer';
+            openModal(permanentDeleteModal);
         }
     });
 

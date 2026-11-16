@@ -446,6 +446,117 @@ function statusDescription($status, $statusDescriptions) {
         ?? 'Your order status has been updated.';
 }
 
+/* =========================================================
+   NEXT-STEP GUIDE
+   Tells the customer exactly what to do for their current order
+   status (what to expect, when to go, what to show the staff).
+========================================================= */
+function orderNextStep(array $order): ?array
+{
+    $status   = (string)($order['status'] ?? '');
+    $payment  = strtolower(trim((string)($order['payment_method'] ?? '')));
+    $isGcash  = $payment === 'gcash';
+    $total    = number_format((float)($order['total_amount'] ?? 0), 2);
+
+    $dateTs = strtotime((string)($order['pickup_date'] ?? ''));
+    $timeTs = strtotime((string)($order['pickup_time'] ?? ''));
+    $when   = ($dateTs && $timeTs)
+        ? date('M j, Y', $dateTs) . ' at ' . date('g:i A', $timeTs)
+        : 'your chosen pick-up time';
+
+    $discountType = strtolower(trim((string)($order['discount_type'] ?? 'none')));
+    $idLabel = $discountType === 'pwd'
+        ? 'PWD'
+        : ($discountType === 'senior' ? 'Senior Citizen' : '');
+
+    $paymentStep = $isGcash
+        ? 'You are paying by GCash, so there is nothing to pay at the counter.'
+        : 'Pay ₱' . $total . ' in cash at the counter when you pick up.';
+
+    $idStep = $idLabel !== ''
+        ? 'Bring your valid ' . $idLabel . ' ID. The staff will check it when you pick up.'
+        : null;
+
+    switch ($status) {
+
+        case 'pending_verification':
+            $steps = [
+                $isGcash
+                    ? 'No action needed right now. The staff is checking your order and GCash payment.'
+                    : 'No action needed right now. The staff is checking your order.',
+                'This page updates by itself, so you will see it change once your order is confirmed.',
+                $isGcash
+                    ? 'Please do not place the same order again or pay twice.'
+                    : 'Please do not place the same order again.'
+            ];
+            return [
+                'tone'  => 'info',
+                'icon'  => 'bi-hourglass-split',
+                'title' => 'Waiting for the store to check your order',
+                'steps' => $steps
+            ];
+
+        case 'order_queue':
+            $steps = [
+                'No action needed yet. The store will confirm your order shortly.',
+                'Pick-up is on ' . $when . '.',
+                $paymentStep
+            ];
+            if ($idStep) { $steps[] = $idStep; }
+            return [
+                'tone'  => 'info',
+                'icon'  => 'bi-hourglass-split',
+                'title' => 'Waiting for the store to confirm your order',
+                'steps' => $steps
+            ];
+
+        case 'confirmed':
+            $steps = [
+                'Come to the store on ' . $when . '.',
+                'Tell the staff your claim number (shown below) to receive your order.',
+                $paymentStep
+            ];
+            if ($idStep) { $steps[] = $idStep; }
+            return [
+                'tone'  => 'info',
+                'icon'  => 'bi-check-circle',
+                'title' => 'Order confirmed. Plan your pick-up',
+                'steps' => $steps
+            ];
+
+        case 'preparing':
+            $steps = [
+                'Your drinks are being made. Plan to arrive around ' . $when . '.',
+                'Wait for the status to change to "Ready for Pick-up" before going to the counter.',
+                'Tell the staff your claim number (shown below) to receive your order.',
+                $paymentStep
+            ];
+            if ($idStep) { $steps[] = $idStep; }
+            return [
+                'tone'  => 'info',
+                'icon'  => 'bi-cup-hot',
+                'title' => 'We are preparing your order',
+                'steps' => $steps
+            ];
+
+        case 'ready':
+            $steps = [
+                'Go to the counter now to get your order.',
+                'Show or tell the staff your claim number (shown below).',
+                $paymentStep
+            ];
+            if ($idStep) { $steps[] = $idStep; }
+            return [
+                'tone'  => 'ready',
+                'icon'  => 'bi-bag-check',
+                'title' => 'Your order is ready. Come pick it up!',
+                'steps' => $steps
+            ];
+    }
+
+    return null;
+}
+
 function orderAddonTotal(PDO $pdo, $productId, $addons): float
 {
     if ($addons === null || $addons === '') {
@@ -1311,6 +1422,106 @@ require_once '../includes/navbar.php';
         min-width: 0;
     }
 }
+/* ---------- Next-step guide + claim number ticket ---------- */
+.next-step-box {
+    border: 1px solid #E0D3C4;
+    border-radius: 14px;
+    background: #FFFFFF;
+    padding: 16px 18px;
+}
+
+.next-step-box.next-step-ready {
+    border-color: #A9D3B5;
+    background: #F3FAF5;
+}
+
+.next-step-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+
+.next-step-header > i {
+    flex: 0 0 auto;
+    width: 38px;
+    height: 38px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: #F1E6D8;
+    color: #6f4e37;
+    font-size: 1.1rem;
+}
+
+.next-step-ready .next-step-header > i {
+    background: #E5F6EA;
+    color: #23733D;
+}
+
+.next-step-label {
+    color: #8a7f75;
+    font-size: .72rem;
+    font-weight: 700;
+    letter-spacing: .5px;
+    text-transform: uppercase;
+}
+
+.next-step-title {
+    color: #4A3525;
+    font-size: 1.02rem;
+    font-weight: 700;
+    line-height: 1.3;
+}
+
+.next-step-list {
+    margin: 0 0 14px;
+    padding-left: 1.25rem;
+    color: #4A3525;
+    font-size: .9rem;
+}
+
+.next-step-list li {
+    margin-bottom: 6px;
+    padding-left: 4px;
+}
+
+.claim-ticket {
+    border: 2px dashed #B8A08A;
+    border-radius: 12px;
+    background: #FBF6EE;
+    padding: 12px 14px;
+    text-align: center;
+}
+
+.next-step-ready .claim-ticket {
+    border-color: #6FB587;
+    background: #FFFFFF;
+}
+
+.claim-ticket-label {
+    color: #8a7f75;
+    font-size: .72rem;
+    font-weight: 700;
+    letter-spacing: .5px;
+    text-transform: uppercase;
+}
+
+.claim-ticket-number {
+    color: #4A3525;
+    font-size: 1.9rem;
+    font-weight: 800;
+    letter-spacing: 3px;
+    line-height: 1.2;
+    word-break: break-all;
+}
+
+.claim-ticket-hint {
+    color: #6f4e37;
+    font-size: .8rem;
+}
+
 .claim-number {
     color: #8a7f75;
     font-size: .8rem;
@@ -2206,6 +2417,41 @@ require_once '../includes/navbar.php';
                         </p>
 
                     </div>
+
+
+                    <?php $nextStep = orderNextStep($activeOrder); ?>
+
+                    <?php if ($nextStep): ?>
+
+                        <!-- WHAT TO DO NEXT -->
+
+                        <div class="next-step-box next-step-<?= htmlspecialchars($nextStep['tone']) ?> mb-4">
+
+                            <div class="next-step-header">
+                                <i class="bi <?= htmlspecialchars($nextStep['icon']) ?>"></i>
+                                <div>
+                                    <div class="next-step-label">What to do next</div>
+                                    <div class="next-step-title"><?= htmlspecialchars($nextStep['title']) ?></div>
+                                </div>
+                            </div>
+
+                            <ol class="next-step-list">
+                                <?php foreach ($nextStep['steps'] as $nextStepLine): ?>
+                                    <li><?= htmlspecialchars($nextStepLine) ?></li>
+                                <?php endforeach; ?>
+                            </ol>
+
+                            <?php if (!empty($activeOrder['claim_number'])): ?>
+                                <div class="claim-ticket">
+                                    <div class="claim-ticket-label">Your claim number</div>
+                                    <div class="claim-ticket-number"><?= htmlspecialchars($activeOrder['claim_number']) ?></div>
+                                    <div class="claim-ticket-hint">Show this to the staff at the counter to receive your order.</div>
+                                </div>
+                            <?php endif; ?>
+
+                        </div>
+
+                    <?php endif; ?>
 
 
                     <!-- ORDER PROCESS -->

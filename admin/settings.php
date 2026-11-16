@@ -6,6 +6,7 @@ if (session_status() !== PHP_SESSION_ACTIVE) {
 require_once '../includes/db.php';
 require_once '../includes/best_sellers.php';
 require_once '../includes/mailer.php';
+require_once '../includes/permanent-account-deletion.php';
 
 if (
     !isset($_SESSION['user_role']) ||
@@ -36,6 +37,11 @@ $productTypes = [
 ];
 
 $errors = [];
+$userAccountCsrfToken = $_SESSION['admin_user_account_csrf'] ?? '';
+if (!is_string($userAccountCsrfToken) || strlen($userAccountCsrfToken) !== 64) {
+    $userAccountCsrfToken = bin2hex(random_bytes(32));
+    $_SESSION['admin_user_account_csrf'] = $userAccountCsrfToken;
+}
 
 /* =========================================================
    SELECTED CATEGORY
@@ -939,6 +945,47 @@ if (
 }
 
 /* ---------------------------------------------------------
+   PERMANENTLY DELETE ARCHIVED CUSTOMER OR STAFF ACCOUNT
+--------------------------------------------------------- */
+
+if (
+    $_SERVER['REQUEST_METHOD'] === 'POST' &&
+    isset($_POST['permanently_delete_user_account'])
+) {
+    $source = trim((string)($_POST['account_source'] ?? ''));
+    $accountId = (int)($_POST['account_id'] ?? 0);
+    $postedToken = (string)($_POST['permanent_delete_csrf'] ?? '');
+
+    if (!hash_equals($userAccountCsrfToken, $postedToken)) {
+        $errors[] = 'Your session expired. Please try again.';
+    } elseif (!in_array($source, ['customers', 'users'], true) || $accountId <= 0) {
+        $errors[] = 'Invalid account.';
+    } else {
+        try {
+            if ($source === 'customers') {
+                permanentlyDeleteArchivedCustomer($pdo, $accountId);
+            } else {
+                permanentlyDeleteArchivedStaff($pdo, $accountId);
+            }
+
+            settingsUserAccountRedirect(
+                'archived',
+                $userAccountFilter,
+                $userAccountSearch
+            );
+        } catch (PDOException $e) {
+            error_log('Admin permanent account deletion failed: ' . $e->getMessage());
+            $errors[] = 'Failed to permanently delete the account.';
+        } catch (RuntimeException $e) {
+            $errors[] = $e->getMessage();
+        } catch (Throwable $e) {
+            error_log('Admin permanent account deletion failed: ' . $e->getMessage());
+            $errors[] = 'Failed to permanently delete the account.';
+        }
+    }
+}
+
+/* ---------------------------------------------------------
    LOAD CUSTOMER ACCOUNTS
 --------------------------------------------------------- */
 
@@ -1574,6 +1621,12 @@ function renderUserAccountFilterFragment(
 
                                         $canEdit = $canManageAccount;
                                         $canArchive = $canManageAccount;
+                                        $canPermanentlyDelete =
+                                            $account['source'] === 'customers' ||
+                                            (
+                                                $account['source'] === 'users' &&
+                                                $account['role'] === 'staff'
+                                            );
                                         ?>
 
                                         <div class="user-account-action-group">
@@ -1601,6 +1654,38 @@ function renderUserAccountFilterFragment(
                                                         Restore
                                                     </button>
                                                 </form>
+
+                                                <?php if ($canPermanentlyDelete): ?>
+                                                    <form
+                                                        method="POST"
+                                                        class="d-inline"
+                                                        onsubmit="return confirm('Permanently delete this archived account and free its email? Customer orders and feedback will be preserved without the account link. Staff verification history will keep payment records but remove this staff account reference. This cannot be undone.');"
+                                                    >
+                                                        <input
+                                                            type="hidden"
+                                                            name="account_source"
+                                                            value="<?= htmlspecialchars($account['source']) ?>"
+                                                        >
+                                                        <input
+                                                            type="hidden"
+                                                            name="account_id"
+                                                            value="<?= (int)$account['id'] ?>"
+                                                        >
+                                                        <input
+                                                            type="hidden"
+                                                            name="permanent_delete_csrf"
+                                                            value="<?= htmlspecialchars((string)($_SESSION['admin_user_account_csrf'] ?? ''), ENT_QUOTES, 'UTF-8') ?>"
+                                                        >
+                                                        <button
+                                                            type="submit"
+                                                            name="permanently_delete_user_account"
+                                                            class="btn btn-sm btn-outline-danger"
+                                                        >
+                                                            <i class="bi bi-trash3 me-1"></i>
+                                                            Delete Permanently
+                                                        </button>
+                                                    </form>
+                                                <?php endif; ?>
 
                                             <?php else: ?>
 
