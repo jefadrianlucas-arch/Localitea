@@ -144,9 +144,17 @@ if ($discountType !== 'none') {
     }
 }
 
+    /* Maximum quantity allowed per order line. */
+    $maxQuantityPerItem = 10;
+
     $quantity = isset($_POST['quantity'])
         ? (int)$_POST['quantity']
         : 1;
+
+    /* Never trust the browser: keep the quantity between 1 and the max. */
+    if ($quantity > $maxQuantityPerItem) {
+        $quantity = $maxQuantityPerItem;
+    }
 
     /*
      * =========================================================
@@ -777,6 +785,18 @@ if ($discountType !== 'none') {
     if (isset($_SESSION['cart'][$cartKey])) {
 
     $_SESSION['cart'][$cartKey]['quantity'] += $quantity;
+
+    /*
+     * Adding the same item again must not push the line above the max.
+     * Free "get" promotion lines are calculated from the promo rule,
+     * so they are not capped here.
+     */
+    if (
+        $validPromotionRole !== 'get' &&
+        $_SESSION['cart'][$cartKey]['quantity'] > $maxQuantityPerItem
+    ) {
+        $_SESSION['cart'][$cartKey]['quantity'] = $maxQuantityPerItem;
+    }
 
     $_SESSION['cart'][$cartKey]['discount_type'] = $discountType;
     $_SESSION['cart'][$cartKey]['discount_id_name'] = $discountIdName;

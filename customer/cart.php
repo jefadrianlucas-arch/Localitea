@@ -364,6 +364,24 @@ if (
     }
 
     if ($newCartKey !== $cartKey) {
+        /*
+         * Max 10 cups per cart line. If the edited cups would merge into an
+         * existing line, only move as many as still fit; the rest stay put.
+         * Free "get" promotion lines are not capped.
+         */
+        if (isset($_SESSION['cart'][$newCartKey]) && $promotionSourceRole !== 'get') {
+            $roomInTarget = max(
+                0,
+                10 - (int)($_SESSION['cart'][$newCartKey]['quantity'] ?? 0)
+            );
+            $quantity = min($quantity, $roomInTarget);
+
+            if ($quantity <= 0) {
+                header('Location: cart.php');
+                exit;
+            }
+        }
+
         /* Options changed: move only the chosen cups to the new line. */
         $remainingQuantity = $lineQuantity - $quantity;
         if ($remainingQuantity > 0) {

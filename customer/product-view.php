@@ -158,6 +158,10 @@ if ($promotionId > 0) {
     }
 }
 
+/* Maximum quantity per order line. */
+$maxQty = 10;
+$promotionQuantity = min($promotionQuantity, $maxQty);
+
 /*
  * Bundle flavor options: every available product in the same category as
  * the product configured for this slot (only those that have the slot's
@@ -529,6 +533,12 @@ if ($menuBundleConfig) {
         color: #332317;
     }
     #qty-text {
+        width: 44px;
+        border: 0;
+        background: transparent;
+        outline: none;
+        padding: 0;
+        -moz-appearance: textfield;
         min-width: 32px;
         text-align: center;
         color: #2C221E;
@@ -536,6 +546,9 @@ if ($menuBundleConfig) {
         font-weight: 800;
         font-variant-numeric: tabular-nums;
     }
+
+    #qty-text:focus { background: #ffffff; border-radius: 8px; }
+    #qty-text[readonly] { cursor: not-allowed; }
 
     .btn-brown {
         background-color: #332317;
@@ -938,13 +951,23 @@ if ($menuBundleConfig) {
                         <div class="pv-qty">
                             <button type="button"
                                     class="qty-btn"
+                                    id="qty-minus"
                                     aria-label="Decrease quantity"
                                     <?= (!$isAvailable || $isPromotionGet || $isMenuBundle) ? 'disabled' : 'onclick="updateQty(-1)"' ?>>
                                 <i class="bi bi-dash-lg"></i>
                             </button>
-                            <span id="qty-text"><?= $promotion ? $promotionQuantity : 1 ?></span>
+                            <input type="text"
+                                   id="qty-text"
+                                   inputmode="numeric"
+                                   pattern="[0-9]*"
+                                   maxlength="2"
+                                   autocomplete="off"
+                                   aria-label="Quantity (max <?= $maxQty ?>)"
+                                   value="<?= $promotion ? $promotionQuantity : 1 ?>"
+                                   <?= (!$isAvailable || $isPromotionGet || $isMenuBundle) ? 'readonly' : '' ?>>
                             <button type="button"
                                     class="qty-btn"
+                                    id="qty-plus"
                                     aria-label="Increase quantity"
                                     <?= (!$isAvailable || $isPromotionGet || $isMenuBundle) ? 'disabled' : 'onclick="updateQty(1)"' ?>>
                                 <i class="bi bi-plus-lg"></i>
@@ -1289,23 +1312,82 @@ let fixedPromotionQuantity = <?= $promotion ? $promotionQuantity : 0 ?>;
 let hasSizeOption = <?= $hasSize ? 'true' : 'false' ?>;
 let baseProductPrice = <?= $product['price'] ?>;
 
+const MAX_QTY = <?= (int)$maxQty ?>;
+const MIN_QTY = <?= $promotion ? $promotionQuantity : 1 ?>;
+
+function clampQty(value) {
+    value = parseInt(value, 10);
+    if (isNaN(value)) { value = MIN_QTY; }
+    return Math.min(MAX_QTY, Math.max(MIN_QTY, value));
+}
+
+function syncQtyButtons() {
+    const minus = document.getElementById('qty-minus');
+    const plus = document.getElementById('qty-plus');
+    const locked = isPromotionGet || !document.getElementById('qty-text') || document.getElementById('qty-text').readOnly;
+    if (locked) { return; }
+    if (minus) { minus.disabled = currentQty <= MIN_QTY; }
+    if (plus) { plus.disabled = currentQty >= MAX_QTY; }
+}
+
+function setQty(value, updateField) {
+    currentQty = clampQty(value);
+    if (updateField) {
+        document.getElementById('qty-text').value = currentQty;
+    }
+    document.getElementById('input-qty').value = currentQty;
+    syncQtyButtons();
+    calculateTotal();
+}
+
 function updateQty(change) {
     if (isPromotionGet) {
         return;
     }
-
-    currentQty += change;
-
-    let minimumQty = <?= $promotion ? $promotionQuantity : 1 ?>;
-
-    if (currentQty < minimumQty) {
-        currentQty = minimumQty;
-    }
-    
-    document.getElementById('qty-text').innerText = currentQty;
-    document.getElementById('input-qty').value = currentQty;
-    calculateTotal();
+    setQty(currentQty + change, true);
 }
+
+document.addEventListener('DOMContentLoaded', function () {
+    const qtyInput = document.getElementById('qty-text');
+    if (!qtyInput) { return; }
+
+    // Typing: digits only, never above the max.
+    qtyInput.addEventListener('input', function () {
+        if (qtyInput.readOnly) { return; }
+        let digits = qtyInput.value.replace(/\D/g, '');
+        if (digits === '') {
+            qtyInput.value = '';
+            document.getElementById('input-qty').value = MIN_QTY;
+            return;
+        }
+        let n = Math.min(MAX_QTY, parseInt(digits, 10));
+        qtyInput.value = n;
+        setQty(n, false);
+    });
+
+    // Leaving the field: empty / 0 / too low snaps back to a valid value.
+    qtyInput.addEventListener('blur', function () {
+        if (qtyInput.readOnly) { return; }
+        setQty(qtyInput.value, true);
+    });
+
+    qtyInput.addEventListener('keydown', function (e) {
+        if (qtyInput.readOnly) { return; }
+        if (e.key === 'ArrowUp')   { e.preventDefault(); updateQty(1); }
+        if (e.key === 'ArrowDown') { e.preventDefault(); updateQty(-1); }
+        if (e.key === 'Enter')     { setQty(qtyInput.value, true); }
+    });
+
+    // Safety net: always submit a valid quantity.
+    const form = qtyInput.closest('form');
+    if (form) {
+        form.addEventListener('submit', function () {
+            if (!qtyInput.readOnly) { setQty(qtyInput.value, true); }
+        }, true);
+    }
+
+    syncQtyButtons();
+});
 
 function calculateTotal() {
     let itemPrice = baseProductPrice;
