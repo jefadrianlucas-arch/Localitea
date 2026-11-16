@@ -8094,6 +8094,8 @@ document.addEventListener('DOMContentLoaded', function () {
         targetInstance.show();
     }
 
+    window.showLocaliteaModal = showModalCleanly;
+
     function openLocaliteaModal(modalElement) {
         if (!modalElement) {
             return;
@@ -11023,16 +11025,25 @@ document.addEventListener(
                 const orderReference = form.dataset.orderReference || 'This order';
                 const pickupLabel = form.dataset.pickupLabel || '';
                 const overdueReference = document.getElementById('staffOverdueOrderReference');
+                const overdueMessage =
+                    'This overdue order cannot be processed. Contact the customer. If pickup cannot be resolved, cancel the order.';
 
                 if (overdueReference) {
                     overdueReference.textContent =
                         orderReference + (pickupLabel ? ' · Pickup was scheduled for ' + pickupLabel : '');
                 }
 
-                if (overdueModal && window.bootstrap && bootstrap.Modal) {
+                if (overdueModal && typeof window.showLocaliteaModal === 'function') {
+                    window.showLocaliteaModal(overdueModal);
+                } else if (overdueModal && window.bootstrap && bootstrap.Modal) {
                     bootstrap.Modal.getOrCreateInstance(overdueModal).show();
                 } else {
                     console.error('Overdue order modal is unavailable.');
+                    if (typeof window.showAjaxOrderToast === 'function') {
+                        window.showAjaxOrderToast(overdueMessage, 'Pickup Time Passed');
+                    } else {
+                        window.alert(overdueMessage);
+                    }
                 }
                 return;
             }
