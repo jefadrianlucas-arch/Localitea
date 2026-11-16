@@ -10186,6 +10186,15 @@ document.addEventListener('DOMContentLoaded', function () {
                 const orderPaymentMethodInput =
                     document.getElementById('adminCancelOrderPaymentMethod');
 
+                const currentOrderListUrl =
+                    new URL(window.location.href);
+                const cancelStatusFilter =
+                    document.getElementById('adminCancelStatusFilter');
+                const cancelSearch =
+                    document.getElementById('adminCancelSearch');
+                const cancelPage =
+                    document.getElementById('adminCancelPage');
+
                 const otherReasonWrap =
                     document.getElementById(
                         'adminOtherCancellationReasonWrap'
@@ -10220,6 +10229,18 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
                 if (orderPaymentMethodInput) {
                     orderPaymentMethodInput.value = cancelButton.getAttribute('data-order-payment-method') || '';
+                }
+                if (cancelStatusFilter) {
+                    cancelStatusFilter.value =
+                        currentOrderListUrl.searchParams.get('status') || 'order_queue';
+                }
+                if (cancelSearch) {
+                    cancelSearch.value =
+                        currentOrderListUrl.searchParams.get('q') || '';
+                }
+                if (cancelPage) {
+                    cancelPage.value =
+                        currentOrderListUrl.searchParams.get('page') || '1';
                 }
                 const orderOverdueInput =
                     document.getElementById('adminCancelOrderOverdue');
