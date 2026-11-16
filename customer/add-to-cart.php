@@ -1080,7 +1080,14 @@ if ($discountType !== 'none') {
      * customer-side AJAX handler can display as an alert/toast.
      */
 
-    $_SESSION['added_to_cart_toast'] = true;
+    /*
+     * Only flag the menu toast for normal (non-AJAX) submits. AJAX adds
+     * show their own toast on the product page, so the menu must not
+     * show a second, stale one later.
+     */
+    if (!$isAjaxRequest) {
+        $_SESSION['added_to_cart_toast'] = true;
+    }
 
     if ($isAjaxRequest) {
         header('Content-Type: application/json; charset=utf-8');

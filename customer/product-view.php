@@ -1684,6 +1684,7 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     let addingToCart = false;
+    const isPromotionContext = <?= $promotion ? 'true' : 'false' ?>;
 
     addToCartForm.addEventListener(
         'submit',
@@ -1793,7 +1794,24 @@ document.addEventListener('DOMContentLoaded', function () {
                     );
                 }
 
-                // The success toast is displayed on menu.php after the redirect.
+                /*
+                 * Normal (non-promotion) add: stay on this product page,
+                 * keep the customer's selections and just confirm.
+                 * Promotion flows still follow the redirect because they
+                 * need a next step (free item, bundle, etc.).
+                 */
+                if (data.success === true && !isPromotionContext) {
+                    addingToCart = false;
+
+                    if (submitButton) {
+                        submitButton.disabled = false;
+                        submitButton.innerHTML = originalButtonHTML;
+                    }
+
+                    showLocaliteaToast('Added to cart.', 'success');
+                    return;
+                }
+
                 window.location.href =
                     data.redirect || 'menu.php';
 
