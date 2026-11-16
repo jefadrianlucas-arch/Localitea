@@ -1,6 +1,7 @@
 <?php
 session_start();
 require_once '../includes/db.php';
+require_once '../includes/best_sellers.php';
 
 date_default_timezone_set('Asia/Manila');
 
@@ -134,8 +135,29 @@ if (isset($_GET['order_promotion'])) {
 /* =========================================================
    BEST SELLERS
 ========================================================= */
-$stmt = $pdo->query("\n    SELECT *\n    FROM products\n    WHERE is_available = 1\n      AND is_archived = 0\n      AND is_bestseller = 1\n    ORDER BY sort_order ASC, id ASC\n    LIMIT 4\n");
-$products = $stmt->fetchAll(PDO::FETCH_ASSOC);
+/* Best sellers are automatic: top sellers from completed orders (see includes/best_sellers.php). */
+$bestSellerIds = getBestSellerIds($pdo, 4, 30);
+syncBestSellerFlags($pdo, $bestSellerIds);
+
+$products = [];
+
+if (!empty($bestSellerIds)) {
+    $bestSellerStmt = $pdo->query(
+        "SELECT * FROM products WHERE id IN (" . implode(',', array_map('intval', $bestSellerIds)) . ")"
+    );
+
+    $bestSellerRows = [];
+    foreach ($bestSellerStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $bestSellerRows[(int)$row['id']] = $row;
+    }
+
+    /* keep the ranking order: #1 seller first */
+    foreach ($bestSellerIds as $bestSellerId) {
+        if (isset($bestSellerRows[$bestSellerId])) {
+            $products[] = $bestSellerRows[$bestSellerId];
+        }
+    }
+}
 
 /* =========================================================
    ACTIVE PROMOTIONS
@@ -1680,7 +1702,7 @@ body{
     <div class="row g-3 justify-content-center best-seller-grid">
         <?php if(empty($products)): ?>
             <div class="text-center text-muted py-3 small">
-                <p>No featured products available at the moment.</p>
+                <p>Our best sellers will show up here as orders come in.</p>
             </div>
         <?php else: ?>
             <?php foreach($products as $prod): ?>

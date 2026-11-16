@@ -4,6 +4,7 @@ if (session_status() !== PHP_SESSION_ACTIVE) {
     session_start();
 }
 require_once '../includes/db.php';
+require_once '../includes/best_sellers.php';
 require_once '../includes/mailer.php';
 
 if (
@@ -2655,6 +2656,143 @@ if (
 }
 
 /* =========================================================
+   EXTRA (CUSTOM) PRODUCT SIZES
+   Regular / Grande stay in products.regular_price / grande_price so
+   the rest of the site keeps working. Any additional size (Venti,
+   Mini, Family...) is stored here, one row per size.
+========================================================= */
+
+const SETTINGS_MAX_EXTRA_SIZES = 10;
+
+function settingsEnsureExtraSizesTable(PDO $pdo): void
+{
+    try {
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS product_extra_sizes (
+                id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+                product_id INT UNSIGNED NOT NULL,
+                size_name VARCHAR(50) NOT NULL,
+                price DECIMAL(10,2) NOT NULL,
+                sort_order INT NOT NULL DEFAULT 0,
+                created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (id),
+                UNIQUE KEY uq_product_size (product_id, size_name),
+                KEY idx_product (product_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ");
+    } catch (PDOException $e) {
+        error_log('product_extra_sizes table check failed: ' . $e->getMessage());
+    }
+}
+
+/* Read extra_size_name[] / extra_size_price[] from the form. Empty rows are skipped. */
+function settingsParseExtraSizes(array $post, array &$errors): array
+{
+    $names  = $post['extra_size_name'] ?? [];
+    $prices = $post['extra_size_price'] ?? [];
+
+    if (!is_array($names) || !is_array($prices)) {
+        return [];
+    }
+
+    $sizes = [];
+    $seen  = ['regular' => true, 'grande' => true];
+
+    foreach ($names as $i => $rawName) {
+        $name     = trim(preg_replace('/\s+/', ' ', (string)$rawName));
+        $rawPrice = trim((string)($prices[$i] ?? ''));
+
+        if ($name === '' && $rawPrice === '') {
+            continue;
+        }
+
+        if ($name === '') {
+            $errors[] = "Enter a name for every extra size.";
+            continue;
+        }
+
+        if (mb_strlen($name) > 50) {
+            $errors[] = "Size name \"" . $name . "\" is too long (max 50 characters).";
+            continue;
+        }
+
+        $key = mb_strtolower($name);
+
+        if (isset($seen[$key])) {
+            $errors[] = "Size \"" . $name . "\" is duplicated (Regular and Grande are already built in).";
+            continue;
+        }
+
+        $seen[$key] = true;
+
+        if (!is_numeric($rawPrice) || (float)$rawPrice <= 0) {
+            $errors[] = "Price for size \"" . $name . "\" must be greater than 0.";
+            continue;
+        }
+
+        $sizes[] = ['name' => $name, 'price' => round((float)$rawPrice, 2)];
+    }
+
+    if (count($sizes) > SETTINGS_MAX_EXTRA_SIZES) {
+        $errors[] = "You can add up to " . SETTINGS_MAX_EXTRA_SIZES . " extra sizes per product.";
+    }
+
+    return $sizes;
+}
+
+/* Replace all extra sizes of a product with the given list. */
+function settingsSaveExtraSizes(PDO $pdo, int $productId, array $sizes): void
+{
+    $pdo->prepare("DELETE FROM product_extra_sizes WHERE product_id = ?")
+        ->execute([$productId]);
+
+    if (!$sizes) {
+        return;
+    }
+
+    $insert = $pdo->prepare("
+        INSERT INTO product_extra_sizes (product_id, size_name, price, sort_order)
+        VALUES (?, ?, ?, ?)
+    ");
+
+    /* Store smallest/cheapest first. */
+    usort($sizes, function ($x, $y) {
+        return $x['price'] <=> $y['price'];
+    });
+
+    foreach (array_values($sizes) as $order => $size) {
+        $insert->execute([$productId, $size['name'], $size['price'], $order]);
+    }
+}
+
+/* All extra sizes, grouped by product id. */
+function settingsLoadExtraSizes(PDO $pdo): array
+{
+    $map = [];
+
+    try {
+        $rows = $pdo->query("
+            SELECT product_id, size_name, price
+            FROM product_extra_sizes
+            ORDER BY product_id ASC, sort_order ASC, id ASC
+        ")->fetchAll(PDO::FETCH_ASSOC);
+
+        foreach ($rows as $row) {
+            $map[(int)$row['product_id']][] = [
+                'name'  => $row['size_name'],
+                'price' => (float)$row['price']
+            ];
+        }
+    } catch (PDOException $e) {
+        error_log('Could not load extra sizes: ' . $e->getMessage());
+    }
+
+    return $map;
+}
+
+settingsEnsureExtraSizesTable($pdo);
+
+/* =========================================================
    EDIT PRODUCT
 ========================================================= */
 
@@ -2671,6 +2809,7 @@ if (
     $regularPrice = $hasRegular ? (float)($_POST['regular_price'] ?? 0) : null;
     $grandePrice = $hasGrande ? (float)($_POST['grande_price'] ?? 0) : null;
     $returnCategory = trim($_POST['return_category'] ?? 'All Products');
+    $extraSizes = settingsParseExtraSizes($_POST, $errors);
 
     if ($productId <= 0) {
         $errors[] = "Invalid product.";
@@ -2684,8 +2823,8 @@ if (
         $errors[] = "Product name is required.";
     }
 
-    if (!$hasRegular && !$hasGrande) {
-        $errors[] = "At least one size (Regular or Grande) must be enabled.";
+    if (!$hasRegular && !$hasGrande && empty($extraSizes)) {
+        $errors[] = "At least one size must be enabled.";
     }
 
     if ($hasRegular && $regularPrice <= 0) {
@@ -2897,7 +3036,7 @@ if (
                             $counter++;
                         }
 
-                        $primaryPrice = $regularPrice ?? $grandePrice;
+                        $primaryPrice = $regularPrice ?? $grandePrice ?? ($extraSizes[0]['price'] ?? null);
 
                         $updateStmt = $pdo->prepare("
 
@@ -2944,6 +3083,8 @@ if (
                             $productId
 
                         ]);
+
+                        settingsSaveExtraSizes($pdo, (int)$productId, $extraSizes);
 
                         /*
                          * Remove old image only after
@@ -3007,6 +3148,7 @@ if (
     $regularPrice = $hasRegular ? (float)($_POST['regular_price'] ?? 0) : null;
     $grandePrice = $hasGrande ? (float)($_POST['grande_price'] ?? 0) : null;
     $returnCategory = trim($_POST['return_category'] ?? 'All Products');
+    $extraSizes = settingsParseExtraSizes($_POST, $errors);
 
     /* ---------------------------------------------------------
        VALIDATION
@@ -3020,8 +3162,8 @@ if (
         $errors[] = "Product name is required.";
     }
 
-    if (!$hasRegular && !$hasGrande) {
-        $errors[] = "At least one size (Regular or Grande) must be enabled.";
+    if (!$hasRegular && !$hasGrande && empty($extraSizes)) {
+        $errors[] = "At least one size must be enabled.";
     }
 
     if ($hasRegular && $regularPrice <= 0) {
@@ -3255,7 +3397,7 @@ if (
                 )
             ");
 
-            $primaryPrice = $regularPrice ?? $grandePrice;
+            $primaryPrice = $regularPrice ?? $grandePrice ?? ($extraSizes[0]['price'] ?? null);
 
             $insertProduct->execute([
                 $categoryId,
@@ -3270,6 +3412,8 @@ if (
 
                 $imageName
             ]);
+
+            settingsSaveExtraSizes($pdo, (int)$pdo->lastInsertId(), $extraSizes);
 
             $pdo->commit();
 
@@ -3364,98 +3508,13 @@ if (
 }
 
 /* =========================================================
-   TOGGLE BEST SELLER
+   BEST SELLERS ARE AUTOMATIC
    ---------------------------------------------------------
-   Admin controls which products appear in the customer's
-   Best Sellers section. A maximum of 4 products can be
-   selected so the homepage section stays consistent.
+   The old manual "Mark as Best Seller" toggle was removed.
+   Best sellers come from completed orders; see
+   includes/best_sellers.php. The customer homepage uses the
+   same ranking.
 ========================================================= */
-
-if (
-    isset($_GET['toggle_bestseller']) &&
-    isset($_GET['id'])
-) {
-
-    $id = (int)$_GET['id'];
-    $returnCategory = $_GET['category'] ?? 'All Products';
-
-    $productStmt = $pdo->prepare("
-        SELECT is_bestseller, is_available, is_archived
-        FROM products
-        WHERE id = ?
-        LIMIT 1
-    ");
-    $productStmt->execute([$id]);
-    $bestSellerProduct = $productStmt->fetch(PDO::FETCH_ASSOC);
-
-    if (!$bestSellerProduct) {
-        header(
-            "Location: settings.php?bestseller_error=not_found&category=" .
-            urlencode($returnCategory)
-        );
-        exit;
-    }
-
-    $currentlyBestSeller = (int)$bestSellerProduct['is_bestseller'] === 1;
-
-    if ($currentlyBestSeller) {
-        $toggleStmt = $pdo->prepare("
-            UPDATE products
-            SET is_bestseller = 0,
-                updated_at = NOW()
-            WHERE id = ?
-        ");
-        $toggleStmt->execute([$id]);
-
-        header(
-            "Location: settings.php?bestseller_success=removed&category=" .
-            urlencode($returnCategory)
-        );
-        exit;
-    }
-
-    if (
-        (int)$bestSellerProduct['is_archived'] === 1 ||
-        (int)$bestSellerProduct['is_available'] !== 1
-    ) {
-        header(
-            "Location: settings.php?bestseller_error=unavailable&category=" .
-            urlencode($returnCategory)
-        );
-        exit;
-    }
-
-    $countStmt = $pdo->query("
-        SELECT COUNT(*)
-        FROM products
-        WHERE is_bestseller = 1
-          AND is_available = 1
-          AND is_archived = 0
-    ");
-    $bestSellerCount = (int)$countStmt->fetchColumn();
-
-    if ($bestSellerCount >= 4) {
-        header(
-            "Location: settings.php?bestseller_error=limit&category=" .
-            urlencode($returnCategory)
-        );
-        exit;
-    }
-
-    $toggleStmt = $pdo->prepare("
-        UPDATE products
-        SET is_bestseller = 1,
-            updated_at = NOW()
-        WHERE id = ?
-    ");
-    $toggleStmt->execute([$id]);
-
-    header(
-        "Location: settings.php?bestseller_success=added&category=" .
-        urlencode($returnCategory)
-    );
-    exit;
-}
 
 /* =========================================================
    DELETE PRODUCT
@@ -3609,6 +3668,11 @@ if ($selectedCategory === 'All Products') {
 
 $products =
     $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+$extraSizesByProduct = settingsLoadExtraSizes($pdo);
+
+$autoBestSellerIds = getBestSellerIds($pdo, 4, 30);
+syncBestSellerFlags($pdo, $autoBestSellerIds);
 
 /* =========================================================
    GET ACTIVE ADD-ONS
@@ -6858,8 +6922,8 @@ document.addEventListener('DOMContentLoaded', function () {
 
                                                 </div>
 
-                                                <?php if ((int)($product['is_bestseller'] ?? 0) === 1): ?>
-                                                    <span class="bestseller-badge">
+                                                <?php if (in_array((int)$product['id'], $autoBestSellerIds, true)): ?>
+                                                    <span class="bestseller-badge" title="Automatic: top sellers from completed orders">
                                                         <i class="bi bi-star-fill me-1"></i>Best Seller
                                                     </span>
                                                 <?php endif; ?>
@@ -6874,31 +6938,37 @@ document.addEventListener('DOMContentLoaded', function () {
 
                                     <td data-label="Size &amp; Pricing">
 
-                                        <?php if ($hasRegular): ?>
-                                            <div class="price-pair">
-                                                <span>Regular</span>
-                                                <strong>
-                                                    ₱<?= number_format(
-                                                        (float)$regularPrice,
-                                                        2
-                                                    ) ?>
-                                                </strong>
-                                            </div>
-                                        <?php endif; ?>
+                                        <?php
+                                        $allSizes = [];
 
-                                        <?php if ($hasGrande): ?>
-                                            <div class="price-pair">
-                                                <span>Grande</span>
-                                                <strong>
-                                                    ₱<?= number_format(
-                                                        (float)$grandePrice,
-                                                        2
-                                                    ) ?>
-                                                </strong>
-                                            </div>
-                                        <?php endif; ?>
+                                        if ($hasRegular) {
+                                            $allSizes[] = ['name' => 'Regular', 'price' => (float)$regularPrice];
+                                        }
 
-                                        <?php if (!$hasRegular && !$hasGrande): ?>
+                                        if ($hasGrande) {
+                                            $allSizes[] = ['name' => 'Grande', 'price' => (float)$grandePrice];
+                                        }
+
+                                        foreach (($extraSizesByProduct[(int)$product['id']] ?? []) as $extraSize) {
+                                            $allSizes[] = ['name' => $extraSize['name'], 'price' => (float)$extraSize['price']];
+                                        }
+
+                                        /* Smallest/cheapest size first. Bundles are priced per deal, so they keep entry order. */
+                                        if (($product['category_name'] ?? '') !== 'Bundle') {
+                                            usort($allSizes, function ($x, $y) {
+                                                return $x['price'] <=> $y['price'];
+                                            });
+                                        }
+                                        ?>
+
+                                        <?php foreach ($allSizes as $sizeRow): ?>
+                                            <div class="price-pair">
+                                                <span><?= htmlspecialchars($sizeRow['name'], ENT_QUOTES) ?></span>
+                                                <strong>₱<?= number_format($sizeRow['price'], 2) ?></strong>
+                                            </div>
+                                        <?php endforeach; ?>
+
+                                        <?php if (empty($allSizes)): ?>
                                             <span class="text-muted">No size pricing</span>
                                         <?php endif; ?>
 
@@ -7024,6 +7094,10 @@ document.addEventListener('DOMContentLoaded', function () {
                                                                 $product['category_name'] ?? '',
                                                                 ENT_QUOTES
                                                             ) ?>"
+                                                            data-extra-sizes="<?= htmlspecialchars(
+                                                                json_encode($extraSizesByProduct[(int)$product['id']] ?? []),
+                                                                ENT_QUOTES
+                                                            ) ?>"
                                                             data-has-regular="<?= $hasRegular ? '1' : '0' ?>"
                                                             data-has-grande="<?= $hasGrande ? '1' : '0' ?>"
                                                             data-regular="<?= htmlspecialchars(
@@ -7045,22 +7119,6 @@ document.addEventListener('DOMContentLoaded', function () {
                                                             Edit Product
 
                                                         </button>
-
-                                                    </li>
-
-                                                    <!-- BEST SELLER -->
-
-                                                    <li>
-
-                                                        <a
-                                                            class="dropdown-item <?= (int)($product['is_bestseller'] ?? 0) === 1 ? 'text-warning' : 'text-dark' ?>"
-                                                            href="settings.php?toggle_bestseller=1&id=<?= (int)$product['id'] ?>&category=<?= urlencode($selectedCategory) ?>"
-                                                        >
-                                                            <i class="bi <?= (int)($product['is_bestseller'] ?? 0) === 1 ? 'bi-star-fill' : 'bi-star' ?> me-2"></i>
-                                                            <?= (int)($product['is_bestseller'] ?? 0) === 1
-                                                                ? 'Remove from Best Sellers'
-                                                                : 'Mark as Best Seller' ?>
-                                                        </a>
 
                                                     </li>
 
@@ -8913,8 +8971,28 @@ document.addEventListener('DOMContentLoaded', function () {
 
                             </div>
 
+                            <div class="extra-sizes-section mt-3">
+                                <div class="d-flex align-items-center justify-content-between mb-2">
+                                    <div class="form-label mb-0">
+                                        Other Sizes
+                                        <span class="text-muted fw-normal">(Optional)</span>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        class="btn btn-sm btn-outline-secondary add-extra-size-btn"
+                                        data-target="editExtraSizes"
+                                    >
+                                        <i class="bi bi-plus-lg me-1"></i>Add another size
+                                    </button>
+                                </div>
+                                <div class="extra-sizes-list" id="editExtraSizes"></div>
+                                <div class="price-note">
+                                    Need a size besides Regular and Grande (e.g. Mini, Venti, Family)? Add it with its own name and price.
+                                </div>
+                            </div>
+
                             <div class="price-note mt-2">
-                                At least one size must be enabled. When both sizes are enabled, the Regular price must be lower than the Grande price (not required for Bundle products).
+                                At least one size must be enabled (Regular, Grande, or a custom size). When both Regular and Grande are enabled, the Regular price must be lower than the Grande price (not required for Bundle products).
                             </div>
 
                             <div class="size-price-error" id="editSizePriceError" role="alert"></div>
@@ -9184,8 +9262,28 @@ document.addEventListener('DOMContentLoaded', function () {
 
                             </div>
 
+                            <div class="extra-sizes-section mt-3">
+                                <div class="d-flex align-items-center justify-content-between mb-2">
+                                    <div class="form-label mb-0">
+                                        Other Sizes
+                                        <span class="text-muted fw-normal">(Optional)</span>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        class="btn btn-sm btn-outline-secondary add-extra-size-btn"
+                                        data-target="addExtraSizes"
+                                    >
+                                        <i class="bi bi-plus-lg me-1"></i>Add another size
+                                    </button>
+                                </div>
+                                <div class="extra-sizes-list" id="addExtraSizes"></div>
+                                <div class="price-note">
+                                    Need a size besides Regular and Grande (e.g. Mini, Venti, Family)? Add it with its own name and price.
+                                </div>
+                            </div>
+
                             <div class="price-note mt-2">
-                                At least one size must be enabled. When both sizes are enabled, the Regular price must be lower than the Grande price (not required for Bundle products).
+                                At least one size must be enabled (Regular, Grande, or a custom size). When both Regular and Grande are enabled, the Regular price must be lower than the Grande price (not required for Bundle products).
                             </div>
 
                             <div class="size-price-error" id="addSizePriceError" role="alert"></div>
@@ -9496,7 +9594,7 @@ document.addEventListener('DOMContentLoaded', function () {
         function validateSizes(showError) {
             let message = '';
 
-            if (!regularToggle.checked && !grandeToggle.checked) {
+            if (!regularToggle.checked && !grandeToggle.checked && !form.querySelector('.extra-size-row')) {
                 message = 'At least one size must be enabled.';
             } else if (regularToggle.checked && grandeToggle.checked) {
                 const regular = parseFloat(regularInput.value);
@@ -9529,7 +9627,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         form.addEventListener('submit', function (event) {
-            if (!regularToggle.checked && !grandeToggle.checked) {
+            if (!regularToggle.checked && !grandeToggle.checked && !form.querySelector('.extra-size-row')) {
                 event.preventDefault();
                 validateSizes(true);
                 return;
@@ -9563,6 +9661,126 @@ document.addEventListener('DOMContentLoaded', function () {
         typeId: 'editProductType'
     });
 
+});
+</script>
+
+<style>
+.extra-size-row { margin-bottom: .5rem; }
+.extra-size-row .extra-size-name { min-width: 0; flex: 1 1 45%; }
+.extra-size-row .extra-size-price { min-width: 0; flex: 1 1 35%; }
+</style>
+
+<script>
+/* =========================================================
+   EXTRA (CUSTOM) SIZES: add / remove rows in the product forms
+========================================================= */
+document.addEventListener('DOMContentLoaded', function () {
+
+    function createRow(name, price) {
+        const row = document.createElement('div');
+        row.className = 'input-group extra-size-row';
+
+        const nameInput = document.createElement('input');
+        nameInput.type = 'text';
+        nameInput.name = 'extra_size_name[]';
+        nameInput.className = 'form-control extra-size-name';
+        nameInput.placeholder = 'Size name (e.g. Venti)';
+        nameInput.maxLength = 50;
+        nameInput.required = true;
+        nameInput.value = name || '';
+
+        const peso = document.createElement('span');
+        peso.className = 'input-group-text';
+        peso.textContent = '\u20B1';
+
+        const priceInput = document.createElement('input');
+        priceInput.type = 'number';
+        priceInput.name = 'extra_size_price[]';
+        priceInput.className = 'form-control extra-size-price';
+        priceInput.placeholder = '0.00';
+        priceInput.min = '0.01';
+        priceInput.step = '0.01';
+        priceInput.required = true;
+        priceInput.value = (price === undefined || price === null) ? '' : price;
+
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'btn btn-outline-danger remove-extra-size-btn';
+        removeBtn.setAttribute('aria-label', 'Remove size');
+        removeBtn.innerHTML = '<i class="bi bi-x-lg"></i>';
+
+        row.append(nameInput, peso, priceInput, removeBtn);
+        return row;
+    }
+
+    function notifyForm(list) {
+        /* re-run the existing "at least one size" check */
+        const form = list.closest('form');
+        const toggle = form && form.querySelector('.size-toggle-checkbox');
+        if (toggle) toggle.dispatchEvent(new Event('change'));
+    }
+
+    function addRow(list, name, price) {
+        if (list.querySelectorAll('.extra-size-row').length >= 10) {
+            alert('You can add up to 10 extra sizes per product.');
+            return null;
+        }
+        const row = createRow(name, price);
+        list.appendChild(row);
+        notifyForm(list);
+        return row;
+    }
+
+    function clearRows(list) {
+        list.innerHTML = '';
+        notifyForm(list);
+    }
+
+    document.addEventListener('click', function (event) {
+        const addBtn = event.target.closest('.add-extra-size-btn');
+        if (addBtn) {
+            const list = document.getElementById(addBtn.getAttribute('data-target'));
+            if (list) {
+                const row = addRow(list);
+                if (row) row.querySelector('.extra-size-name').focus();
+            }
+            return;
+        }
+
+        const removeBtn = event.target.closest('.remove-extra-size-btn');
+        if (removeBtn) {
+            const row = removeBtn.closest('.extra-size-row');
+            const list = row.parentElement;
+            row.remove();
+            notifyForm(list);
+        }
+    });
+
+    /* Edit modal: fill in the product's saved extra sizes */
+    const editModal = document.getElementById('editProductModal');
+    const editList = document.getElementById('editExtraSizes');
+    if (editModal && editList) {
+        editModal.addEventListener('show.bs.modal', function (event) {
+            editList.innerHTML = '';
+            const button = event.relatedTarget;
+            let sizes = [];
+            try {
+                sizes = JSON.parse((button && button.getAttribute('data-extra-sizes')) || '[]');
+            } catch (e) { sizes = []; }
+            sizes.forEach(function (s) { addRow(editList, s.name, s.price); });
+        });
+    }
+
+    /* Add form: start clean whenever it is reset or reopened */
+    const addForm = document.getElementById('addProductForm');
+    const addList = document.getElementById('addExtraSizes');
+    const addModal = document.getElementById('addProductModal');
+    if (addForm && addList) {
+        addForm.addEventListener('reset', function () { clearRows(addList); });
+    }
+    if (addModal && addList) {
+        addModal.addEventListener('hidden.bs.modal', function () { clearRows(addList); });
+    }
 });
 </script>
 
