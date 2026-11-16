@@ -2348,6 +2348,71 @@ body { background: #F7F5F2; }
 <?php endif; ?>
 
 <script>
+/* =========================================================
+   DETAILED BREAKDOWN TABS + KEY TAKEAWAYS TOGGLE
+   Works with or without Bootstrap's JavaScript, so the tabs are
+   always clickable. Remembers the open tab after the filter reloads.
+========================================================= */
+(function () {
+    var KEY = 'salesReportsActiveTab';
+
+    function showTab(btn) {
+        var targetSel = btn.getAttribute('data-bs-target');
+        var pane = targetSel ? document.querySelector(targetSel) : null;
+        if (!pane) return;
+
+        var nav = btn.closest('.sr-tabs');
+        nav.querySelectorAll('button').forEach(function (b) {
+            b.classList.toggle('active', b === btn);
+            b.setAttribute('aria-selected', b === btn ? 'true' : 'false');
+        });
+
+        pane.parentElement.querySelectorAll(':scope > .tab-pane').forEach(function (p) {
+            var on = p === pane;
+            p.classList.toggle('active', on);
+            p.classList.toggle('show', on);
+        });
+
+        try { sessionStorage.setItem(KEY, targetSel); } catch (e) {}
+    }
+
+    function toggleCollapse(btn) {
+        var body = document.querySelector(btn.getAttribute('data-bs-target'));
+        if (!body) return;
+        var open = body.classList.toggle('show');
+        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        btn.classList.toggle('collapsed', !open);
+        body.style.display = open ? '' : 'none';
+    }
+
+    /* Capture phase + stopImmediatePropagation: one handler only,
+       so it never fights with Bootstrap's own data-api if it is loaded. */
+    document.addEventListener('click', function (e) {
+        var tabBtn = e.target.closest('.sr-tabs button[data-bs-target]');
+        if (tabBtn) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            showTab(tabBtn);
+            return;
+        }
+
+        var colBtn = e.target.closest('.sa-takeaways-toggle[data-bs-target]');
+        if (colBtn) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            toggleCollapse(colBtn);
+        }
+    }, true);
+
+    try {
+        var saved = sessionStorage.getItem(KEY);
+        var btn = saved ? document.querySelector('.sr-tabs button[data-bs-target="' + saved + '"]') : null;
+        if (btn) showTab(btn);
+    } catch (e) {}
+})();
+</script>
+
+<script>
 
 /* =========================================================
    SALES REPORT ACTION TOAST
