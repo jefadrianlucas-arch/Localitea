@@ -56,6 +56,85 @@ function saShare(float $part, float $whole): float
     return $whole > 0 ? ($part / $whole) * 100 : 0.0;
 }
 
+/*
+ * Format a promotion's assigned run dates for the reports.
+ *   2026-11-16 .. 2026-11-18 -> "Nov 16-18, 2026"
+ *   2026-11-30 .. 2026-12-02 -> "Nov 30 - Dec 2, 2026"
+ *   2026-12-30 .. 2027-01-02 -> "Dec 30, 2026 - Jan 2, 2027"
+ *   same day                 -> "Nov 16, 2026"
+ * Returns '' when the dates are unknown (e.g. the promotion was deleted).
+ */
+function saPromoPeriod(?string $startDate, ?string $endDate): string
+{
+    $startDate = trim((string)$startDate);
+    $endDate   = trim((string)$endDate);
+
+    if ($startDate === '' && $endDate === '') {
+        return '';
+    }
+
+    try {
+        $s = new DateTimeImmutable($startDate !== '' ? $startDate : $endDate);
+        $e = new DateTimeImmutable($endDate !== '' ? $endDate : $startDate);
+    } catch (Exception $ex) {
+        return '';
+    }
+
+    if ($e < $s) {
+        [$s, $e] = [$e, $s];
+    }
+
+    if ($s->format('Y-m-d') === $e->format('Y-m-d')) {
+        return $s->format('M j, Y');
+    }
+
+    if ($s->format('Y') !== $e->format('Y')) {
+        return $s->format('M j, Y') . ' - ' . $e->format('M j, Y');
+    }
+
+    if ($s->format('m') !== $e->format('m')) {
+        return $s->format('M j') . ' - ' . $e->format('M j, Y');
+    }
+
+    return $s->format('M') . ' ' . $s->format('j') . '-' . $e->format('j, Y');
+}
+
+/*
+ * Current status of a promotion for the reports.
+ * Note: the database only stores is_active (no deactivation date), so a
+ * promotion switched off before its end date shows "Deactivated" and the
+ * real stop can be read from the last day it was sold.
+ */
+function saPromoStatus($isActive, $isArchived, ?string $endDate): string
+{
+    if ($isActive === null && $isArchived === null) {
+        return 'Deleted';
+    }
+    if ((int)$isArchived === 1) {
+        return 'Archived';
+    }
+    if ((int)$isActive !== 1) {
+        return 'Deactivated';
+    }
+    $today = (new DateTimeImmutable('now', new DateTimeZone('Asia/Manila')))->format('Y-m-d');
+    return ($endDate !== null && $endDate !== '' && $endDate < $today) ? 'Ended' : 'Active';
+}
+
+/* Number of calendar days a promotion was scheduled to run (inclusive). */
+function saPromoDays(?string $startDate, ?string $endDate): int
+{
+    if (!$startDate || !$endDate) {
+        return 0;
+    }
+
+    try {
+        return (int)(new DateTimeImmutable($startDate))
+            ->diff(new DateTimeImmutable($endDate))->days + 1;
+    } catch (Exception $ex) {
+        return 0;
+    }
+}
+
 function salesAnalytics(PDO $pdo, string $start, string $end): ?array
 {
     try {
@@ -371,15 +450,33 @@ function salesAnalytics(PDO $pdo, string $start, string $end): ?array
          *   amount     = value given away (discount)
          *   sales      = what customers actually paid on those orders
          */
+        /*
+         * Every row is one promotion (by promotion_id, so two promotions that
+         * share a title - e.g. two "Buy 2 Get 1 Free" runs - stay separate).
+         *   start_date / end_date = the scheduled run dates
+         *   first_sold / last_sold = first and last day it was actually used
+         *                            on a completed order in this report
+         *   is_active / is_archived = its current status
+         * Orders stay in order_promotions even if the promotion is later
+         * deactivated or archived, so earlier sales are still reported.
+         */
         $st = $pdo->prepare("
-            SELECT op.promotion_title AS title,
+            SELECT op.promotion_id AS promotion_id,
+                   op.promotion_title AS title,
                    op.rule_type AS rule_type,
+                   MIN(pm.start_date) AS start_date,
+                   MAX(pm.end_date) AS end_date,
+                   MAX(pm.is_active) AS is_active,
+                   MAX(pm.is_archived) AS is_archived,
+                   MIN($saleDate) AS first_sold,
+                   MAX($saleDate) AS last_sold,
                    COUNT(DISTINCT o.id) AS used,
                    COALESCE(SUM(op.discount_amount), 0) AS amount,
                    COALESCE(SUM(o.total_amount), 0) AS sales,
                    COALESCE(SUM(f.free_qty), 0) AS free_items
             FROM order_promotions op
             JOIN orders o ON o.id = op.order_id
+            LEFT JOIN promotions pm ON pm.id = op.promotion_id
             LEFT JOIN (
                 SELECT order_id, SUM(quantity) AS free_qty
                 FROM order_items
@@ -387,7 +484,7 @@ function salesAnalytics(PDO $pdo, string $start, string $end): ?array
                 GROUP BY order_id
             ) f ON f.order_id = o.id
             WHERE $saleRange
-            GROUP BY op.promotion_title, op.rule_type
+            GROUP BY op.promotion_id, op.promotion_title, op.rule_type
             ORDER BY sales DESC
         ");
         $st->execute([$start, $end]);

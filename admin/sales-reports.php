@@ -1608,11 +1608,30 @@ body { background: #F7F5F2; }
                                         </div>
                                         <div class="table-responsive">
                                             <table class="sa-table">
-                                                <thead><tr><th>Promotion</th><th>Type</th><th>Orders</th><th>Free items</th><th>Value given away</th><th>Sales (paid)</th></tr></thead>
+                                                <thead><tr><th>Promotion</th><th>Promo period</th><th>Status</th><th>Type</th><th>Orders</th><th>Free items</th><th>Value given away</th><th>Sales (paid)</th></tr></thead>
                                                 <tbody>
                                                     <?php foreach ($analytics['promotions'] as $saPr): ?>
                                                         <tr>
-                                                            <td><?= htmlspecialchars((string)$saPr['title']) ?></td>
+                                                            <td>
+                                                                <?= htmlspecialchars((string)$saPr['title']) ?>
+                                                                <div class="sa-note">Promo ID #<?= (int)$saPr['promotion_id'] ?></div>
+                                                            </td>
+                                                            <?php
+                                                            $saPrPeriod = saPromoPeriod($saPr['start_date'] ?? null, $saPr['end_date'] ?? null);
+                                                            $saPrDays   = saPromoDays($saPr['start_date'] ?? null, $saPr['end_date'] ?? null);
+                                                            ?>
+                                                            <td>
+                                                                <?php if ($saPrPeriod !== ''): ?>
+                                                                    <?= htmlspecialchars($saPrPeriod) ?>
+                                                                    <?php if ($saPrDays > 0): ?>
+                                                                        <div class="sa-note"><?= $saPrDays ?> day<?= $saPrDays === 1 ? '' : 's' ?></div>
+                                                                    <?php endif; ?>
+                                                                <?php else: ?>
+                                                                    &mdash;
+                                                                <?php endif; ?>
+                                                                <div class="sa-note">Sold: <?= htmlspecialchars(saPromoPeriod($saPr['first_sold'] ?? null, $saPr['last_sold'] ?? null)) ?></div>
+                                                            </td>
+                                                            <td><?= htmlspecialchars(saPromoStatus($saPr['is_active'] ?? null, $saPr['is_archived'] ?? null, $saPr['end_date'] ?? null)) ?></td>
                                                             <td><?= htmlspecialchars(str_replace('_', ' ', (string)$saPr['rule_type'])) ?></td>
                                                             <td><?= number_format((int)$saPr['used']) ?></td>
                                                             <td><?= number_format((int)$saPr['free_items']) ?></td>

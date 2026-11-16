@@ -1874,6 +1874,7 @@ function localiteaApplyBestPromotion(
 
     $result['snapshot'] = json_encode(
         [
+            'promotion_id' => (int)$bestPromotion['id'],
             'title' => $bestPromotion['title'],
             'description' => $bestPromotion['description'],
             'start_date' => $bestPromotion['start_date'],

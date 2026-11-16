@@ -646,18 +646,21 @@ $overviewCols  = $overviewSplit
                 <div class="empty">No promotions were used on completed orders in this period.</div>
             <?php else: ?>
                 <table class="t">
-                    <thead><tr><th>Promotion</th><th>Orders</th><th>Free Items</th><th>Value Given Away</th><th>Sales (Paid)</th></tr></thead>
+                    <thead><tr><th>Promotion</th><th>Promo Period</th><th>Status</th><th>Orders</th><th>Free Items</th><th>Value Given Away</th><th>Sales (Paid)</th></tr></thead>
                     <tbody>
                         <?php foreach ($analytics['promotions'] as $paPr): ?>
                             <tr>
-                                <td><?= htmlspecialchars((string)$paPr['title']) ?></td>
+                                <td><?= htmlspecialchars((string)$paPr['title']) ?> <small>(ID #<?= (int)$paPr['promotion_id'] ?>)</small></td>
+                                <?php $paPrPeriod = saPromoPeriod($paPr['start_date'] ?? null, $paPr['end_date'] ?? null); ?>
+                                <td><?= $paPrPeriod !== '' ? htmlspecialchars($paPrPeriod) : '&mdash;' ?><br><small>Sold: <?= htmlspecialchars(saPromoPeriod($paPr['first_sold'] ?? null, $paPr['last_sold'] ?? null)) ?></small></td>
+                                <td><?= htmlspecialchars(saPromoStatus($paPr['is_active'] ?? null, $paPr['is_archived'] ?? null, $paPr['end_date'] ?? null)) ?></td>
                                 <td><?= number_format((int)$paPr['used']) ?></td>
                                 <td><?= number_format((int)$paPr['free_items']) ?></td>
                                 <td><?= $paPeso($paPr['amount']) ?></td>
                                 <td><?= $paPeso($paPr['sales']) ?></td>
                             </tr>
                         <?php endforeach; ?>
-                        <tr class="total"><td>Total</td><td><?= number_format((int)$analytics['promoSummary']['orders']) ?></td><td><?= number_format((int)$analytics['promoSummary']['free_items']) ?></td><td><?= $paPeso($analytics['promoSummary']['discount']) ?></td><td><?= $paPeso($analytics['promoSummary']['sales']) ?></td></tr>
+                        <tr class="total"><td>Total</td><td></td><td></td><td><?= number_format((int)$analytics['promoSummary']['orders']) ?></td><td><?= number_format((int)$analytics['promoSummary']['free_items']) ?></td><td><?= $paPeso($analytics['promoSummary']['discount']) ?></td><td><?= $paPeso($analytics['promoSummary']['sales']) ?></td></tr>
                     </tbody>
                 </table>
                 <div class="note">Free items are not counted as sales. "Sales (Paid)" is what customers actually paid on orders that used a promotion.</div>
