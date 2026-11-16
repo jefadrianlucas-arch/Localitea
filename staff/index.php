@@ -2451,6 +2451,12 @@ require_once '../includes/header.php';
         min-width: 145px;
         height: 38px;
         font-size: .82rem;
+        border-color: #8B6F5A;
+    }
+
+    .order-source-filter:focus {
+        border-color: #6F4E37;
+        box-shadow: 0 0 0 .2rem rgba(111, 78, 55, .16);
     }
 
     .search-box {
@@ -3874,6 +3880,27 @@ require_once '../includes/header.php';
         opacity: .8;
     }
 
+    #staffOverdueOrderModal .overdue-order-modal-close {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 36px;
+        height: 36px;
+        margin-left: auto;
+        padding: 0;
+        border: 0;
+        border-radius: 8px;
+        background: transparent;
+        color: #4A3525;
+        font-size: 1rem;
+        opacity: 1;
+    }
+
+    #staffOverdueOrderModal .overdue-order-modal-close:hover {
+        background: #F3E8DE;
+        color: #3F2D20;
+    }
+
     #staffGcashReviewModal .modal-body {
         flex: 1 1 auto;
         min-height: 0;
@@ -4645,7 +4672,7 @@ require_once '../includes/header.php';
     .staff-orders-table tbody td {
         padding: 11px 10px;
         vertical-align: middle;
-        border-bottom: 1px solid #E6DCCF;
+        border-bottom: 1px solid #C9B19D;
         color: #4A3525;
         font-size: .78rem;
         font-weight: 400;
@@ -4690,9 +4717,17 @@ require_once '../includes/header.php';
     }
 
     .order-table-claim {
-        color: #6F4E37;
-        font-weight: 500;
-        white-space: nowrap;
+        display: inline-block;
+        max-width: 100%;
+        padding: 4px 8px;
+        border: 1px solid #B99B82;
+        border-radius: 6px;
+        background: #F5EFE9;
+        color: #4A3525;
+        font-size: .84rem;
+        font-weight: 700;
+        line-height: 1.3;
+        overflow-wrap: anywhere;
     }
 
     .order-table-payment {
@@ -5450,7 +5485,7 @@ require_once '../includes/header.php';
 
         .staff-orders-table tbody tr.order-card td:nth-child(1) {
             padding-bottom: 10px;
-            border-bottom: 1px solid #E6DCCF;
+            border-bottom: 1px solid #C9B19D;
         }
 
         .staff-orders-table .order-table-primary { white-space: normal; }
@@ -7856,7 +7891,9 @@ require_once '../includes/header.php';
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title" id="staffOverdueOrderModalLabel">Pickup time has passed</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                <button type="button" class="overdue-order-modal-close" data-bs-dismiss="modal" aria-label="Close">
+                    <i class="bi bi-x-lg" aria-hidden="true"></i>
+                </button>
             </div>
             <div class="modal-body">
                 <p class="fw-semibold mb-2" id="staffOverdueOrderReference"></p>
@@ -14306,15 +14343,16 @@ document.addEventListener('DOMContentLoaded', function () {
         border: 1px solid #D5C1AF;
         border-radius: 6px;
         background: #FBF7F2;
-        color: #6F4E37;
-        font-size: .62rem;
+        color: #4A3525;
+        font-size: .72rem;
         font-weight: 700;
         line-height: 1.2;
         overflow-wrap: anywhere;
     }
 
     .order-table-mobile-claim-label {
-        color: #8B796A;
+        color: #6F4E37;
+        font-size: .67rem;
         font-weight: 600;
     }
 
@@ -14478,7 +14516,7 @@ document.addEventListener('DOMContentLoaded', function () {
         padding: 10px !important;
     }
     .staff-orders-table .order-table-primary { font-size: .73rem; }
-    .order-table-mobile-claim { font-size: .58rem; padding: 4px 5px; }
+    .order-table-mobile-claim { font-size: .66rem; padding: 4px 5px; }
     .staff-orders-table tbody tr.order-card td:nth-child(4) .order-table-primary,
     .staff-orders-table .order-table-total { font-size: .66rem; }
     .staff-orders-table .order-table-payment { font-size: .58rem; padding: 4px 5px; }
