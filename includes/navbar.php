@@ -555,6 +555,7 @@ if (
             class="nav-link nav-icon-link position-relative ms-auto me-1 d-lg-none navbar-cart-mobile"
             href="../customer/cart.php"
             aria-label="Cart"
+            data-cart-link
         >
             <i class="bi bi-cart3"></i>
             <?php if ($cart_count > 0): ?>
@@ -605,6 +606,7 @@ if (
                         class="nav-link nav-icon-link position-relative"
                         href="../customer/cart.php"
                         aria-label="Cart"
+                        data-cart-link
                     >
                         <i class="bi bi-cart3"></i>
 
@@ -806,4 +808,32 @@ if (logoutBtn && logoutModal && cancelLogout) {
         }
     });
 }
+</script>
+
+<script>
+/*
+ * Updates the cart badge in the navbar (desktop + phone) without a page
+ * reload. Called after an item is added to the cart in the background.
+ */
+window.updateNavbarCartCount = function (count) {
+    count = parseInt(count, 10);
+    if (isNaN(count) || count < 0) { return; }
+
+    document.querySelectorAll('[data-cart-link]').forEach(function (link) {
+        var badge = link.querySelector('.icon-badge');
+
+        if (count <= 0) {
+            if (badge) { badge.remove(); }
+            return;
+        }
+
+        if (!badge) {
+            badge = document.createElement('span');
+            badge.className = 'icon-badge';
+            link.appendChild(badge);
+        }
+
+        badge.textContent = count > 99 ? '99+' : String(count);
+    });
+};
 </script>

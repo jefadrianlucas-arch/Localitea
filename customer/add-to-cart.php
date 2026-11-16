@@ -1090,10 +1090,17 @@ if ($discountType !== 'none') {
     }
 
     if ($isAjaxRequest) {
+        /* Same total the navbar badge shows (all quantities in the cart). */
+        $cartCount = 0;
+        foreach ($_SESSION['cart'] as $cartLine) {
+            $cartCount += max(0, (int)($cartLine['quantity'] ?? 0));
+        }
+
         header('Content-Type: application/json; charset=utf-8');
         echo json_encode([
             'success' => true,
             'message' => 'Added to cart.',
+            'cart_count' => $cartCount,
             'redirect' => 'menu.php'
         ]);
         exit;

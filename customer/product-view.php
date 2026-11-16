@@ -1808,6 +1808,13 @@ document.addEventListener('DOMContentLoaded', function () {
                         submitButton.innerHTML = originalButtonHTML;
                     }
 
+                    if (
+                        typeof window.updateNavbarCartCount === 'function' &&
+                        typeof data.cart_count !== 'undefined'
+                    ) {
+                        window.updateNavbarCartCount(data.cart_count);
+                    }
+
                     showLocaliteaToast('Added to cart.', 'success');
                     return;
                 }
