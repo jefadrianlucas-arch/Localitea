@@ -5153,23 +5153,22 @@ require_once '../includes/header.php';
 
         body.is-printing-receipt #receiptPrintArea {
             display: block !important;
-            width: 80mm;
+            width: 58mm;
             max-width: 100%;
-            margin: 0 auto !important;   /* centred on the page */
-            padding: 6mm 4mm;
+            margin: 0 auto !important;
+            padding: 2mm;
             box-sizing: border-box;
             color: #000000;
-            font-size: 14px;
-            line-height: 1.45;
+            font-size: 10px;
+            line-height: 1.25;
         }
 
-        /* Bigger, easier-to-read text on the printed copy. */
         #receiptPrintArea .small {
-            font-size: 13px !important;
+            font-size: 9px !important;
         }
 
         #receiptPrintArea h4 {
-            font-size: 22px !important;
+            font-size: 15px !important;
         }
 
         #receiptPrintArea .receipt-paper strong {
@@ -5186,12 +5185,27 @@ require_once '../includes/header.php';
             background: #FFFFFF !important;
         }
 
-        #receiptPrintArea .text-muted {
-            color: #333333 !important;
-        }
-
         #receiptPrintArea .receipt-line {
             border-top: 1px dashed #000000 !important;
+            margin: 5px 0 !important;
+        }
+
+        #receiptPrintArea .mb-2 {
+            margin-bottom: 2px !important;
+        }
+
+        #receiptPrintArea .mb-1,
+        #receiptPrintArea .mt-1 {
+            margin-top: 1px !important;
+            margin-bottom: 1px !important;
+        }
+
+        #receiptPrintArea strong {
+            overflow-wrap: anywhere;
+        }
+
+        #receiptPrintArea .text-muted {
+            color: #333333 !important;
         }
     }
 /* =========================================================
