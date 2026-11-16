@@ -1380,7 +1380,7 @@ body { background: #F7F5F2; }
                 <div class="stat-item">
                     <div class="summary-label">Cancelled</div>
                     <div class="stat-value"><?= number_format($saOut['cancelled']) ?> <span class="sr-sub">orders</span></div>
-                    <div class="sa-delta sa-flat"><?= $saPeso($saOut['cancelled_amount']) ?> lost &middot; <?= number_format($saOut['cancel_rate'], 1) ?>%</div>
+                    <div class="sa-delta sa-flat"><?= number_format($saOut['cancel_rate'], 1) ?>% of orders placed &middot; <?= number_format($saOut['stage']['after']['orders']) ?> after prep started</div>
                 </div>
                 <div class="stat-item">
                     <div class="summary-label">Refunds paid</div>
@@ -1731,6 +1731,11 @@ body { background: #F7F5F2; }
                                             <tr><td>Orders placed</td><td><?= number_format($saOut['placed']) ?></td></tr>
                                             <tr><td>Completed</td><td><?= number_format($saOut['completed']) ?></td></tr>
                                             <tr><td>Cancelled</td><td><?= number_format($saOut['cancelled']) ?> (<?= number_format($saOut['cancel_rate'], 1) ?>%)</td></tr>
+                                            <tr><td class="ps-3">&nbsp;&nbsp;before preparation <span class="sr-sub">(nothing made)</span></td><td><?= number_format($saOut['stage']['before']['orders']) ?></td></tr>
+                                            <tr><td class="ps-3">&nbsp;&nbsp;after preparation started <span class="sr-sub">(drink made, ₱<?= number_format($saOut['stage']['after']['amount'], 2) ?>)</span></td><td><?= number_format($saOut['stage']['after']['orders']) ?></td></tr>
+                                            <?php if ($saOut['stage']['unknown']['orders'] > 0): ?>
+                                            <tr><td class="ps-3">&nbsp;&nbsp;stage not recorded</td><td><?= number_format($saOut['stage']['unknown']['orders']) ?></td></tr>
+                                            <?php endif; ?>
                                             <tr><td>Still in progress</td><td><?= number_format($saOut['in_progress']) ?></td></tr>
                                         </tbody>
                                     </table>

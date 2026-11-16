@@ -276,6 +276,35 @@ function salesAnalytics(PDO $pdo, string $start, string $end): ?array
                 $outcomes['in_progress'] += $n;
             }
         }
+
+        /* Cancelled orders by the stage they were cancelled at.
+         * A cancellation is NOT money lost: before preparation nothing was
+         * made, and any payment already collected is refunded. Only orders
+         * cancelled once preparing/ready (made, then not picked up) cost
+         * the shop real ingredients and work. */
+        $st = $pdo->prepare("
+            SELECT o.total_amount AS amount,
+                   (SELECT h.from_status
+                    FROM order_status_history h
+                    WHERE h.order_id = o.id AND h.to_status = 'cancelled'
+                    ORDER BY h.id DESC LIMIT 1) AS from_status
+            FROM orders o
+            WHERE o.status = 'cancelled' AND DATE(o.created_at) BETWEEN ? AND ?
+        ");
+        $st->execute([$start, $end]);
+        $outcomes['stage'] = [
+            'before'  => ['orders' => 0, 'amount' => 0.0],   // never started
+            'after'   => ['orders' => 0, 'amount' => 0.0],   // already made
+            'unknown' => ['orders' => 0, 'amount' => 0.0],   // stage not recorded
+        ];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $from = (string)($r['from_status'] ?? '');
+            $k = in_array($from, ['preparing', 'ready'], true) ? 'after'
+               : ($from === '' ? 'unknown' : 'before');
+            $outcomes['stage'][$k]['orders']++;
+            $outcomes['stage'][$k]['amount'] += (float)$r['amount'];
+        }
+
         $outcomes['cancel_rate'] = saShare(
             (float)$outcomes['cancelled'],
             (float)$outcomes['placed']
@@ -472,12 +501,18 @@ function salesAnalytics(PDO $pdo, string $start, string $end): ?array
 
         if ($outcomes['placed'] > 0 && $outcomes['cancelled'] > 0) {
             $line = sprintf(
-                '%.1f%% of orders placed in this period were cancelled (%d of %d), worth ₱%s in lost sales.',
+                '%.1f%% of orders placed in this period were cancelled (%d of %d).',
                 $outcomes['cancel_rate'],
                 $outcomes['cancelled'],
-                $outcomes['placed'],
-                number_format($outcomes['cancelled_amount'], 2)
+                $outcomes['placed']
             );
+            $sg = $outcomes['stage'];
+            if ($sg['before']['orders'] > 0) {
+                $line .= sprintf(' %d were cancelled before preparation (nothing was made).', $sg['before']['orders']);
+            }
+            if ($sg['after']['orders'] > 0) {
+                $line .= sprintf(' %d were cancelled after preparation started (₱%s of drinks already made).', $sg['after']['orders'], number_format($sg['after']['amount'], 2));
+            }
             if ($outcomes['cancel_rate'] >= 15) {
                 $line .= ' This is high and worth reviewing.';
             }

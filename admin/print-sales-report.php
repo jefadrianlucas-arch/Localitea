@@ -672,7 +672,9 @@ $overviewCols  = $overviewSplit
                 <tbody>
                     <tr><td>Placed in period</td><td><?= number_format($paOut['placed']) ?></td><td></td></tr>
                     <tr><td>Completed</td><td><?= number_format($paOut['completed']) ?></td><td></td></tr>
-                    <tr><td>Cancelled (<?= number_format($paOut['cancel_rate'], 1) ?>%)</td><td><?= number_format($paOut['cancelled']) ?></td><td><?= $paPeso($paOut['cancelled_amount']) ?></td></tr>
+                    <tr><td>Cancelled (<?= number_format($paOut['cancel_rate'], 1) ?>%)</td><td><?= number_format($paOut['cancelled']) ?></td><td></td></tr>
+                    <tr><td>&nbsp;&nbsp;before preparation (nothing made)</td><td><?= number_format($paOut['stage']['before']['orders']) ?></td><td></td></tr>
+                    <tr><td>&nbsp;&nbsp;after preparation started (made)</td><td><?= number_format($paOut['stage']['after']['orders']) ?></td><td><?= $paPeso($paOut['stage']['after']['amount']) ?></td></tr>
                     <tr><td>In progress</td><td><?= number_format($paOut['in_progress']) ?></td><td></td></tr>
                     <tr><td>Refunds paid</td><td><?= number_format($paRef['refunded_orders']) ?></td><td><?= $paPeso($paRef['refunded_amount']) ?></td></tr>
                     <tr><td>Refunds pending</td><td><?= number_format($paRef['pending_orders']) ?></td><td><?= $paPeso($paRef['pending_amount']) ?></td></tr>
