@@ -1719,12 +1719,100 @@ body { background: #F8F4EF; }
 .walkin-clear-btn { margin-top: 8px; background: #FFFFFF; color: #A43B3B; border-color: #D9B4B4; }
 
 /* ---------- Toast ---------- */
-.walkin-toast { position: fixed; right: 22px; top: 88px; z-index: 2100; width: min(380px, calc(100vw - 36px)); }
-.walkin-toast .toast { border: 1px solid #6F4E37 !important; border-left: 4px solid #4A3525 !important; border-radius: 11px !important; box-shadow: 0 8px 24px rgba(44, 34, 30, .16) !important; }
-.walkin-toast .toast.is-error { border-left-color: #C33131 !important; }
+.walkin-toast-stack {
+    position: fixed;
+    top: 88px;
+    right: 24px;
+    z-index: 2100;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    width: min(420px, calc(100vw - 32px));
+    max-height: calc(100vh - 108px);
+    overflow-y: auto;
+    padding: 2px;
+    pointer-events: none;
+}
+.walkin-toast-stack .orders-toast { width: 100%; flex: 0 0 auto; pointer-events: auto; }
+.orders-toast {
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 13px 14px;
+    background: #FFFFFF;
+    border: 2px solid #6F4E37;
+    border-radius: 12px;
+    box-shadow: 0 10px 28px rgba(44,34,30,.18);
+    color: #2C221E;
+    pointer-events: auto;
+    overflow: hidden;
+    animation: ordersToastIn .22s ease-out;
+}
+.orders-toast-success { border-left: 6px solid #4A8B5A; }
+.orders-toast-cancel { border-left: 6px solid #A33A3A; }
+.orders-toast-icon {
+    flex: 0 0 30px;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: #F3EADF;
+    color: #4A3525;
+    font-size: 15px;
+    margin-top: 1px;
+}
+.orders-toast-success .orders-toast-icon { color: #2F6E3E; background: #EAF6EE; }
+.orders-toast-cancel .orders-toast-icon { color: #8E2F2F; background: #FCE3E3; }
+.orders-toast-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.orders-toast-title { color: #2F6E3E; font-size: .94rem; line-height: 1.3; font-weight: 700; }
+.orders-toast-cancel .orders-toast-title { color: #8E2F2F; }
+.orders-toast-message { flex: 1; padding-top: 1px; font-size: .86rem; line-height: 1.45; font-weight: 500; }
+.orders-toast-close {
+    flex: 0 0 auto;
+    border: 0;
+    background: transparent;
+    color: #6F4E37;
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+.orders-toast-close:hover { background: #F0E6D6; color: #2C221E; }
+.orders-toast-progress {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    height: 3px;
+    width: 100%;
+    background: #6F4E37;
+    transform-origin: left center;
+    animation: ordersToastProgress 3.5s linear forwards;
+}
+.orders-toast-success .orders-toast-progress { background: #4A8B5A; }
+.orders-toast-cancel .orders-toast-progress { background: #A33A3A; }
+.orders-toast.is-closing { animation: ordersToastOut .18s ease-in forwards; }
+@keyframes ordersToastIn {
+    from { opacity: 0; transform: translateY(-8px) translateX(8px); }
+    to { opacity: 1; transform: translateY(0) translateX(0); }
+}
+@keyframes ordersToastOut {
+    from { opacity: 1; transform: translateY(0) translateX(0); }
+    to { opacity: 0; transform: translateY(-6px) translateX(8px); }
+}
+@keyframes ordersToastProgress {
+    from { transform: scaleX(1); }
+    to { transform: scaleX(0); }
+}
 /* Keep desktop notifications clear of the persistent current-order panel. */
 @media (min-width: 992px) {
-    .walkin-toast { right: 380px; width: min(340px, calc(100vw - 410px)); }
+    .walkin-toast-stack { right: 380px; width: min(340px, calc(100vw - 410px)); }
 }
 
 /* ---------- Modals ---------- */
@@ -1929,7 +2017,7 @@ body { background: #F8F4EF; }
     .walkin-place-btn, .walkin-clear-btn { min-height: 40px; }
     .walkin-place-btn { margin-top: 8px; }
     .walkin-clear-btn { margin-top: 6px; }
-    .walkin-toast { right: 12px; top: 72px; width: min(340px, calc(100vw - 24px)); }
+    .walkin-toast-stack { right: 12px; top: 72px; width: min(340px, calc(100vw - 24px)); }
 }
 @media (max-width: 575.98px) {
     #walkinProductModal .modal-dialog {
@@ -2387,15 +2475,14 @@ body { background: #F8F4EF; }
 </div>
 
 <?php if (isset($_GET['error']) || isset($_GET['promotion_added']) || isset($_GET['added']) || isset($_GET['updated']) || isset($_GET['cleared'])): ?>
-<div class="walkin-toast" aria-live="polite" aria-atomic="true">
-    <div class="toast <?= isset($_GET['error']) ? 'is-error' : '' ?>" role="status" data-bs-delay="3500">
-        <div class="toast-header">
-            <i class="bi <?= isset($_GET['error']) ? 'bi-exclamation-circle' : 'bi-check-circle' ?> me-2"></i>
-            <strong class="me-auto">Walk-in Order</strong>
-            <small>Now</small>
-            <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
-        </div>
-        <div class="toast-body">
+<div id="walkinToastStack" class="walkin-toast-stack" aria-live="polite" aria-relevant="additions">
+    <div class="orders-toast <?= isset($_GET['error']) ? 'orders-toast-cancel' : 'orders-toast-success' ?>" role="status">
+        <span class="orders-toast-icon">
+            <i class="bi <?= isset($_GET['error']) ? 'bi-exclamation-circle' : 'bi-check-circle' ?>"></i>
+        </span>
+        <span class="orders-toast-copy">
+            <strong class="orders-toast-title"><?= isset($_GET['error']) ? 'Unable to Update Order' : 'Walk-in Order' ?></strong>
+            <span class="orders-toast-message">
             <?php
             if (isset($_GET['error'])) {
                 $message = (string)$_GET['error'];
@@ -2408,9 +2495,14 @@ body { background: #F8F4EF; }
             } else {
                 $message = 'Walk-in order cleared.';
             }
-            echo htmlspecialchars($message);
+            echo htmlspecialchars($message, ENT_QUOTES, 'UTF-8');
             ?>
-        </div>
+            </span>
+        </span>
+        <button type="button" class="orders-toast-close" aria-label="Close notification">
+            <i class="bi bi-x-lg"></i>
+        </button>
+        <span class="orders-toast-progress" aria-hidden="true"></span>
     </div>
 </div>
 <?php endif; ?>
@@ -2485,7 +2577,7 @@ function walkinInit() {
         const el = document.getElementById(id);
         if (el && el.parentNode !== document.body) document.body.appendChild(el);
     });
-    document.querySelectorAll('.walkin-toast').forEach(function (el) {
+    document.querySelectorAll('#walkinToastStack').forEach(function (el) {
         if (el.parentNode !== document.body) document.body.appendChild(el);
     });
 
@@ -2950,29 +3042,78 @@ function walkinInit() {
     }
 
     /* ---------- notifications (toast) ---------- */
-    function showToast(message, isError) {
-        document.querySelectorAll('.walkin-toast').forEach(function (el) { el.remove(); });
-        const wrap = document.createElement('div');
-        wrap.className = 'walkin-toast';
-        wrap.setAttribute('aria-live', 'polite');
-        wrap.setAttribute('aria-atomic', 'true');
-        wrap.innerHTML =
-            '<div class="toast ' + (isError ? 'is-error' : '') + '" role="status" data-bs-delay="3500">' +
-                '<div class="toast-header">' +
-                    '<i class="bi ' + (isError ? 'bi-exclamation-circle' : 'bi-check-circle') + ' me-2"></i>' +
-                    '<strong class="me-auto">Walk-in Order</strong><small>Now</small>' +
-                    '<button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>' +
-                '</div>' +
-                '<div class="toast-body"></div>' +
-            '</div>';
-        wrap.querySelector('.toast-body').textContent = message;
-        document.body.appendChild(wrap);
-        const toastEl = wrap.querySelector('.toast');
-        if (window.bootstrap && bootstrap.Toast) {
-            toastEl.addEventListener('hidden.bs.toast', function () { wrap.remove(); });
-            bootstrap.Toast.getOrCreateInstance(toastEl, { autohide: true, delay: 3500 }).show();
+    function getWalkinToastStack() {
+        let stack = document.getElementById('walkinToastStack');
+        if (!stack) {
+            stack = document.createElement('div');
+            stack.id = 'walkinToastStack';
+            stack.className = 'walkin-toast-stack';
+            stack.setAttribute('aria-live', 'polite');
+            stack.setAttribute('aria-relevant', 'additions');
+            document.body.appendChild(stack);
         }
+        return stack;
     }
+
+    function initializeWalkinToast(toast) {
+        let closing = false;
+        const closeTimer = window.setTimeout(closeToast, 3500);
+
+        function closeToast() {
+            if (closing) return;
+            closing = true;
+            window.clearTimeout(closeTimer);
+            toast.classList.add('is-closing');
+            window.setTimeout(function () {
+                const stack = toast.parentElement;
+                toast.remove();
+                if (stack && stack.childElementCount === 0) stack.remove();
+            }, 190);
+        }
+
+        const closeButton = toast.querySelector('.orders-toast-close');
+        if (closeButton) closeButton.addEventListener('click', closeToast);
+    }
+
+    function showToast(message, isError, title) {
+        const toast = document.createElement('div');
+        toast.className = 'orders-toast ' + (isError ? 'orders-toast-cancel' : 'orders-toast-success');
+        toast.setAttribute('role', 'status');
+
+        const icon = document.createElement('span');
+        icon.className = 'orders-toast-icon';
+        const iconGlyph = document.createElement('i');
+        iconGlyph.className = 'bi ' + (isError ? 'bi-exclamation-circle' : 'bi-check-circle');
+        icon.appendChild(iconGlyph);
+
+        const copy = document.createElement('span');
+        copy.className = 'orders-toast-copy';
+        const heading = document.createElement('strong');
+        heading.className = 'orders-toast-title';
+        heading.textContent = title || (isError ? 'Unable to Update Order' : 'Walk-in Order');
+        const body = document.createElement('span');
+        body.className = 'orders-toast-message';
+        body.textContent = message;
+        copy.append(heading, body);
+
+        const closeButton = document.createElement('button');
+        closeButton.type = 'button';
+        closeButton.className = 'orders-toast-close';
+        closeButton.setAttribute('aria-label', 'Close notification');
+        const closeIcon = document.createElement('i');
+        closeIcon.className = 'bi bi-x-lg';
+        closeButton.appendChild(closeIcon);
+
+        const progress = document.createElement('span');
+        progress.className = 'orders-toast-progress';
+        progress.setAttribute('aria-hidden', 'true');
+
+        toast.append(icon, copy, closeButton, progress);
+        getWalkinToastStack().appendChild(toast);
+        initializeWalkinToast(toast);
+    }
+
+    document.querySelectorAll('#walkinToastStack .orders-toast').forEach(initializeWalkinToast);
 
     /* ---------- fast cart updates (no full page reload) ---------- */
     let cartBusy = false;
@@ -3015,6 +3156,7 @@ function walkinInit() {
         const q = finalUrl.searchParams;
         if (q.get('error')) return { ok: false, message: q.get('error') };
         if (q.get('added')) return { ok: true, message: 'Item added to the walk-in order.' };
+        if (q.get('promotion_added')) return { ok: true, message: 'Promotion added to the walk-in order.' };
         if (q.get('cleared')) return { ok: true, message: 'Walk-in order cleared.' };
         return { ok: true, message: 'Walk-in order updated.' };
     }
@@ -3033,7 +3175,7 @@ function walkinInit() {
         postCart(addForm).then(function (r) {
             if (r.navigated) return;
             const after = function () {
-                if (!r.ok) showToast(r.message, true);
+                showToast(r.message, !r.ok, r.ok ? 'Item Added' : 'Unable to Add Item');
             };
             if (productModal.classList.contains('show')) {
                 productModal.addEventListener('hidden.bs.modal', after, { once: true });
@@ -3182,15 +3324,6 @@ function walkinInit() {
             loadCategory(new URL(window.location.href), false);
         });
     }
-
-    document.querySelectorAll('.walkin-toast .toast').forEach(function (toastElement) {
-        if (window.bootstrap && bootstrap.Toast) {
-            bootstrap.Toast.getOrCreateInstance(toastElement, {
-                autohide: true,
-                delay: Number(toastElement.dataset.bsDelay || 3500)
-            }).show();
-        }
-    });
 
     window.__walkinInitDone = true;
 }
