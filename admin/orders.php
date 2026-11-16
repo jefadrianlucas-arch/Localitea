@@ -7616,12 +7616,11 @@ require_once '../includes/header.php';
                                                     Mark as No-show
                                                 </button>
                                             <?php elseif (
-                                                in_array($status, ['pending_verification', 'order_queue', 'confirmed', 'preparing'], true)
-                                                && (
-                                                    $modalIsOverdue
-                                                    || (!$isPendingGcash && $status !== 'preparing')
-                                                )
+                                                !$modalIsOverdue
+                                                && !$isPendingGcash
+                                                && in_array($status, ['pending_verification', 'order_queue', 'confirmed'], true)
                                             ): ?>
+                                                <!-- Overdue orders use the Cancel Order button on the table row instead. -->
                                                 <button
                                                     type="button"
                                                     class="btn order-modal-cancel-button"
@@ -7630,7 +7629,6 @@ require_once '../includes/header.php';
                                                     data-order-number="<?= htmlspecialchars($modalOrderNumber, ENT_QUOTES, 'UTF-8') ?>"
                                                     data-order-status="<?= htmlspecialchars($status, ENT_QUOTES, 'UTF-8') ?>"
                                                     data-order-payment-method="<?= htmlspecialchars(strtolower(trim((string)($order['payment_method'] ?? ''))), ENT_QUOTES, 'UTF-8') ?>"
-                                                    data-overdue-cancel="<?= $modalIsOverdue ? '1' : '0' ?>"
                                                 >
                                                     <i class="bi bi-x-circle me-1" aria-hidden="true"></i>
                                                     Cancel Order

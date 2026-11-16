@@ -115,6 +115,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
  */
 const STAFF_NO_SHOW_GRACE_MINUTES = 30;
 
+/*
+ * Reason stored when an order is cancelled because its pickup time passed.
+ * Order History uses this exact value to tag and filter overdue cancellations.
+ */
+const STAFF_OVERDUE_CANCELLATION_REASON = 'Pickup time passed (overdue)';
+
 function staffGetNoShowTiming(array $order): array
 {
     $pickupDate = trim((string)($order['pickup_date'] ?? ''));
@@ -434,7 +440,7 @@ $cancelled_page = max(
 /* Order History status filter: all finished orders, or only one kind. */
 $history_status = strtolower(trim((string)($_GET['history_status'] ?? 'all')));
 
-if (!in_array($history_status, ['all', 'completed', 'cancelled'], true)) {
+if (!in_array($history_status, ['all', 'completed', 'cancelled', 'overdue'], true)) {
     $history_status = 'all';
 }
 
@@ -760,6 +766,17 @@ if (
             $previous_status = (string)$orderData['status'];
             $orderPaymentMethod = strtolower(trim((string)($orderData['payment_method'] ?? '')));
 
+            /* The overdue reason is only valid for an unfinished order past its pickup time. */
+            $isOrderPickupOverdue = staffOrderPickupOverdue($orderData);
+            if (
+                $cancellation_reason === STAFF_OVERDUE_CANCELLATION_REASON
+                && (!$isOrderPickupOverdue || $previous_status === 'ready')
+            ) {
+                throw new RuntimeException(
+                    'The overdue reason can only be used for an unfinished order whose pickup time has passed.'
+                );
+            }
+
             $noShowTiming = staffGetNoShowTiming($orderData);
             $isEligibleReadyNoShow = (
                 $isNoShowCancellation
@@ -768,9 +785,17 @@ if (
                 && $noShowTiming['eligible']
             );
 
+            /*
+             * Overdue orders that are already Preparing cannot be processed,
+             * so Cancel is their only way out. Preparing orders that are
+             * not overdue stay non-cancellable.
+             */
             $isEligibleNormalCancellation = (
                 !$isNoShowCancellation
-                && in_array($previous_status, $allowed_to_cancel, true)
+                && (
+                    in_array($previous_status, $allowed_to_cancel, true)
+                    || ($previous_status === 'preparing' && $isOrderPickupOverdue)
+                )
             );
 
             if (!$isEligibleReadyNoShow && !$isEligibleNormalCancellation) {
@@ -1231,7 +1256,10 @@ if (
                     in_array($new_status, ['confirmed', 'preparing'], true)
                     || $isGcashVerificationTransition
                 );
-                if ($isProcessingTransition && staffOrderPickupOverdue($orderData)) {
+                if (
+                    ($isProcessingTransition || ($current_status === 'preparing' && $new_status === 'ready'))
+                    && staffOrderPickupOverdue($orderData)
+                ) {
                     throw new RuntimeException(
                         'This overdue order cannot be processed. Contact the customer and cancel the order if its pickup cannot be resolved.'
                     );
@@ -1723,6 +1751,12 @@ $cancelled_where = [
             : "o.status = 'cancelled'")
 ];
 $cancelled_params = [];
+
+/* Overdue filter: cancelled orders whose pickup time had passed. */
+if ($history_status === 'overdue') {
+    $cancelled_where[] = 'o.cancellation_reason = ?';
+    $cancelled_params[] = STAFF_OVERDUE_CANCELLATION_REASON;
+}
 
 if ($selected_source === 'online') {
     $cancelled_where[] = "COALESCE(o.order_source, 'online') <> 'walk_in'";
@@ -6273,6 +6307,9 @@ require_once '../includes/header.php';
                                     $discount_rate = (float)($order['discount_rate'] ?? 0);
                                     $discount_amount = (float)($order['discount_amount'] ?? 0);
                                     $isPickupOverdue = staffOrderPickupOverdue($order);
+                                    /* Overdue orders that are not Ready can only be cancelled. */
+                                    $isOverdueCancelOnly = $isPickupOverdue
+                                        && in_array($status, ['pending_verification', 'order_queue', 'confirmed', 'preparing'], true);
                                     $orderSource = ($order['order_source'] ?? '') === 'walk_in'
                                         ? 'walk_in'
                                         : 'online';
@@ -6418,7 +6455,23 @@ require_once '../includes/header.php';
                                             );
                                             ?>
 
-                                            <?php if ($isPendingGcash): ?>
+                                            <?php if ($isOverdueCancelOnly): ?>
+                                                <button
+                                                    type="button"
+                                                    class="btn action-btn btn-table-next-action btn-overdue-cancel"
+                                                    data-staff-cancel-order
+                                                    data-overdue-cancel="1"
+                                                    data-order-id="<?= $order_id ?>"
+                                                    data-order-number="<?= htmlspecialchars($order['order_number'] ?: 'ORD-' . $order_id, ENT_QUOTES, 'UTF-8') ?>"
+                                                    data-order-status="<?= htmlspecialchars($status, ENT_QUOTES, 'UTF-8') ?>"
+                                                    data-order-payment-method="<?= htmlspecialchars(strtolower(trim((string)($order['payment_method'] ?? ''))), ENT_QUOTES, 'UTF-8') ?>"
+                                                    title="The pickup time has passed. This order can only be cancelled."
+                                                    aria-label="Cancel overdue order <?= htmlspecialchars($order['order_number'] ?: 'ORD-' . $order_id, ENT_QUOTES, 'UTF-8') ?>"
+                                                >
+                                                    <i class="bi bi-x-circle" aria-hidden="true"></i>
+                                                    Cancel Order
+                                                </button>
+                                            <?php elseif ($isPendingGcash): ?>
                                                 <?php if ($rowPaymentProof !== ''): ?>
                                                     <button
                                                         type="button"
@@ -6890,6 +6943,7 @@ require_once '../includes/header.php';
                                             $isReadyNoShowCandidate = ($status === 'ready');
                                             $noShowTiming = staffGetNoShowTiming($order);
                                             $noShowEligible = $noShowTiming['eligible'];
+                                            $modalIsOverdue = staffOrderPickupOverdue($order);
                                             ?>
                                             <?php if ($isReadyNoShowCandidate): ?>
                                                 <!-- All Ready orders have a dedicated No-show action. Preparing orders remain non-cancellable. -->
@@ -6913,9 +6967,11 @@ require_once '../includes/header.php';
                                                     Mark as No-show
                                                 </button>
                                             <?php elseif (
-                                                !$isPendingGcash
+                                                !$modalIsOverdue
+                                                && !$isPendingGcash
                                                 && in_array($status, ['pending_verification', 'order_queue', 'confirmed'], true)
                                             ): ?>
+                                                <!-- Overdue orders use the Cancel Order button on the table row instead. -->
                                                 <button
                                                     type="button"
                                                     class="btn order-modal-cancel-button"
@@ -7479,7 +7535,7 @@ require_once '../includes/header.php';
                                 class="cancelled-filter-period"
                                 data-history-status
                             >
-                                <?php foreach (['all' => 'All', 'completed' => 'Completed', 'cancelled' => 'Cancelled'] as $historyStatusKey => $historyStatusLabel): ?>
+                                <?php foreach (['all' => 'All', 'completed' => 'Completed', 'cancelled' => 'Cancelled', 'overdue' => 'Overdue (cancelled)'] as $historyStatusKey => $historyStatusLabel): ?>
                                     <option
                                         value="<?= $historyStatusKey ?>"
                                         <?= $history_status === $historyStatusKey ? 'selected' : '' ?>
@@ -7660,6 +7716,9 @@ require_once '../includes/header.php';
                                             <div class="order-table-primary"><?= htmlspecialchars($cancelledIdentifier) ?></div>
                                             <div class="order-table-date">Claim: <?= htmlspecialchars($cancelled_order['claim_number'] ?: 'N/A') ?></div>
                                             <span class="status-badge status-<?= $historyIsCancelled ? 'cancelled' : 'completed' ?>"><?= $historyIsCancelled ? 'Cancelled' : 'Completed' ?></span>
+                                            <?php if ($historyIsCancelled && (string)($cancelled_order['cancellation_reason'] ?? '') === STAFF_OVERDUE_CANCELLATION_REASON): ?>
+                                                <span class="badge bg-danger">Pickup overdue</span>
+                                            <?php endif; ?>
                                             <span class="order-source-badge source-<?= $historySource ?>">
                                                 <i class="bi <?= $historyIsWalkin ? 'bi-shop' : 'bi-globe2' ?>" aria-hidden="true"></i>
                                                 <?= $historyIsWalkin ? 'Walk-in' : 'Online' ?>
@@ -7937,6 +7996,7 @@ require_once '../includes/header.php';
 
                     <input type="hidden" id="staffCancelOrderStatus" value="">
                     <input type="hidden" id="staffCancelOrderPaymentMethod" value="">
+                    <input type="hidden" id="staffCancelOrderOverdue" value="">
 
                     <div class="mb-3">
 
@@ -7977,6 +8037,9 @@ require_once '../includes/header.php';
                                 aria-labelledby="staffCancelReasonToggle"
                                 hidden
                             >
+                                <div class="staff-cancel-reason-group-label" data-overdue-reason-group hidden>Pickup time</div>
+                                <button type="button" class="staff-cancel-reason-option" role="option" aria-selected="false" data-value="Pickup time passed (overdue)" data-overdue-reason hidden>Pickup time passed (overdue)</button>
+
                                 <div class="staff-cancel-reason-group-label" data-standard-reason-group>Store and fulfillment reasons</div>
                                 <button type="button" class="staff-cancel-reason-option" role="option" aria-selected="false" data-value="Item unavailable / out of stock" data-standard-reason>Item unavailable / out of stock</button>
                                 <button type="button" class="staff-cancel-reason-option" role="option" aria-selected="false" data-value="Store unable to fulfill at selected pickup time" data-standard-reason>Store unable to fulfill at selected pickup time</button>
@@ -8056,6 +8119,21 @@ require_once '../includes/header.php';
     </div>
 </div>
 
+<style>
+/* Overdue orders: Cancel is the only row action. */
+.staff-orders-table .btn-table-next-action.btn-overdue-cancel {
+    border: 2px solid #B64A4A;
+    background: #B64A4A;
+    color: #FFFFFF;
+}
+.staff-orders-table .btn-table-next-action.btn-overdue-cancel:hover,
+.staff-orders-table .btn-table-next-action.btn-overdue-cancel:focus {
+    border-color: #8E2F2F;
+    background: #8E2F2F;
+    color: #FFFFFF;
+}
+</style>
+
 <div class="modal fade" id="staffOverdueOrderModal" tabindex="-1" aria-labelledby="staffOverdueOrderModalLabel" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content">
@@ -8067,7 +8145,7 @@ require_once '../includes/header.php';
             </div>
             <div class="modal-body">
                 <p class="fw-semibold mb-2" id="staffOverdueOrderReference"></p>
-                <p class="mb-0">This overdue order cannot be processed. Contact the customer. If the pickup cannot be resolved, close this message, open the order details, and cancel the order. Rescheduling is not currently available in the system.</p>
+                <p class="mb-0">This overdue order can no longer be processed. Contact the customer if needed, then use Cancel Order on the order row. Rescheduling is not currently available in the system.</p>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
@@ -8890,6 +8968,8 @@ document.addEventListener('DOMContentLoaded', function () {
             document.getElementById('staffCancelStatusFilter').value =
                 rejectButton.getAttribute('data-status-filter') || 'pending_verification';
             document.getElementById('staffCancelOrderStatus').value = 'pending_verification';
+            const overdueFlagReset = document.getElementById('staffCancelOrderOverdue');
+            if (overdueFlagReset) overdueFlagReset.value = '';
             document.getElementById('staffCancelOrderPaymentMethod').value = 'gcash';
             document.getElementById('staffCancelSearch').value =
                 rejectButton.getAttribute('data-search') || '';
@@ -9003,6 +9083,9 @@ document.addEventListener('DOMContentLoaded', function () {
                     );
                 const isNoShowAction =
                     cancelButton.getAttribute('data-no-show-only') === '1';
+                const isOverdueCancel =
+                    !isNoShowAction
+                    && cancelButton.getAttribute('data-overdue-cancel') === '1';
                 const cancelModalTitle =
                     document.getElementById('staffCancelOrderModalTitle');
                 const cancelActionText =
@@ -9024,11 +9107,16 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (orderPaymentMethodInput) {
                     orderPaymentMethodInput.value = cancelButton.getAttribute('data-order-payment-method') || '';
                 }
+                const orderOverdueInput =
+                    document.getElementById('staffCancelOrderOverdue');
+                if (orderOverdueInput) {
+                    orderOverdueInput.value = isOverdueCancel ? '1' : '';
+                }
 
                 if (reasonInput) {
                     reasonInput.value = isNoShowAction
                         ? 'Customer did not collect order (No-show)'
-                        : '';
+                        : (isOverdueCancel ? 'Pickup time passed (overdue)' : '');
                     reasonInput.dispatchEvent(new Event('change', { bubbles: true }));
                 }
 
@@ -9044,7 +9132,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (cancelModalTitle) {
                     cancelModalTitle.textContent = isNoShowAction
                         ? 'Mark Order as No-show'
-                        : 'Cancel Order';
+                        : (isOverdueCancel ? 'Cancel Overdue Order' : 'Cancel Order');
                 }
                 if (cancelActionText) {
                     cancelActionText.textContent = isNoShowAction
@@ -9054,7 +9142,9 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (cancelInstruction) {
                     cancelInstruction.textContent = isNoShowAction
                         ? 'Confirm that the customer did not collect this prepared order after the pickup window.'
-                        : 'Please select a cancellation reason.';
+                        : (isOverdueCancel
+                            ? 'The pickup time has passed, so this order can only be cancelled. Confirm the reason below.'
+                            : 'Please select a cancellation reason.');
                 }
                 if (noShowNotice) {
                     noShowNotice.textContent = 'This order can only be marked as No-show 30 minutes after the later of its scheduled pickup time or the time it was marked Ready. Verified GCash payments are not refundable under the No-show policy. Cash-on-pickup orders remain unpaid.';
@@ -9245,6 +9335,8 @@ document.addEventListener('DOMContentLoaded', function () {
             const orderPaymentMethodInput = document.getElementById('staffCancelOrderPaymentMethod');
             if (orderStatusInput) orderStatusInput.value = '';
             if (orderPaymentMethodInput) orderPaymentMethodInput.value = '';
+            const orderOverdueReset = document.getElementById('staffCancelOrderOverdue');
+            if (orderOverdueReset) orderOverdueReset.value = '';
 
             const cancelModalTitle = document.getElementById('staffCancelOrderModalTitle');
             const cancelActionText = document.getElementById('staffCancelOrderActionText');
@@ -11252,6 +11344,7 @@ document.addEventListener(
             const isProcessingTransition =
                 requestedStatus === 'confirmed'
                 || requestedStatus === 'preparing'
+                || requestedStatus === 'ready'
                 || (
                     form.id === 'staffGcashReviewForm'
                     && requestedStatus === 'order_queue'
@@ -12984,6 +13077,15 @@ document.addEventListener('DOMContentLoaded', function () {
         });
         menu.querySelectorAll('[data-no-show-reason], [data-no-show-reason-group]').forEach(element => {
             element.hidden = !isReadyOrder;
+        });
+
+        /* The overdue reason is offered only for overdue orders that are not Ready. */
+        const overdueFlagInput = document.getElementById('staffCancelOrderOverdue');
+        const isOverdueOrder = !isReadyOrder
+            && overdueFlagInput
+            && overdueFlagInput.value === '1';
+        menu.querySelectorAll('[data-overdue-reason], [data-overdue-reason-group]').forEach(element => {
+            element.hidden = !isOverdueOrder;
         });
 
         const selectedOption = Array.from(menu.querySelectorAll('[data-value]'))
