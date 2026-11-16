@@ -591,16 +591,13 @@ if (
                     <a class="nav-link" href="../customer/index.php#promotions">Promotions</a>
                 </li>
 
-                <li class="nav-item">
-                    <a
-                        class="nav-link"
-                        href="<?= (isset($_SESSION['user_id']) && ($_SESSION['user_role'] ?? '') === 'customer')
-                            ? '../customer/dashboard.php'
-                            : '../auth/login.php' ?>"
-                    >
-                       Order
-                    </a>
-                </li>
+                <?php if (isset($_SESSION['user_id']) && ($_SESSION['user_role'] ?? '') === 'customer'): ?>
+                    <li class="nav-item">
+                        <a class="nav-link" href="../customer/dashboard.php">
+                            Order
+                        </a>
+                    </li>
+                <?php endif; ?>
 
                 <!-- Cart (desktop; phones use the shortcut next to the menu button) -->
                 <li class="nav-item dropdown me-2 d-none d-lg-block">
@@ -773,7 +770,9 @@ if (
                 Please log in to your customer account before adding products to your order.
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Continue browsing</button>
+                <?php if (isset($_SESSION['user_id']) && ($_SESSION['user_role'] ?? '') === 'customer'): ?>
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Continue browsing</button>
+                <?php endif; ?>
                 <a href="../auth/login.php" class="btn btn-brown">Log In</a>
             </div>
         </div>
