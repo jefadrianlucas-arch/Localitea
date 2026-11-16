@@ -173,6 +173,7 @@ function localiteaGetActivePromotionDefinitions(PDO $pdo, ?string $date = null):
             p.id,
             p.title,
             p.description,
+            p.image,
             p.start_date,
             p.end_date,
             r.id AS rule_id,

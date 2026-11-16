@@ -1576,14 +1576,83 @@ body { background: #F8F4EF; }
 .walkin-empty-state i { font-size: 2.8rem; color: #B8A08A; }
 .walkin-empty-state h5 { color: #4A3525; font-weight: 400; margin: 12px 0 5px; }
 .walkin-empty-state p { margin: 0; font-size: .82rem; }
-.walkin-promotion-card { height: 100%; padding: 18px; background: #FFFCF8; border: 1px solid #E2D7CE; border-radius: 14px; }
-.walkin-promotion-type { display: inline-flex; padding: 4px 9px; color: #6F4E37; background: #F1E8DF; border-radius: 999px; font-size: .7rem; font-weight: 700; }
-.walkin-promotion-card h3 { margin: 12px 0 4px; color: #2C221E; font-size: 1rem; font-weight: 600; }
-.walkin-promotion-summary { color: #6F4E37; font-weight: 700; }
-.walkin-promotion-card p { margin: 8px 0; color: #7B6D62; font-size: .82rem; }
-.walkin-promotion-items { margin: 10px 0 14px; color: #5F5148; font-size: .78rem; }
-.walkin-promotion-btn { width: 100%; color: #FFFFFF; background: #6F4E37; border: 0; }
-.walkin-promotion-btn:hover, .walkin-promotion-btn:focus { color: #FFFFFF; background: #543A2B; }
+.walkin-promotion-card {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    overflow: hidden;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    background: #FFFCF8;
+    border: 1px solid #E2D7CE;
+    border-radius: 14px;
+    cursor: pointer;
+    transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+}
+.walkin-promotion-card:hover {
+    transform: translateY(-4px);
+    border-color: #6F4E37;
+    box-shadow: 0 12px 26px rgba(74, 53, 37, .14);
+}
+.walkin-promotion-card:focus-visible {
+    outline: 3px solid #6F4E37;
+    outline-offset: 3px;
+}
+.walkin-promotion-image-wrap {
+    position: relative;
+    display: block;
+    width: 100%;
+    height: 185px;
+    overflow: hidden;
+    background: #F7F1EB;
+}
+.walkin-promotion-image-wrap img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    transition: transform .25s ease;
+}
+.walkin-promotion-card:hover .walkin-promotion-image-wrap img { transform: scale(1.04); }
+.walkin-promotion-type {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    display: inline-flex;
+    padding: 5px 9px;
+    color: #FFFFFF;
+    background: #6F4E37;
+    border-radius: 999px;
+    font-size: .7rem;
+    font-weight: 700;
+}
+.walkin-promotion-card-body {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    align-items: flex-start;
+    width: 100%;
+    padding: 15px;
+}
+.walkin-promotion-title { color: #2C221E; font-size: 1rem; font-weight: 800; }
+.walkin-promotion-summary { margin-top: 5px; color: #6F4E37; font-weight: 700; }
+.walkin-promotion-description { margin-top: 8px; color: #7B6D62; font-size: .82rem; }
+.walkin-promotion-items { display: block; margin: 10px 0 14px; color: #5F5148; font-size: .78rem; }
+.walkin-promotion-action {
+    display: block;
+    width: 100%;
+    margin-top: auto;
+    padding: 10px 12px;
+    color: #FFFFFF;
+    text-align: center;
+    background: #6F4E37;
+    border-radius: 9px;
+    font-size: .88rem;
+    font-weight: 700;
+}
+.walkin-promotion-card:hover .walkin-promotion-action { background: #543A2B; }
 .walkin-promotion-note { margin-top: 16px; color: #7B6D62; font-size: .76rem; }
 .walkin-cart-promotion-reward { margin: 8px 0; padding: 9px 10px; background: #F5F0E9; border-radius: 10px; font-size: .78rem; }
 

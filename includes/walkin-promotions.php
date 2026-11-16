@@ -2,6 +2,24 @@
 
 require_once __DIR__ . '/promotion-engine.php';
 
+function walkinPromotionImagePath(?string $image): string
+{
+    $image = trim((string)$image);
+    if ($image === '' || $image === 'default-product.png' || $image === 'default.jpg') {
+        return '../assets/images/default-product.png';
+    }
+
+    $image = ltrim(str_replace('\\', '/', $image), '/');
+    if (strpos($image, 'assets/uploads/promotions/') === 0) {
+        return '../' . $image;
+    }
+    if (strpos($image, 'uploads/promotions/') === 0) {
+        return '../assets/' . $image;
+    }
+
+    return '../assets/uploads/promotions/' . $image;
+}
+
 function walkinBuildPromotionCartLines(
     PDO $pdo,
     array $promotion
@@ -373,30 +391,37 @@ function walkinRenderPromotions(
                     }
                     ?>
                     <div class="col-12 col-md-6 col-xl-4">
-                        <article class="walkin-promotion-card">
-                            <span class="walkin-promotion-type">
-                                <?= htmlspecialchars($ruleLabels[$ruleType] ?? 'Promotion') ?>
-                            </span>
-                            <h3><?= htmlspecialchars((string)$promotion['title']) ?></h3>
-                            <div class="walkin-promotion-summary"><?= htmlspecialchars($summary) ?></div>
-                            <?php if (trim((string)($promotion['description'] ?? '')) !== ''): ?>
-                                <p><?= nl2br(htmlspecialchars((string)$promotion['description'])) ?></p>
-                            <?php endif; ?>
-                            <?php if ($itemsText): ?>
-                                <div class="walkin-promotion-items">
-                                    <?= htmlspecialchars(implode(' · ', $itemsText)) ?>
-                                </div>
-                            <?php endif; ?>
-                            <form method="POST">
-                                <input type="hidden" name="action" value="add_promotion">
-                                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') ?>">
-                                <input type="hidden" name="promotion_id" value="<?= (int)$promotion['id'] ?>">
-                                <input type="hidden" name="category" value="<?= htmlspecialchars($category, ENT_QUOTES, 'UTF-8') ?>">
-                                <button type="submit" class="btn walkin-promotion-btn">
-                                    <i class="bi bi-tag-fill me-1"></i> Add Promotion to Order
-                                </button>
-                            </form>
-                        </article>
+                        <form method="POST" class="h-100">
+                            <input type="hidden" name="action" value="add_promotion">
+                            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') ?>">
+                            <input type="hidden" name="promotion_id" value="<?= (int)$promotion['id'] ?>">
+                            <input type="hidden" name="category" value="<?= htmlspecialchars($category, ENT_QUOTES, 'UTF-8') ?>">
+                            <button type="submit" class="walkin-promotion-card">
+                                <span class="walkin-promotion-image-wrap">
+                                    <img
+                                        src="<?= htmlspecialchars(walkinPromotionImagePath($promotion['image'] ?? null), ENT_QUOTES, 'UTF-8') ?>"
+                                        alt="<?= htmlspecialchars((string)$promotion['title'], ENT_QUOTES, 'UTF-8') ?>"
+                                        onerror="this.onerror=null;this.src='../assets/images/default-product.png';"
+                                    >
+                                    <span class="walkin-promotion-type">
+                                        <?= htmlspecialchars($ruleLabels[$ruleType] ?? 'Promotion') ?>
+                                    </span>
+                                </span>
+                                <span class="walkin-promotion-card-body">
+                                    <span class="walkin-promotion-title"><?= htmlspecialchars((string)$promotion['title']) ?></span>
+                                    <span class="walkin-promotion-summary"><?= htmlspecialchars($summary) ?></span>
+                                    <?php if (trim((string)($promotion['description'] ?? '')) !== ''): ?>
+                                        <span class="walkin-promotion-description"><?= nl2br(htmlspecialchars((string)$promotion['description'])) ?></span>
+                                    <?php endif; ?>
+                                    <?php if ($itemsText): ?>
+                                        <span class="walkin-promotion-items"><?= htmlspecialchars(implode(' · ', $itemsText)) ?></span>
+                                    <?php endif; ?>
+                                    <span class="walkin-promotion-action">
+                                        <i class="bi bi-tag-fill me-1"></i> Add Promotion to Order
+                                    </span>
+                                </span>
+                            </button>
+                        </form>
                     </div>
                 <?php endforeach; ?>
             </div>
