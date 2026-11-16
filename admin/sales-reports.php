@@ -1,6 +1,8 @@
 <?php
 
 require_once '../includes/db.php';
+require_once '../includes/sales-analytics.php';
+saUsePhilippineTime($pdo);   // Philippine time for PHP + MySQL, independent of Railway
 
 /* =========================================================
    ADMIN ACCESS
@@ -289,7 +291,6 @@ $averageOrder = $totalOrders > 0 ? $totalSales / $totalOrders : 0;
 /* =========================================================
    ANALYTICS
 ========================================================= */
-require_once '../includes/sales-analytics.php';
 $analytics = salesAnalytics($pdo, $start_date, $end_date);
 
 /* =========================================================
@@ -1586,11 +1587,44 @@ body { background: #F7F5F2; }
                                         <tbody>
                                             <tr><td>PWD discount</td><td><?= number_format($analytics['idDiscounts']['pwd']['orders']) ?></td><td><?= $saPeso($analytics['idDiscounts']['pwd']['amount']) ?></td></tr>
                                             <tr><td>Senior citizen discount</td><td><?= number_format($analytics['idDiscounts']['senior']['orders']) ?></td><td><?= $saPeso($analytics['idDiscounts']['senior']['amount']) ?></td></tr>
-                                            <?php foreach ($analytics['promotions'] as $saPr): ?>
-                                                <tr><td>Promo: <?= htmlspecialchars((string)$saPr['title']) ?></td><td><?= number_format((int)$saPr['used']) ?></td><td><?= $saPeso($saPr['amount']) ?></td></tr>
-                                            <?php endforeach; ?>
+                                            <tr><td>Promotions (value given away)</td><td><?= number_format((int)$analytics['promoSummary']['orders']) ?></td><td><?= $saPeso($analytics['promoSummary']['discount']) ?></td></tr>
                                         </tbody>
                                     </table>
+                                </div>
+                            </div>
+
+                            <div class="col-12">
+                                <div class="sr-panel">
+                                    <h4>Promotion sales</h4>
+                                    <?php if (empty($analytics['promotions'])): ?>
+                                        <div class="sa-note">No promotions were used on completed orders in this period.</div>
+                                    <?php else: ?>
+                                        <div class="sa-note mb-2">
+                                            <?= number_format((int)$analytics['promoSummary']['orders']) ?> order(s) used a promotion.
+                                            Customers paid <strong><?= $saPeso($analytics['promoSummary']['sales']) ?></strong>
+                                            on them (<?= number_format($analytics['promoSummary']['share'], 1) ?>% of net sales);
+                                            <?= number_format((int)$analytics['promoSummary']['free_items']) ?> free item(s)
+                                            worth <?= $saPeso($analytics['promoSummary']['discount']) ?> were given away.
+                                        </div>
+                                        <div class="table-responsive">
+                                            <table class="sa-table">
+                                                <thead><tr><th>Promotion</th><th>Type</th><th>Orders</th><th>Free items</th><th>Value given away</th><th>Sales (paid)</th></tr></thead>
+                                                <tbody>
+                                                    <?php foreach ($analytics['promotions'] as $saPr): ?>
+                                                        <tr>
+                                                            <td><?= htmlspecialchars((string)$saPr['title']) ?></td>
+                                                            <td><?= htmlspecialchars(str_replace('_', ' ', (string)$saPr['rule_type'])) ?></td>
+                                                            <td><?= number_format((int)$saPr['used']) ?></td>
+                                                            <td><?= number_format((int)$saPr['free_items']) ?></td>
+                                                            <td><?= $saPeso($saPr['amount']) ?></td>
+                                                            <td><?= $saPeso($saPr['sales']) ?></td>
+                                                        </tr>
+                                                    <?php endforeach; ?>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                        <div class="sa-note">Free items are not counted as sales. "Sales (paid)" is what customers actually paid on orders that used the promotion, including any add-ons they paid for on the free drink.</div>
+                                    <?php endif; ?>
                                 </div>
                             </div>
 
@@ -1608,10 +1642,10 @@ body { background: #F7F5F2; }
                                         <div class="sa-note">No items sold in this period.</div>
                                     <?php else: ?>
                                         <table class="sa-table">
-                                            <thead><tr><th>Product</th><th>Qty</th><th>Item sales</th></tr></thead>
+                                            <thead><tr><th>Product</th><th>Qty sold</th><th>Free</th><th>Item sales</th></tr></thead>
                                             <tbody>
                                                 <?php foreach ($analytics['topProducts'] as $saP): ?>
-                                                    <tr><td><?= htmlspecialchars((string)$saP['name']) ?></td><td><?= number_format((int)$saP['qty']) ?></td><td><?= $saPeso($saP['sales']) ?></td></tr>
+                                                    <tr><td><?= htmlspecialchars((string)$saP['name']) ?></td><td><?= number_format((int)$saP['qty']) ?></td><td><?= (int)$saP['free_qty'] > 0 ? number_format((int)$saP['free_qty']) : '–' ?></td><td><?= $saPeso($saP['sales']) ?></td></tr>
                                                 <?php endforeach; ?>
                                             </tbody>
                                         </table>
@@ -1626,14 +1660,14 @@ body { background: #F7F5F2; }
                                         <div class="sa-note">No items sold in this period.</div>
                                     <?php else: ?>
                                         <table class="sa-table">
-                                            <thead><tr><th>Category</th><th>Qty</th><th>Item sales</th></tr></thead>
+                                            <thead><tr><th>Category</th><th>Qty sold</th><th>Free</th><th>Item sales</th></tr></thead>
                                             <tbody>
                                                 <?php foreach ($analytics['categories'] as $saC): ?>
-                                                    <tr><td><?= htmlspecialchars((string)$saC['category_name']) ?></td><td><?= number_format((int)$saC['qty']) ?></td><td><?= $saPeso($saC['sales']) ?></td></tr>
+                                                    <tr><td><?= htmlspecialchars((string)$saC['category_name']) ?></td><td><?= number_format((int)$saC['qty']) ?></td><td><?= (int)$saC['free_qty'] > 0 ? number_format((int)$saC['free_qty']) : '–' ?></td><td><?= $saPeso($saC['sales']) ?></td></tr>
                                                 <?php endforeach; ?>
                                             </tbody>
                                         </table>
-                                        <div class="sa-note">Item sales are before order-level discounts, so they won't add up exactly to Net Sales.</div>
+                                        <div class="sa-note">Free promo items are not counted as sold or as sales. "Free" shows how many were given away. Item sales are before order-level discounts, so they won't add up exactly to Net Sales.</div>
                                     <?php endif; ?>
                                 </div>
                             </div>

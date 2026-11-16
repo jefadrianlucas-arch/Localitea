@@ -1,7 +1,8 @@
 <?php
 
 require_once '../includes/db.php';
-date_default_timezone_set('Asia/Manila');
+require_once '../includes/sales-analytics.php';
+saUsePhilippineTime($pdo);   // Philippine time for PHP + MySQL, independent of Railway
 
 /* =========================================================
    ADMIN ACCESS
@@ -198,7 +199,6 @@ if ($mode === 'monthly') {
 /* =========================================================
    ANALYTICS
 ========================================================= */
-require_once '../includes/sales-analytics.php';
 $analytics = salesAnalytics($pdo, $start_date, $end_date);
 
 $paPeso = static fn($v) => '₱' . number_format((float)$v, 2);
@@ -597,10 +597,10 @@ $overviewCols  = $overviewSplit
                 <div class="empty">No items sold in this period.</div>
             <?php else: ?>
                 <table class="t">
-                    <thead><tr><th>Product</th><th>Qty</th><th>Item Sales</th></tr></thead>
+                    <thead><tr><th>Product</th><th>Qty Sold</th><th>Free</th><th>Item Sales</th></tr></thead>
                     <tbody>
                         <?php foreach ($paProducts as $paP): ?>
-                            <tr><td><?= htmlspecialchars((string)$paP['name']) ?></td><td><?= number_format((int)$paP['qty']) ?></td><td><?= $paPeso($paP['sales']) ?></td></tr>
+                            <tr><td><?= htmlspecialchars((string)$paP['name']) ?></td><td><?= number_format((int)$paP['qty']) ?></td><td><?= (int)$paP['free_qty'] > 0 ? number_format((int)$paP['free_qty']) : '-' ?></td><td><?= $paPeso($paP['sales']) ?></td></tr>
                         <?php endforeach; ?>
                     </tbody>
                 </table>
@@ -614,14 +614,14 @@ $overviewCols  = $overviewSplit
                 <div class="empty">No items sold in this period.</div>
             <?php else: ?>
                 <table class="t">
-                    <thead><tr><th>Category</th><th>Qty</th><th>Item Sales</th></tr></thead>
+                    <thead><tr><th>Category</th><th>Qty Sold</th><th>Free</th><th>Item Sales</th></tr></thead>
                     <tbody>
                         <?php foreach ($paCategories as $paC): ?>
-                            <tr><td><?= htmlspecialchars((string)$paC['category_name']) ?></td><td><?= number_format((int)$paC['qty']) ?></td><td><?= $paPeso($paC['sales']) ?></td></tr>
+                            <tr><td><?= htmlspecialchars((string)$paC['category_name']) ?></td><td><?= number_format((int)$paC['qty']) ?></td><td><?= (int)$paC['free_qty'] > 0 ? number_format((int)$paC['free_qty']) : '-' ?></td><td><?= $paPeso($paC['sales']) ?></td></tr>
                         <?php endforeach; ?>
                     </tbody>
                 </table>
-                <div class="note">Item sales are before discounts.</div>
+                <div class="note">Free promo items are not counted as sold or as sales. Item sales are before discounts.</div>
             <?php endif; ?>
         </div>
 
@@ -633,12 +633,35 @@ $overviewCols  = $overviewSplit
                 <tbody>
                     <tr><td>PWD</td><td><?= number_format($analytics['idDiscounts']['pwd']['orders']) ?></td><td><?= $paPeso($analytics['idDiscounts']['pwd']['amount']) ?></td></tr>
                     <tr><td>Senior citizen</td><td><?= number_format($analytics['idDiscounts']['senior']['orders']) ?></td><td><?= $paPeso($analytics['idDiscounts']['senior']['amount']) ?></td></tr>
-                    <?php foreach ($analytics['promotions'] as $paPr): ?>
-                        <tr><td>Promo: <?= htmlspecialchars((string)$paPr['title']) ?></td><td><?= number_format((int)$paPr['used']) ?></td><td><?= $paPeso($paPr['amount']) ?></td></tr>
-                    <?php endforeach; ?>
+                    <tr><td>Promotions (value given away)</td><td><?= number_format((int)$analytics['promoSummary']['orders']) ?></td><td><?= $paPeso($analytics['promoSummary']['discount']) ?></td></tr>
                     <tr class="total"><td>Total (gross − net)</td><td></td><td><?= $paPeso($paCur['discounts']) ?></td></tr>
                 </tbody>
             </table>
+        </div>
+
+        <!-- PROMOTION SALES -->
+        <div class="blk">
+            <div class="blk-title">Promotion Sales</div>
+            <?php if (empty($analytics['promotions'])): ?>
+                <div class="empty">No promotions were used on completed orders in this period.</div>
+            <?php else: ?>
+                <table class="t">
+                    <thead><tr><th>Promotion</th><th>Orders</th><th>Free Items</th><th>Value Given Away</th><th>Sales (Paid)</th></tr></thead>
+                    <tbody>
+                        <?php foreach ($analytics['promotions'] as $paPr): ?>
+                            <tr>
+                                <td><?= htmlspecialchars((string)$paPr['title']) ?></td>
+                                <td><?= number_format((int)$paPr['used']) ?></td>
+                                <td><?= number_format((int)$paPr['free_items']) ?></td>
+                                <td><?= $paPeso($paPr['amount']) ?></td>
+                                <td><?= $paPeso($paPr['sales']) ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                        <tr class="total"><td>Total</td><td><?= number_format((int)$analytics['promoSummary']['orders']) ?></td><td><?= number_format((int)$analytics['promoSummary']['free_items']) ?></td><td><?= $paPeso($analytics['promoSummary']['discount']) ?></td><td><?= $paPeso($analytics['promoSummary']['sales']) ?></td></tr>
+                    </tbody>
+                </table>
+                <div class="note">Free items are not counted as sales. "Sales (Paid)" is what customers actually paid on orders that used a promotion.</div>
+            <?php endif; ?>
         </div>
 
         <!-- OUTCOMES -->

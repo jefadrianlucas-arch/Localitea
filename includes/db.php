@@ -52,6 +52,15 @@ try {
     die('Service temporarily unavailable. Please try again in a few minutes.');
 }
 
+// Philippine time everywhere (PHP + MySQL), independent of Railway's clock.
+date_default_timezone_set('Asia/Manila');
+
+try {
+    $pdo->exec("SET time_zone = '+08:00'");
+} catch (Throwable $e) {
+    error_log('Could not set MySQL time zone: ' . $e->getMessage());
+}
+
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }

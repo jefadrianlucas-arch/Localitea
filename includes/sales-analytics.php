@@ -13,7 +13,34 @@
  *   - Discounts   = Gross - Net                (PWD/Senior + promotions)
  *   - Cancelled / placed orders are dated by created_at.
  *   - Refunds are dated by refund_processed_at.
+ *   - FREE ITEMS (Buy 1 Get 1 / Buy X Get Y rewards) are saved in order_items
+ *     with a name ending in " (FREE)". They are NOT sales: they are never
+ *     counted as units sold, and only the add-ons the customer actually paid
+ *     for on a free drink count as item sales. They are reported separately
+ *     as "Free" units and under "Promotion sales".
+ *   - All dates/times are Philippine time (Asia/Manila, UTC+8), regardless of
+ *     the server's or Railway's own clock.
  */
+
+/*
+ * Force Philippine time for PHP *and* for this MySQL connection.
+ * Call it right after db.php is loaded. It only affects the current
+ * request/connection, so nothing on Railway needs to be configured.
+ *
+ * Note: a fixed offset ('+08:00') is used instead of 'Asia/Manila' because
+ * managed MySQL servers often don't have the named time-zone tables loaded.
+ * The Philippines has no daylight saving, so +08:00 is always correct.
+ */
+function saUsePhilippineTime(PDO $pdo): void
+{
+    date_default_timezone_set('Asia/Manila');
+
+    try {
+        $pdo->exec("SET time_zone = '+08:00'");
+    } catch (Throwable $e) {
+        error_log('saUsePhilippineTime failed: ' . $e->getMessage());
+    }
+}
 
 function saPercentChange(float $current, float $previous): ?float
 {
@@ -32,6 +59,8 @@ function saShare(float $part, float $whole): float
 function salesAnalytics(PDO $pdo, string $start, string $end): ?array
 {
     try {
+
+        saUsePhilippineTime($pdo);
 
         $saleDate = "DATE(COALESCE(o.closed_at, o.created_at))";
         $saleRange = "o.status = 'completed' AND $saleDate BETWEEN ? AND ?";
@@ -117,15 +146,51 @@ function salesAnalytics(PDO $pdo, string $start, string $end): ?array
             }
         }
 
+        /* ---------- item sales (free promo items are NOT sales) ----------
+         * A free reward line is saved as "<name> (FREE)" at its normal price.
+         *   - units sold  = paid lines only (free units are shown separately)
+         *   - item sales  = paid lines + the add-ons the customer paid for on
+         *                   the free drink. Add-on money on a free line is
+         *                   (free lines total - promo discount) of that order,
+         *                   spread across its free lines.
+         */
+        $isFree    = "(oi.product_name LIKE '% (FREE)')";
+        $cleanName = "TRIM(TRAILING ' (FREE)' FROM oi.product_name)";
+
+        $itemJoins = "
+            JOIN orders o ON o.id = oi.order_id
+            LEFT JOIN (
+                SELECT order_id, SUM(subtotal) AS free_total
+                FROM order_items
+                WHERE product_name LIKE '% (FREE)'
+                GROUP BY order_id
+            ) fr ON fr.order_id = o.id
+            LEFT JOIN (
+                SELECT order_id, SUM(discount_amount) AS promo_disc
+                FROM order_promotions
+                GROUP BY order_id
+            ) pd ON pd.order_id = o.id
+        ";
+
+        $paidQty   = "SUM(CASE WHEN $isFree THEN 0 ELSE oi.quantity END)";
+        $freeQty   = "SUM(CASE WHEN $isFree THEN oi.quantity ELSE 0 END)";
+        $paidSales = "SUM(CASE WHEN $isFree
+                        THEN COALESCE(oi.subtotal
+                             * GREATEST(0, fr.free_total - COALESCE(pd.promo_disc, 0))
+                             / NULLIF(fr.free_total, 0), 0)
+                        ELSE oi.subtotal END)";
+
         /* ---------- top products ---------- */
         $st = $pdo->prepare("
-            SELECT oi.product_name AS name,
-                   SUM(oi.quantity) AS qty,
-                   SUM(oi.subtotal) AS sales
+            SELECT $cleanName AS name,
+                   $paidQty AS qty,
+                   $freeQty AS free_qty,
+                   $paidSales AS sales
             FROM order_items oi
-            JOIN orders o ON o.id = oi.order_id
+            $itemJoins
             WHERE $saleRange
-            GROUP BY oi.product_name
+            GROUP BY name
+            HAVING qty > 0
             ORDER BY qty DESC, sales DESC
             LIMIT 10
         ");
@@ -135,14 +200,16 @@ function salesAnalytics(PDO $pdo, string $start, string $end): ?array
         /* ---------- categories ---------- */
         $st = $pdo->prepare("
             SELECT COALESCE(c.name, 'Uncategorized') AS category_name,
-                   SUM(oi.quantity) AS qty,
-                   SUM(oi.subtotal) AS sales
+                   $paidQty AS qty,
+                   $freeQty AS free_qty,
+                   $paidSales AS sales
             FROM order_items oi
-            JOIN orders o ON o.id = oi.order_id
+            $itemJoins
             LEFT JOIN products p ON p.id = oi.product_id
             LEFT JOIN categories c ON c.id = p.category_id
             WHERE $saleRange
             GROUP BY category_name
+            HAVING qty > 0
             ORDER BY sales DESC
         ");
         $st->execute([$start, $end]);
@@ -268,19 +335,44 @@ function salesAnalytics(PDO $pdo, string $start, string $end): ?array
             ];
         }
 
-        /* ---------- discounts: promotions ---------- */
+        /* ---------- promotion sales ----------
+         * One row per promotion used on a completed order:
+         *   used       = orders that used it
+         *   free_items = free units given away
+         *   amount     = value given away (discount)
+         *   sales      = what customers actually paid on those orders
+         */
         $st = $pdo->prepare("
             SELECT op.promotion_title AS title,
-                   COUNT(*) AS used,
-                   COALESCE(SUM(op.discount_amount), 0) AS amount
+                   op.rule_type AS rule_type,
+                   COUNT(DISTINCT o.id) AS used,
+                   COALESCE(SUM(op.discount_amount), 0) AS amount,
+                   COALESCE(SUM(o.total_amount), 0) AS sales,
+                   COALESCE(SUM(f.free_qty), 0) AS free_items
             FROM order_promotions op
             JOIN orders o ON o.id = op.order_id
+            LEFT JOIN (
+                SELECT order_id, SUM(quantity) AS free_qty
+                FROM order_items
+                WHERE product_name LIKE '% (FREE)'
+                GROUP BY order_id
+            ) f ON f.order_id = o.id
             WHERE $saleRange
-            GROUP BY op.promotion_title
-            ORDER BY amount DESC
+            GROUP BY op.promotion_title, op.rule_type
+            ORDER BY sales DESC
         ");
         $st->execute([$start, $end]);
         $promotions = $st->fetchAll(PDO::FETCH_ASSOC);
+
+        $promoSummary = ['orders' => 0, 'sales' => 0.0, 'discount' => 0.0,
+                         'free_items' => 0, 'share' => 0.0];
+        foreach ($promotions as $pr) {
+            $promoSummary['orders']     += (int)$pr['used'];
+            $promoSummary['sales']      += (float)$pr['sales'];
+            $promoSummary['discount']   += (float)$pr['amount'];
+            $promoSummary['free_items'] += (int)$pr['free_items'];
+        }
+        $promoSummary['share'] = saShare($promoSummary['sales'], $current['net']);
 
         /* ---------- customers (online orders) ---------- */
         $st = $pdo->prepare("
@@ -367,6 +459,17 @@ function salesAnalytics(PDO $pdo, string $start, string $end): ?array
             }
         }
 
+        if ($promoSummary['orders'] > 0) {
+            $insights[] = sprintf(
+                '%d order(s) used a promotion: customers paid ₱%s on them (%.0f%% of net sales) and %d free item(s) worth ₱%s were given away.',
+                $promoSummary['orders'],
+                number_format($promoSummary['sales'], 2),
+                $promoSummary['share'],
+                $promoSummary['free_items'],
+                number_format($promoSummary['discount'], 2)
+            );
+        }
+
         if ($outcomes['placed'] > 0 && $outcomes['cancelled'] > 0) {
             $line = sprintf(
                 '%.1f%% of orders placed in this period were cancelled (%d of %d), worth ₱%s in lost sales.',
@@ -405,6 +508,7 @@ function salesAnalytics(PDO $pdo, string $start, string $end): ?array
             'refunds'     => $refunds,
             'idDiscounts' => $idDiscounts,
             'promotions'  => $promotions,
+            'promoSummary' => $promoSummary,
             'customers'   => $customers,
             'insights'    => $insights,
         ];
