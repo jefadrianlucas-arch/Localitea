@@ -1128,6 +1128,195 @@ $modeLabel = $modeLabels[$mode];
     </div>
 
 
+    <?php
+    require_once '../includes/sales-analytics.php';
+    $analytics = salesAnalytics($pdo, $start_date, $end_date);
+    ?>
+    <?php if ($analytics): ?>
+    <?php
+    $paPeso = static fn($v) => '₱' . number_format((float)$v, 2);
+    $paCur  = $analytics['current'];
+    $paPrev = $analytics['previous'];
+    $paCh   = $analytics['channel'];
+    $paOut  = $analytics['outcomes'];
+    $paRef  = $analytics['refunds'];
+    $paChTotal = $paCh['online']['sales'] + $paCh['walk_in']['sales'];
+    $paChange = static function ($now, $before): string {
+        $pct = saPercentChange((float)$now, (float)$before);
+        return $pct === null ? 'n/a' : (($pct >= 0 ? '+' : '-') . number_format(abs($pct), 1) . '%');
+    };
+
+    $paHours = $analytics['hours'];
+    usort($paHours, static fn($a, $b) => (int)$b['orders'] <=> (int)$a['orders']);
+    $paHours = array_slice($paHours, 0, 5);
+    ?>
+
+    <style>
+        .pa-section { page-break-inside: avoid; }
+        .pa-table th:not(:first-child),
+        .pa-table td:not(:first-child) { text-align: right; }
+        .pa-list { margin: 8px 0 0; padding-left: 18px; font-size: 13px; }
+        .pa-list li { margin-bottom: 4px; }
+        .pa-note { font-size: 11px; margin-top: 6px; }
+    </style>
+
+    <!-- KEY TAKEAWAYS -->
+    <?php if (!empty($analytics['insights'])): ?>
+    <div class="section pa-section">
+        <div class="section-title">Key Takeaways</div>
+        <ul class="pa-list">
+            <?php foreach ($analytics['insights'] as $paLine): ?>
+                <li><?= htmlspecialchars($paLine) ?></li>
+            <?php endforeach; ?>
+        </ul>
+    </div>
+    <?php endif; ?>
+
+    <!-- COMPARISON -->
+    <div class="section pa-section">
+        <div class="section-title">Comparison With Previous Period</div>
+        <table class="payment-table pa-table">
+            <thead>
+                <tr>
+                    <th>Measure</th>
+                    <th><?= date('M d', strtotime($analytics['range']['start'])) ?> – <?= date('M d, Y', strtotime($analytics['range']['end'])) ?></th>
+                    <th><?= date('M d', strtotime($analytics['range']['prev_start'])) ?> – <?= date('M d, Y', strtotime($analytics['range']['prev_end'])) ?></th>
+                    <th>Change</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr><td>Net sales</td><td><?= $paPeso($paCur['net']) ?></td><td><?= $paPeso($paPrev['net']) ?></td><td><?= $paChange($paCur['net'], $paPrev['net']) ?></td></tr>
+                <tr><td>Completed orders</td><td><?= number_format($paCur['orders']) ?></td><td><?= number_format($paPrev['orders']) ?></td><td><?= $paChange($paCur['orders'], $paPrev['orders']) ?></td></tr>
+                <tr><td>Average order</td><td><?= $paPeso($paCur['avg']) ?></td><td><?= $paPeso($paPrev['avg']) ?></td><td><?= $paChange($paCur['avg'], $paPrev['avg']) ?></td></tr>
+                <tr><td>Gross sales (before discounts)</td><td><?= $paPeso($paCur['gross']) ?></td><td><?= $paPeso($paPrev['gross']) ?></td><td><?= $paChange($paCur['gross'], $paPrev['gross']) ?></td></tr>
+                <tr><td>Discounts given</td><td><?= $paPeso($paCur['discounts']) ?></td><td><?= $paPeso($paPrev['discounts']) ?></td><td><?= $paChange($paCur['discounts'], $paPrev['discounts']) ?></td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- CHANNEL -->
+    <div class="section pa-section">
+        <div class="section-title">Sales by Order Channel</div>
+        <table class="payment-table pa-table">
+            <thead><tr><th>Channel</th><th>Orders</th><th>Sales</th><th>Share</th></tr></thead>
+            <tbody>
+                <tr><td>Online ordering</td><td><?= number_format($paCh['online']['orders']) ?></td><td><?= $paPeso($paCh['online']['sales']) ?></td><td><?= number_format(saShare($paCh['online']['sales'], $paChTotal), 1) ?>%</td></tr>
+                <tr><td>Walk-in</td><td><?= number_format($paCh['walk_in']['orders']) ?></td><td><?= $paPeso($paCh['walk_in']['sales']) ?></td><td><?= number_format(saShare($paCh['walk_in']['sales'], $paChTotal), 1) ?>%</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- TOP PRODUCTS -->
+    <div class="section pa-section">
+        <div class="section-title">Top 10 Products</div>
+        <?php if (empty($analytics['topProducts'])): ?>
+            <div class="pa-note">No items sold in this period.</div>
+        <?php else: ?>
+            <table class="payment-table pa-table">
+                <thead><tr><th>Product</th><th>Qty Sold</th><th>Item Sales</th></tr></thead>
+                <tbody>
+                    <?php foreach ($analytics['topProducts'] as $paP): ?>
+                        <tr><td><?= htmlspecialchars((string)$paP['name']) ?></td><td><?= number_format((int)$paP['qty']) ?></td><td><?= $paPeso($paP['sales']) ?></td></tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        <?php endif; ?>
+    </div>
+
+    <!-- CATEGORIES -->
+    <?php if (!empty($analytics['categories'])): ?>
+    <div class="section pa-section">
+        <div class="section-title">Sales by Category</div>
+        <table class="payment-table pa-table">
+            <thead><tr><th>Category</th><th>Qty Sold</th><th>Item Sales</th></tr></thead>
+            <tbody>
+                <?php foreach ($analytics['categories'] as $paC): ?>
+                    <tr><td><?= htmlspecialchars((string)$paC['category_name']) ?></td><td><?= number_format((int)$paC['qty']) ?></td><td><?= $paPeso($paC['sales']) ?></td></tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
+        <div class="pa-note">Item sales are line totals before order-level discounts, so they will not add up exactly to Net Sales.</div>
+    </div>
+    <?php endif; ?>
+
+    <!-- ORDER OUTCOMES -->
+    <div class="section pa-section">
+        <div class="section-title">Order Outcomes, Cancellations and Refunds</div>
+        <table class="payment-table pa-table">
+            <thead><tr><th>Measure</th><th>Orders</th><th>Amount</th></tr></thead>
+            <tbody>
+                <tr><td>Orders placed in this period</td><td><?= number_format($paOut['placed']) ?></td><td></td></tr>
+                <tr><td>Completed</td><td><?= number_format($paOut['completed']) ?></td><td></td></tr>
+                <tr><td>Cancelled (<?= number_format($paOut['cancel_rate'], 1) ?>% of orders placed)</td><td><?= number_format($paOut['cancelled']) ?></td><td><?= $paPeso($paOut['cancelled_amount']) ?></td></tr>
+                <tr><td>Still in progress</td><td><?= number_format($paOut['in_progress']) ?></td><td></td></tr>
+                <tr><td>Refunds paid out</td><td><?= number_format($paRef['refunded_orders']) ?></td><td><?= $paPeso($paRef['refunded_amount']) ?></td></tr>
+                <tr><td>Refund requests pending</td><td><?= number_format($paRef['pending_orders']) ?></td><td><?= $paPeso($paRef['pending_amount']) ?></td></tr>
+            </tbody>
+        </table>
+        <?php if (!empty($analytics['cancelReasons'])): ?>
+            <div class="pa-note"><strong>Top cancellation reasons:</strong>
+                <?php
+                $paReasons = [];
+                foreach ($analytics['cancelReasons'] as $paR) {
+                    $paReasons[] = htmlspecialchars((string)$paR['reason']) . ' (' . (int)$paR['orders'] . ')';
+                }
+                echo implode('; ', $paReasons);
+                ?>
+            </div>
+        <?php endif; ?>
+    </div>
+
+    <!-- DISCOUNTS AND PROMOTIONS -->
+    <div class="section pa-section">
+        <div class="section-title">Discounts and Promotions</div>
+        <table class="payment-table pa-table">
+            <thead><tr><th>Type</th><th>Orders</th><th>Amount</th></tr></thead>
+            <tbody>
+                <tr><td>PWD discount</td><td><?= number_format($analytics['idDiscounts']['pwd']['orders']) ?></td><td><?= $paPeso($analytics['idDiscounts']['pwd']['amount']) ?></td></tr>
+                <tr><td>Senior citizen discount</td><td><?= number_format($analytics['idDiscounts']['senior']['orders']) ?></td><td><?= $paPeso($analytics['idDiscounts']['senior']['amount']) ?></td></tr>
+                <?php foreach ($analytics['promotions'] as $paPr): ?>
+                    <tr><td>Promo: <?= htmlspecialchars((string)$paPr['title']) ?></td><td><?= number_format((int)$paPr['used']) ?></td><td><?= $paPeso($paPr['amount']) ?></td></tr>
+                <?php endforeach; ?>
+                <tr class="payment-total"><td>Total discounts (gross − net sales)</td><td></td><td><?= $paPeso($paCur['discounts']) ?></td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- PEAK HOURS -->
+    <?php if (!empty($paHours)): ?>
+    <div class="section pa-section">
+        <div class="section-title">Busiest Pickup Hours (top 5)</div>
+        <table class="payment-table pa-table">
+            <thead><tr><th>Pickup hour</th><th>Orders</th><th>Sales</th></tr></thead>
+            <tbody>
+                <?php foreach ($paHours as $paH): ?>
+                    <?php $paHr = (int)$paH['hr']; ?>
+                    <tr>
+                        <td><?= date('g:00 A', strtotime(sprintf('%02d:00', $paHr))) ?> – <?= date('g:00 A', strtotime(sprintf('%02d:00', ($paHr + 1) % 24))) ?></td>
+                        <td><?= number_format((int)$paH['orders']) ?></td>
+                        <td><?= $paPeso($paH['sales']) ?></td>
+                    </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
+    <?php endif; ?>
+
+    <!-- CUSTOMERS -->
+    <div class="section pa-section">
+        <div class="section-title">Online Customers</div>
+        <table class="payment-table pa-table">
+            <tbody>
+                <tr><td>Registered customers who bought</td><td><?= number_format($analytics['customers']['registered']) ?></td></tr>
+                <tr><td>First-time buyers</td><td><?= number_format($analytics['customers']['new']) ?></td></tr>
+                <tr><td>Returning customers</td><td><?= number_format($analytics['customers']['returning']) ?></td></tr>
+                <tr><td>Guest (no account) orders</td><td><?= number_format($analytics['customers']['guest_orders']) ?></td></tr>
+            </tbody>
+        </table>
+    </div>
+    <?php endif; ?>
+
+
     <!-- =====================================================
          SALES OVERVIEW
     ====================================================== -->

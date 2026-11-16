@@ -456,6 +456,12 @@ $averageOrder = $totalOrders > 0
     : 0;
 
 /* =========================================================
+   SALES ANALYTICS (channels, products, discounts, cancellations...)
+========================================================= */
+require_once '../includes/sales-analytics.php';
+$analytics = salesAnalytics($pdo, $start_date, $end_date);
+
+/* =========================================================
    COMPLETED TRANSACTION PAGINATION
 ========================================================= */
 
@@ -4104,6 +4110,9 @@ body {
                             <div class="summary-value">
                                 ₱<?= number_format($totalSales, 2) ?>
                             </div>
+                            <?php if ($analytics): ?>
+                                <?= saDeltaBadge(saPercentChange($analytics['current']['net'], $analytics['previous']['net'])) ?>
+                            <?php endif; ?>
 
                         </div>
 
@@ -4121,6 +4130,9 @@ body {
                             <div class="summary-value">
                                 <?= number_format($totalOrders) ?>
                             </div>
+                            <?php if ($analytics): ?>
+                                <?= saDeltaBadge(saPercentChange((float)$analytics['current']['orders'], (float)$analytics['previous']['orders'])) ?>
+                            <?php endif; ?>
 
                         </div>
 
@@ -4138,6 +4150,9 @@ body {
                             <div class="summary-value">
                                 ₱<?= number_format($averageOrder, 2) ?>
                             </div>
+                            <?php if ($analytics): ?>
+                                <?= saDeltaBadge(saPercentChange($analytics['current']['avg'], $analytics['previous']['avg'])) ?>
+                            <?php endif; ?>
 
                         </div>
 
@@ -4145,6 +4160,257 @@ body {
 
                 </div>
 
+
+                <?php if ($analytics): ?>
+                <?php
+                $saPeso = static fn($v) => '₱' . number_format((float)$v, 2);
+                $saCur  = $analytics['current'];
+                $saCh   = $analytics['channel'];
+                $saPay  = $analytics['payment'];
+                $saOut  = $analytics['outcomes'];
+                $saRef  = $analytics['refunds'];
+                $saChTotal  = $saCh['online']['sales'] + $saCh['walk_in']['sales'];
+                $saPayTotal = $saPay['cash']['sales'] + $saPay['gcash']['sales'];
+                $saMaxHourOrders = 1;
+                foreach ($analytics['hours'] as $saH) {
+                    $saMaxHourOrders = max($saMaxHourOrders, (int)$saH['orders']);
+                }
+                ?>
+
+                <style>
+                    .sa-delta { font-size: .72rem; margin-top: 4px; font-weight: 500; }
+                    .sa-up { color: #2e7d32; }
+                    .sa-down { color: #c62828; }
+                    .sa-flat { color: #8a7f75; }
+                    .sa-card { background:#fff; border:1px solid #e6dcd3; border-radius:14px; padding:16px 18px; height:100%; }
+                    .sa-card h4 { font-size:.9rem; font-weight:600; color:#2c221e; margin:0 0 10px; }
+                    .sa-note { font-size:.72rem; color:#8a7f75; margin-top:8px; }
+                    .sa-table { width:100%; border-collapse:collapse; font-size:.82rem; }
+                    .sa-table th { text-align:left; color:#8a7f75; font-weight:500; font-size:.72rem; padding:4px 6px 6px 0; border-bottom:1px solid #eee4dc; }
+                    .sa-table td { padding:6px 6px 6px 0; border-bottom:1px solid #f4eee8; color:#2c221e; }
+                    .sa-table th:not(:first-child), .sa-table td:not(:first-child) { text-align:right; white-space:nowrap; }
+                    .sa-bar-track { background:#f4eee8; border-radius:6px; height:8px; overflow:hidden; }
+                    .sa-bar-fill { background:#6F4E37; height:100%; border-radius:6px; }
+                    .sa-takeaways { background:#fbf7f3; border:1px solid #e6dcd3; border-left:4px solid #6F4E37; border-radius:12px; padding:14px 18px; }
+                    .sa-takeaways ul { margin:6px 0 0; padding-left:18px; font-size:.84rem; color:#2c221e; }
+                    .sa-takeaways li { margin-bottom:4px; }
+                    .sa-hour-row { display:flex; align-items:center; gap:10px; font-size:.78rem; margin-bottom:6px; }
+                    .sa-hour-row .sa-hour-label { width:64px; color:#8a7f75; flex-shrink:0; }
+                    .sa-hour-row .sa-bar-track { flex:1; }
+                    .sa-hour-row .sa-hour-count { width:28px; text-align:right; flex-shrink:0; }
+                    .sa-kpi-small { font-size:1rem; font-weight:600; color:#2c221e; }
+                    .sa-kpi-small-label { font-size:.72rem; color:#8a7f75; }
+                </style>
+
+                <!-- KEY TAKEAWAYS -->
+                <?php if (!empty($analytics['insights'])): ?>
+                    <div class="sa-takeaways mt-4">
+                        <strong style="font-size:.9rem;">Key takeaways</strong>
+                        <ul>
+                            <?php foreach ($analytics['insights'] as $saLine): ?>
+                                <li><?= htmlspecialchars($saLine) ?></li>
+                            <?php endforeach; ?>
+                        </ul>
+                    </div>
+                <?php endif; ?>
+
+                <!-- MONEY IN / MONEY OUT -->
+                <div class="row g-3 mt-1">
+                    <div class="col-6 col-md-3">
+                        <div class="summary-card">
+                            <div class="summary-label">Gross Sales (before discounts)</div>
+                            <div class="summary-value"><?= $saPeso($saCur['gross']) ?></div>
+                        </div>
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <div class="summary-card">
+                            <div class="summary-label">Discounts Given</div>
+                            <div class="summary-value"><?= $saPeso($saCur['discounts']) ?></div>
+                            <div class="sa-delta sa-flat"><?= number_format(saShare($saCur['discounts'], $saCur['gross']), 1) ?>% of gross</div>
+                        </div>
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <div class="summary-card">
+                            <div class="summary-label">Cancelled Orders (lost sales)</div>
+                            <div class="summary-value"><?= number_format($saOut['cancelled']) ?></div>
+                            <div class="sa-delta sa-flat"><?= $saPeso($saOut['cancelled_amount']) ?> &middot; <?= number_format($saOut['cancel_rate'], 1) ?>% of orders placed</div>
+                        </div>
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <div class="summary-card">
+                            <div class="summary-label">Refunds Paid Out</div>
+                            <div class="summary-value"><?= $saPeso($saRef['refunded_amount']) ?></div>
+                            <div class="sa-delta sa-flat"><?= number_format($saRef['refunded_orders']) ?> refunded &middot; <?= number_format($saRef['pending_orders']) ?> pending (<?= $saPeso($saRef['pending_amount']) ?>)</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="row g-3 mt-1">
+
+                    <!-- CHANNEL -->
+                    <div class="col-12 col-lg-6">
+                        <div class="sa-card">
+                            <h4>Sales by Order Channel</h4>
+                            <table class="sa-table">
+                                <thead><tr><th>Channel</th><th>Orders</th><th>Sales</th><th>Share</th></tr></thead>
+                                <tbody>
+                                    <tr><td>Online ordering</td><td><?= number_format($saCh['online']['orders']) ?></td><td><?= $saPeso($saCh['online']['sales']) ?></td><td><?= number_format(saShare($saCh['online']['sales'], $saChTotal), 1) ?>%</td></tr>
+                                    <tr><td>Walk-in</td><td><?= number_format($saCh['walk_in']['orders']) ?></td><td><?= $saPeso($saCh['walk_in']['sales']) ?></td><td><?= number_format(saShare($saCh['walk_in']['sales'], $saChTotal), 1) ?>%</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- PAYMENT -->
+                    <div class="col-12 col-lg-6">
+                        <div class="sa-card">
+                            <h4>Sales by Payment Method</h4>
+                            <table class="sa-table">
+                                <thead><tr><th>Method</th><th>Orders</th><th>Sales</th><th>Share</th></tr></thead>
+                                <tbody>
+                                    <tr><td>Cash</td><td><?= number_format($saPay['cash']['orders']) ?></td><td><?= $saPeso($saPay['cash']['sales']) ?></td><td><?= number_format(saShare($saPay['cash']['sales'], $saPayTotal), 1) ?>%</td></tr>
+                                    <tr><td>GCash</td><td><?= number_format($saPay['gcash']['orders']) ?></td><td><?= $saPeso($saPay['gcash']['sales']) ?></td><td><?= number_format(saShare($saPay['gcash']['sales'], $saPayTotal), 1) ?>%</td></tr>
+                                </tbody>
+                            </table>
+                            <div class="sa-note">Cash sales should match the cash collected at the counter; GCash sales should match your GCash records.</div>
+                        </div>
+                    </div>
+
+                    <!-- TOP PRODUCTS -->
+                    <div class="col-12 col-lg-6">
+                        <div class="sa-card">
+                            <h4>Top 10 Products</h4>
+                            <?php if (empty($analytics['topProducts'])): ?>
+                                <div class="sa-note">No items sold in this period.</div>
+                            <?php else: ?>
+                                <table class="sa-table">
+                                    <thead><tr><th>Product</th><th>Qty</th><th>Item Sales</th></tr></thead>
+                                    <tbody>
+                                        <?php foreach ($analytics['topProducts'] as $saP): ?>
+                                            <tr><td><?= htmlspecialchars((string)$saP['name']) ?></td><td><?= number_format((int)$saP['qty']) ?></td><td><?= $saPeso($saP['sales']) ?></td></tr>
+                                        <?php endforeach; ?>
+                                    </tbody>
+                                </table>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+
+                    <!-- CATEGORIES -->
+                    <div class="col-12 col-lg-6">
+                        <div class="sa-card">
+                            <h4>Sales by Category</h4>
+                            <?php if (empty($analytics['categories'])): ?>
+                                <div class="sa-note">No items sold in this period.</div>
+                            <?php else: ?>
+                                <table class="sa-table">
+                                    <thead><tr><th>Category</th><th>Qty</th><th>Item Sales</th></tr></thead>
+                                    <tbody>
+                                        <?php foreach ($analytics['categories'] as $saC): ?>
+                                            <tr><td><?= htmlspecialchars((string)$saC['category_name']) ?></td><td><?= number_format((int)$saC['qty']) ?></td><td><?= $saPeso($saC['sales']) ?></td></tr>
+                                        <?php endforeach; ?>
+                                    </tbody>
+                                </table>
+                                <div class="sa-note">Item sales are line totals before order-level discounts, so they will not add up exactly to Net Sales.</div>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+
+                    <!-- PEAK HOURS -->
+                    <div class="col-12 col-lg-6">
+                        <div class="sa-card">
+                            <h4>Peak Pickup Hours</h4>
+                            <?php if (empty($analytics['hours'])): ?>
+                                <div class="sa-note">No orders in this period.</div>
+                            <?php else: ?>
+                                <?php foreach ($analytics['hours'] as $saH): ?>
+                                    <?php $saHr = (int)$saH['hr']; ?>
+                                    <div class="sa-hour-row">
+                                        <span class="sa-hour-label"><?= date('g A', strtotime(sprintf('%02d:00', $saHr))) ?></span>
+                                        <div class="sa-bar-track"><div class="sa-bar-fill" style="width:<?= round(((int)$saH['orders'] / $saMaxHourOrders) * 100) ?>%"></div></div>
+                                        <span class="sa-hour-count"><?= (int)$saH['orders'] ?></span>
+                                    </div>
+                                <?php endforeach; ?>
+                                <div class="sa-note">Based on the pickup time of completed orders. Use it to schedule staff and prepare ingredients.</div>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+
+                    <!-- WEEKDAYS -->
+                    <div class="col-12 col-lg-6">
+                        <div class="sa-card">
+                            <h4>Sales by Day of the Week</h4>
+                            <?php if (empty($analytics['weekdays'])): ?>
+                                <div class="sa-note">No sales in this period.</div>
+                            <?php else: ?>
+                                <table class="sa-table">
+                                    <thead><tr><th>Day</th><th>Orders</th><th>Sales</th></tr></thead>
+                                    <tbody>
+                                        <?php foreach ($analytics['weekdays'] as $saD): ?>
+                                            <tr><td><?= htmlspecialchars($saD['label']) ?></td><td><?= number_format($saD['orders']) ?></td><td><?= $saPeso($saD['sales']) ?></td></tr>
+                                        <?php endforeach; ?>
+                                    </tbody>
+                                </table>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+
+                    <!-- ORDER OUTCOMES -->
+                    <div class="col-12 col-lg-6">
+                        <div class="sa-card">
+                            <h4>Order Outcomes (orders placed in this period)</h4>
+                            <table class="sa-table">
+                                <tbody>
+                                    <tr><td>Orders placed</td><td><?= number_format($saOut['placed']) ?></td></tr>
+                                    <tr><td>Completed</td><td><?= number_format($saOut['completed']) ?></td></tr>
+                                    <tr><td>Cancelled</td><td><?= number_format($saOut['cancelled']) ?> (<?= number_format($saOut['cancel_rate'], 1) ?>%)</td></tr>
+                                    <tr><td>Still in progress</td><td><?= number_format($saOut['in_progress']) ?></td></tr>
+                                </tbody>
+                            </table>
+                            <?php if (!empty($analytics['cancelReasons'])): ?>
+                                <div class="sa-note" style="margin-top:12px;"><strong>Top cancellation reasons</strong></div>
+                                <table class="sa-table">
+                                    <tbody>
+                                        <?php foreach ($analytics['cancelReasons'] as $saR): ?>
+                                            <tr><td><?= htmlspecialchars((string)$saR['reason']) ?></td><td><?= number_format((int)$saR['orders']) ?></td></tr>
+                                        <?php endforeach; ?>
+                                    </tbody>
+                                </table>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+
+                    <!-- DISCOUNTS AND PROMOTIONS -->
+                    <div class="col-12 col-lg-6">
+                        <div class="sa-card">
+                            <h4>Discounts &amp; Promotions</h4>
+                            <table class="sa-table">
+                                <thead><tr><th>Type</th><th>Orders</th><th>Amount</th></tr></thead>
+                                <tbody>
+                                    <tr><td>PWD discount</td><td><?= number_format($analytics['idDiscounts']['pwd']['orders']) ?></td><td><?= $saPeso($analytics['idDiscounts']['pwd']['amount']) ?></td></tr>
+                                    <tr><td>Senior citizen discount</td><td><?= number_format($analytics['idDiscounts']['senior']['orders']) ?></td><td><?= $saPeso($analytics['idDiscounts']['senior']['amount']) ?></td></tr>
+                                    <?php foreach ($analytics['promotions'] as $saPr): ?>
+                                        <tr><td>Promo: <?= htmlspecialchars((string)$saPr['title']) ?></td><td><?= number_format((int)$saPr['used']) ?></td><td><?= $saPeso($saPr['amount']) ?></td></tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- CUSTOMERS -->
+                    <div class="col-12">
+                        <div class="sa-card">
+                            <h4>Online Customers</h4>
+                            <div class="row g-3">
+                                <div class="col-6 col-md-3"><div class="sa-kpi-small"><?= number_format($analytics['customers']['registered']) ?></div><div class="sa-kpi-small-label">Registered customers who bought</div></div>
+                                <div class="col-6 col-md-3"><div class="sa-kpi-small"><?= number_format($analytics['customers']['new']) ?></div><div class="sa-kpi-small-label">First-time buyers</div></div>
+                                <div class="col-6 col-md-3"><div class="sa-kpi-small"><?= number_format($analytics['customers']['returning']) ?></div><div class="sa-kpi-small-label">Returning customers</div></div>
+                                <div class="col-6 col-md-3"><div class="sa-kpi-small"><?= number_format($analytics['customers']['guest_orders']) ?></div><div class="sa-kpi-small-label">Guest (no account) orders</div></div>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+                <?php endif; ?>
 
                 <!-- SALES OVERVIEW -->
                 <div class="overview-card mt-4">
