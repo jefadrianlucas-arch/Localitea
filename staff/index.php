@@ -442,6 +442,7 @@ if (!in_array($history_status, ['all', 'completed', 'cancelled'], true)) {
    This is set explicitly (not inferred from page number) so that
    paging back to page 1 does not cause the section to collapse. */
 $cancelled_open = ($_GET['cancelled_open'] ?? '') === '1' ? '1' : '';
+$history_view = $cancelled_open === '1' || $cancelled_search !== '';
 
 /* =========================================================
    VIEW ORDER TARGET
@@ -1733,6 +1734,12 @@ $cancelled_where = [
 ];
 $cancelled_params = [];
 
+if ($selected_source === 'online') {
+    $cancelled_where[] = "COALESCE(o.order_source, 'online') <> 'walk_in'";
+} elseif ($selected_source === 'walk_in') {
+    $cancelled_where[] = "o.order_source = 'walk_in'";
+}
+
 switch ($cancelled_period) {
     case 'today':
         $cancelled_where[] = 'DATE(o.closed_at) = CURDATE()';
@@ -2014,11 +2021,11 @@ if (!empty($cancelled_orders)) {
         INNER JOIN (
             SELECT order_id, MAX(id) AS max_id
             FROM order_status_history
-            WHERE to_status = 'cancelled'
+            WHERE to_status IN ('completed', 'cancelled')
               AND order_id IN ({$history_placeholders})
             GROUP BY order_id
         ) latest ON latest.max_id = h.id
-        WHERE h.to_status = 'cancelled'
+        WHERE h.to_status IN ('completed', 'cancelled')
     ");
 
     $historyActorStmt->execute($history_order_ids);
@@ -2462,6 +2469,64 @@ require_once '../includes/header.php';
     .order-source-filter:focus {
         border-color: #6F4E37;
         box-shadow: 0 0 0 .2rem rgba(111, 78, 55, .16);
+    }
+
+    .order-source-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 9px;
+        border-radius: 999px;
+        font-size: .72rem;
+        font-weight: 700;
+        line-height: 1.5;
+        white-space: nowrap;
+    }
+
+    .order-source-badge.source-online {
+        background: #E3EEFB;
+        color: #1A5AA6;
+    }
+
+    .order-source-badge.source-walk_in {
+        background: #FDEBD0;
+        color: #9A5B00;
+    }
+
+    .order-history-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 38px;
+        padding: 0 14px;
+        border: 1px solid #6F4E37;
+        border-radius: 8px;
+        background: #FFFFFF;
+        color: #6F4E37;
+        font-size: .82rem;
+        font-weight: 700;
+        text-decoration: none;
+        white-space: nowrap;
+    }
+
+    .order-history-btn:hover,
+    .order-history-btn:focus-visible {
+        background: #6F4E37;
+        color: #FFFFFF;
+    }
+
+    .order-history-btn.is-back {
+        background: #6F4E37;
+        color: #FFFFFF;
+    }
+
+    .order-history-btn.is-back:hover,
+    .order-history-btn.is-back:focus-visible {
+        background: #4A3525;
+    }
+
+    .order-history-heading {
+        margin-bottom: 14px;
     }
 
     .search-box {
@@ -4327,6 +4392,16 @@ require_once '../includes/header.php';
             font-size: 16px;
         }
 
+        .order-search-form {
+            flex-wrap: wrap;
+        }
+
+        .order-search-form .order-history-btn {
+            flex: 1 0 100%;
+            justify-content: center;
+            height: 44px;
+        }
+
         .search-actions .btn {
             height: 44px;
             padding-left: 14px;
@@ -6047,7 +6122,47 @@ require_once '../includes/header.php';
                     </div>
                 <?php endif; ?>
 
+                <?php if ($history_view): ?>
+                    <a
+                        class="order-history-btn is-back"
+                        href="<?= htmlspecialchars(staffOrdersUrl([
+                            'cancelled_open' => '',
+                            'cancelled_q' => '',
+                            'q' => '',
+                            'page' => 1
+                        ]), ENT_QUOTES, 'UTF-8') ?>"
+                    >
+                        <i class="bi bi-arrow-left" aria-hidden="true"></i> Active Orders
+                    </a>
+                <?php else: ?>
+                    <a
+                        class="order-history-btn"
+                        href="<?= htmlspecialchars(staffOrdersUrl([
+                            'cancelled_open' => '1',
+                            'q' => ''
+                        ]), ENT_QUOTES, 'UTF-8') ?>"
+                    >
+                        <i class="bi bi-clock-history" aria-hidden="true"></i> Order History
+                    </a>
+                <?php endif; ?>
+
             </form>
+
+            <?php if ($history_view): ?>
+                <style>
+                    .workflow-grid,
+                    .active-orders-section,
+                    .staff-refund-count-notice,
+                    .order-search-form .search-box,
+                    .order-search-form .order-source-filter,
+                    .order-search-form .search-actions { display: none !important; }
+                    details.order-history-section > summary { display: none !important; }
+                </style>
+            <?php else: ?>
+                <style>
+                    details.order-history-section { display: none !important; }
+                </style>
+            <?php endif; ?>
 
             <!-- ACTIVE ORDERS SECTION -->
             <section class="active-orders-section">
@@ -7287,10 +7402,7 @@ require_once '../includes/header.php';
             ====================================================== -->
             <details
                 class="cancelled-orders-section order-history-section"
-                <?= (
-                    $cancelled_search !== ''
-                    || $cancelled_open === '1'
-                ) ? 'open' : '' ?>
+                <?= $history_view ? 'open' : '' ?>
             >
                 <summary class="cancelled-section-summary">
 
@@ -7317,6 +7429,11 @@ require_once '../includes/header.php';
 
                 <div class="cancelled-section-content">
 
+                    <div class="order-history-heading">
+                        <h3 class="active-orders-title">Order History</h3>
+                        <p class="active-orders-description">Completed and cancelled orders</p>
+                    </div>
+
                     <form method="GET" class="cancelled-filter-form" data-cancelled-filter-form>
 
                         <input
@@ -7342,6 +7459,23 @@ require_once '../includes/header.php';
                             name="cancelled_open"
                             value="1"
                         >
+
+                        <div class="cancelled-filter-group">
+                            <label for="historySource">Source</label>
+                            <select
+                                id="historySource"
+                                name="source"
+                                class="cancelled-filter-period"
+                                data-history-source
+                            >
+                                <?php foreach (['all' => 'All', 'online' => 'Online', 'walk_in' => 'Walk-in'] as $historySourceKey => $historySourceLabel): ?>
+                                    <option
+                                        value="<?= $historySourceKey ?>"
+                                        <?= $selected_source === $historySourceKey ? 'selected' : '' ?>
+                                    ><?= $historySourceLabel ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
 
                         <div class="cancelled-filter-group">
 
@@ -7493,11 +7627,12 @@ require_once '../includes/header.php';
                                     <tr>
                                         <th>Order</th>
                                         <th>Customer</th>
-                                        <th>Type / Pick-up</th>
+                                        <th>Pick-up</th>
                                         <th>Payment</th>
                                         <th class="text-end">Total</th>
-                                        <th>Notes</th>
-                                        <th>Closed At</th>
+                                        <th>Cancellation Reason</th>
+                                        <th>Refund Status</th>
+                                        <th>Closed At / By</th>
                                         <th class="text-end">Details</th>
                                     </tr>
                                 </thead>
@@ -7513,24 +7648,40 @@ require_once '../includes/header.php';
                                     $historyIsWalkin = ($cancelled_order['order_source'] ?? '') === 'walk_in';
                                     $historyIsGcash = strtolower(trim((string)$cancelled_order['payment_method'])) === 'gcash';
                                     $historyGcashRef = $gcash_references[$cancelled_order_id] ?? '';
+                                    $historySource = $historyIsWalkin ? 'walk_in' : 'online';
+                                    $historyRefundStatus = $historyIsCancelled
+                                        ? strtolower(trim((string)($cancelled_order['refund_status'] ?? 'none')))
+                                        : 'none';
+                                    $historyRefundLabel = match ($historyRefundStatus) {
+                                        'pending' => 'Pending',
+                                        'refunded' => 'Refunded',
+                                        'rejected' => 'Rejected',
+                                        default => '—'
+                                    };
+                                    $historyRefundClass = match ($historyRefundStatus) {
+                                        'pending' => 'history-state-review',
+                                        'refunded' => 'history-state-verified',
+                                        'rejected' => 'history-state-rejected',
+                                        default => ''
+                                    };
                                     ?>
                                     <tr class="order-card history-order-row <?= ($target_order_id === $cancelled_order_id) ? 'view-order-target' : '' ?>" id="order-<?= $cancelled_order_id ?>" data-order-id="<?= $cancelled_order_id ?>">
                                         <td>
                                             <div class="order-table-primary"><?= htmlspecialchars($cancelledIdentifier) ?></div>
                                             <div class="order-table-date">Claim: <?= htmlspecialchars($cancelled_order['claim_number'] ?: 'N/A') ?></div>
                                             <span class="status-badge status-<?= $historyIsCancelled ? 'cancelled' : 'completed' ?>"><?= $historyIsCancelled ? 'Cancelled' : 'Completed' ?></span>
+                                            <span class="order-source-badge source-<?= $historySource ?>">
+                                                <i class="bi <?= $historyIsWalkin ? 'bi-shop' : 'bi-globe2' ?>" aria-hidden="true"></i>
+                                                <?= $historyIsWalkin ? 'Walk-in' : 'Online' ?>
+                                            </span>
                                         </td>
                                         <td>
                                             <div class="order-table-primary"><?= htmlspecialchars($cancelled_order['customer_name'] ?? 'Guest') ?></div>
                                             <div class="order-table-date"><?= htmlspecialchars($cancelled_order['contact_number'] ?? '—') ?></div>
                                         </td>
                                         <td>
-                                            <?php if ($historyIsWalkin): ?>
-                                                <div class="order-table-primary">Walk-in</div>
-                                            <?php else: ?>
-                                                <div class="order-table-primary"><?= htmlspecialchars($cancelled_order['pickup_date'] ?? '—') ?></div>
-                                                <div class="order-table-date"><?= htmlspecialchars(staffFormatTime($cancelled_order['pickup_time'] ?? '')) ?></div>
-                                            <?php endif; ?>
+                                            <div class="order-table-primary"><?= htmlspecialchars($cancelled_order['pickup_date'] ?? '—') ?></div>
+                                            <div class="order-table-date"><?= htmlspecialchars(staffFormatTime($cancelled_order['pickup_time'] ?? '')) ?></div>
                                         </td>
                                         <td>
                                             <span class="order-table-payment <?= $historyIsGcash ? 'payment-gcash' : '' ?>"><?= $historyIsGcash ? 'GCash' : 'Cash' ?></span>
@@ -7541,11 +7692,16 @@ require_once '../includes/header.php';
                                         <td class="text-end"><span class="order-table-total">₱<?= number_format((float)$cancelled_order['total_amount'], 2) ?></span></td>
                                         <td><div class="history-reason-cell"><?= $historyIsCancelled ? htmlspecialchars($cancelled_order['cancellation_reason'] ?: 'No reason recorded.') : '—' ?></div></td>
                                         <td>
+                                            <?php if ($historyRefundStatus !== 'none' && $historyRefundStatus !== ''): ?>
+                                                <span class="history-state-pill <?= $historyRefundClass ?>"><?= htmlspecialchars($historyRefundLabel) ?></span>
+                                            <?php else: ?>
+                                                <span class="order-table-none">—</span>
+                                            <?php endif; ?>
+                                        </td>
+                                        <td>
                                             <div class="order-table-primary"><?= !empty($cancelled_order['closed_at']) ? htmlspecialchars(date('M d, Y', strtotime($cancelled_order['closed_at']))) : '—' ?></div>
                                             <div class="order-table-date"><?= !empty($cancelled_order['closed_at']) ? htmlspecialchars(date('h:i A', strtotime($cancelled_order['closed_at']))) : '' ?></div>
-                                            <?php if ($historyIsCancelled): ?>
-                                                <div class="order-table-date">By <?= htmlspecialchars(staffCancellationActorLabel($cancelled_by_role)) ?></div>
-                                            <?php endif; ?>
+                                            <div class="order-table-date">By <?= $cancelled_by_role ? htmlspecialchars(staffCancellationActorLabel($cancelled_by_role)) : '—' ?></div>
                                         </td>
                                         <td class="text-end history-details-cell">
                                             <button type="button" class="btn btn-view-details" data-cancelled-order-details data-order-id="<?= $cancelled_order_id ?>" data-order-details-modal="detailsModal<?= $cancelled_order_id ?>" aria-label="View details for <?= htmlspecialchars($cancelledIdentifier, ENT_QUOTES, 'UTF-8') ?>"><i class="bi bi-eye me-1"></i>View Details</button>
@@ -12145,6 +12301,11 @@ document.addEventListener('DOMContentLoaded', function () {
             overrides.cancelled_period ??
             url.searchParams.get('cancelled_period');
 
+        const source =
+            overrides.source ??
+            url.searchParams.get('source') ??
+            'all';
+
         const month =
             overrides.cancelled_month ??
             url.searchParams.get('cancelled_month') ??
@@ -12169,6 +12330,12 @@ document.addEventListener('DOMContentLoaded', function () {
             url.searchParams.set('history_status', historyStatus);
         } else {
             url.searchParams.delete('history_status');
+        }
+
+        if (source && source !== 'all') {
+            url.searchParams.set('source', source);
+        } else {
+            url.searchParams.delete('source');
         }
 
         url.searchParams.set(
@@ -12212,6 +12379,20 @@ document.addEventListener('DOMContentLoaded', function () {
     staffOrdersContent.addEventListener(
         'change',
         function (event) {
+
+            const historySourceSelect =
+                event.target.closest('[data-history-source]');
+
+            if (historySourceSelect) {
+                loadCancelledOrders(
+                    buildCancelledUrl({
+                        source: historySourceSelect.value || 'all',
+                        cancelled_page: 1
+                    }),
+                    true
+                );
+                return;
+            }
 
             const historyStatusSelect =
                 event.target.closest('[data-history-status]');
@@ -12373,6 +12554,10 @@ document.addEventListener('DOMContentLoaded', function () {
                         search
                             ? search.value
                             : '',
+                    source:
+                        form.querySelector('[data-history-source]')
+                            ? form.querySelector('[data-history-source]').value
+                            : 'all',
                     history_status:
                         form.querySelector('[data-history-status]')
                             ? form.querySelector('[data-history-status]').value
@@ -13455,14 +13640,15 @@ document.addEventListener('DOMContentLoaded', function () {
 @media (min-width: 1400px) {
     .history-orders-table { min-width: 0; }
     .cancelled-history-table { table-layout: fixed; }
-    .cancelled-history-table th:nth-child(1) { width: 13%; }
-    .cancelled-history-table th:nth-child(2) { width: 14%; }
-    .cancelled-history-table th:nth-child(3) { width: 10%; }
-    .cancelled-history-table th:nth-child(4) { width: 8%; }
-    .cancelled-history-table th:nth-child(5) { width: 8%; }
-    .cancelled-history-table th:nth-child(6) { width: 19%; }
-    .cancelled-history-table th:nth-child(7) { width: 16%; }
-    .cancelled-history-table th:nth-child(8) { width: 12%; }
+    .cancelled-history-table th:nth-child(1) { width: 12%; }
+    .cancelled-history-table th:nth-child(2) { width: 13%; }
+    .cancelled-history-table th:nth-child(3) { width: 9%; }
+    .cancelled-history-table th:nth-child(4) { width: 7%; }
+    .cancelled-history-table th:nth-child(5) { width: 7%; }
+    .cancelled-history-table th:nth-child(6) { width: 16%; }
+    .cancelled-history-table th:nth-child(7) { width: 9%; }
+    .cancelled-history-table th:nth-child(8) { width: 16%; }
+    .cancelled-history-table th:nth-child(9) { width: 11%; }
     .refund-history-table { table-layout: fixed; }
     .refund-history-table th:nth-child(1) { width: 12%; }
     .refund-history-table th:nth-child(2) { width: 13%; }
