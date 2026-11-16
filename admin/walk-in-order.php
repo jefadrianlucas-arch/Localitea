@@ -542,6 +542,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         ));
     }
 
+    /* ---------------- UPDATE PROMOTION CUSTOMIZATION ---------------- */
+    if ($action === 'update_promotion_item') {
+        try {
+            $cartKey = trim((string)($_POST['cart_key'] ?? ''));
+            $sugarLevel = trim((string)($_POST['sugar_level'] ?? ''));
+            $selectedAddons = $_POST['addons'] ?? [];
+            if (!is_array($selectedAddons)) {
+                throw new RuntimeException('The selected add-ons are invalid.');
+            }
+
+            walkinUpdatePromotionItem(
+                $pdo,
+                $_SESSION['walkin_cart'],
+                $cartKey,
+                $sugarLevel,
+                $selectedAddons
+            );
+            walkinRedirect(walkinBackUrl($returnCategory, 'updated=1&cart=1'));
+        } catch (Throwable $e) {
+            error_log('Admin walk-in promotion customization error: ' . $e->getMessage());
+            $message = $e instanceof RuntimeException
+                ? $e->getMessage()
+                : 'Unable to save these customizations. Please refresh the page and try again.';
+            walkinRedirect(walkinBackUrl($returnCategory, 'error=' . urlencode($message) . '&cart=1'));
+        }
+    }
+
     /* ---------------- ADD ITEM ---------------- */
     if ($action === 'add_item') {
       try {
@@ -1651,12 +1678,29 @@ body { background: #F8F4EF; }
 .walkin-cart-line { color: #4A3525; font-size: .84rem; font-weight: 400; white-space: nowrap; }
 .walkin-cart-controls { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
 .walkin-qty-form, .walkin-remove-form { margin: 0; }
+.walkin-remove-form { order: 2; }
 .walkin-qty-btn, .walkin-remove-btn {
     border: 1px solid #D5C6BA; background: #FFFFFF; color: #5D4B3E;
     border-radius: 8px; width: 30px; height: 30px; padding: 0; font-size: .85rem;
 }
 .walkin-qty-btn:disabled { opacity: .45; }
 .walkin-remove-btn { border-color: #E2BBBB; color: #A43B3B; margin-left: auto; }
+.walkin-edit-promotion-btn {
+    order: 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 8px;
+    color: #6F4E37;
+    background: #F5EEE8;
+    border: 1px solid #D9C8BA;
+    border-radius: 8px;
+    font-size: .72rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+.walkin-edit-promotion-btn:hover,
+.walkin-edit-promotion-btn:focus-visible { color: #FFFFFF; background: #6F4E37; outline: none; }
 .walkin-qty-value { min-width: 26px; text-align: center; font-size: .8rem; font-weight: 400; }
 
 .walkin-cart-empty { padding: 50px 16px; text-align: center; color: #8C7B6E; }
@@ -2018,6 +2062,12 @@ body { background: #F8F4EF; }
                     if ($itemPromotionId > 0) {
                         $metaParts[] = 'Promotion: ' . ($walkinPromotionTitles[$itemPromotionId] ?? 'Selected deal');
                     }
+                    $editCustomization = $itemPromotionId > 0
+                        ? walkinPromotionCustomizationData($pdo, (int)($item['product_id'] ?? 0))
+                        : [];
+                    $editSelectedAddons = is_array($item['addons'] ?? null)
+                        ? $item['addons']
+                        : [];
                     ?>
                     <div class="walkin-cart-item">
                         <div class="d-flex align-items-start gap-2">
@@ -2065,6 +2115,25 @@ body { background: #F8F4EF; }
                                 <input type="hidden" name="category" value="<?= htmlspecialchars($category) ?>">
                                 <button type="submit" class="walkin-remove-btn" aria-label="Remove item"><i class="bi bi-trash3"></i></button>
                             </form>
+
+                            <?php if ($itemPromotionId > 0 && $editCustomization): ?>
+                                <button
+                                    type="button"
+                                    class="walkin-edit-promotion-btn"
+                                    aria-label="Edit sugar level and add-ons for <?= htmlspecialchars((string)$item['name'], ENT_QUOTES, 'UTF-8') ?>"
+                                    title="Edit sugar level and add-ons"
+                                    data-cart-key="<?= htmlspecialchars((string)$cartKey, ENT_QUOTES, 'UTF-8') ?>"
+                                    data-product-id="<?= (int)$item['product_id'] ?>"
+                                    data-product-name="<?= htmlspecialchars((string)$item['name'], ENT_QUOTES, 'UTF-8') ?>"
+                                    data-size="<?= htmlspecialchars((string)($item['size'] ?? ''), ENT_QUOTES, 'UTF-8') ?>"
+                                    data-sugar-level="<?= htmlspecialchars((string)($item['sugar_level'] ?? '50%'), ENT_QUOTES, 'UTF-8') ?>"
+                                    data-price="<?= htmlspecialchars((string)$editCustomization['price'], ENT_QUOTES, 'UTF-8') ?>"
+                                    data-regular-price="<?= htmlspecialchars((string)$editCustomization['regular_price'], ENT_QUOTES, 'UTF-8') ?>"
+                                    data-grande-price="<?= htmlspecialchars((string)$editCustomization['grande_price'], ENT_QUOTES, 'UTF-8') ?>"
+                                    data-addons='<?= htmlspecialchars(json_encode($editCustomization['addons'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '[]', ENT_QUOTES, 'UTF-8') ?>'
+                                    data-selected-addons='<?= htmlspecialchars(json_encode($editSelectedAddons, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '[]', ENT_QUOTES, 'UTF-8') ?>'
+                                ><i class="bi bi-pencil-square"></i><span>Customize</span></button>
+                            <?php endif; ?>
                         </div>
                     </div>
                 <?php endforeach; ?>
@@ -2143,13 +2212,14 @@ body { background: #F8F4EF; }
             </div>
 
             <form method="POST" id="walkinAddForm">
-                <input type="hidden" name="action" value="add_item">
+                <input type="hidden" name="action" id="walkinAddAction" value="add_item">
                                 <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($admin_walkin_csrf_token, ENT_QUOTES, 'UTF-8') ?>">
                 <input type="hidden" name="product_id" id="walkinProductId">
+                <input type="hidden" name="cart_key" id="walkinEditCartKey">
                 <input type="hidden" name="category" value="<?= htmlspecialchars($category) ?>">
 
                 <div class="modal-body">
-                    <div class="mb-3">
+                    <div class="mb-3" id="walkinSizeSection">
                         <span class="section-label">Size</span>
                         <div class="walkin-radio-grid" id="walkinSizeOptions"></div>
                     </div>
@@ -2189,7 +2259,7 @@ body { background: #F8F4EF; }
                         </div>
                     </div>
 
-                    <div class="mb-3">
+                    <div class="mb-3" id="walkinDiscountSection">
                         <span class="section-label">Discount</span>
                         <div class="walkin-radio-grid">
                             <div class="walkin-radio-card">
@@ -2232,7 +2302,7 @@ body { background: #F8F4EF; }
 
                 <div class="modal-footer">
                     <div class="walkin-modal-total"><small>Item total</small><span id="walkinModalTotal">₱0.00</span></div>
-                    <button type="submit" class="btn walkin-place-btn"><i class="bi bi-plus-circle me-1"></i> Add to Order</button>
+                    <button type="submit" id="walkinAddSubmit" class="btn walkin-place-btn"><i class="bi bi-plus-circle me-1"></i> Add to Order</button>
                 </div>
             </form>
         </div>
@@ -2429,8 +2499,13 @@ function walkinInit() {
     const categoriesEl = document.getElementById('walkinCategories');
     const productModal = document.getElementById('walkinProductModal');
     const addForm = document.getElementById('walkinAddForm');
+    const addActionInput = document.getElementById('walkinAddAction');
     const productModalTitle = document.getElementById('walkinProductModalTitle');
     const productIdInput = document.getElementById('walkinProductId');
+    const editCartKeyInput = document.getElementById('walkinEditCartKey');
+    const sizeSection = document.getElementById('walkinSizeSection');
+    const discountSection = document.getElementById('walkinDiscountSection');
+    const addSubmitButton = document.getElementById('walkinAddSubmit');
     const sizeOptions = document.getElementById('walkinSizeOptions');
     const addonOptions = document.getElementById('walkinAddonOptions');
     const noAddons = document.getElementById('walkinNoAddons');
@@ -2546,9 +2621,11 @@ function walkinInit() {
 
         sizeOptions.innerHTML = options.map(function (option, index) {
             const id = 'walkinSize_' + option.value.toLowerCase();
+            const selectedSize = button.dataset.size || '';
+            const isSelected = selectedSize ? selectedSize === option.value : index === 0;
             return `
                 <div class="walkin-radio-card">
-                    <input type="radio" name="size" value="${escapeHtml(option.value)}" id="${id}" data-price="${option.price}" ${index === 0 ? 'checked' : ''}>
+                    <input type="radio" name="size" value="${escapeHtml(option.value)}" id="${id}" data-price="${option.price}" ${isSelected ? 'checked' : ''}>
                     <label for="${id}">${escapeHtml(option.value)} · ₱${option.price.toFixed(2)}</label>
                 </div>`;
         }).join('');
@@ -2569,11 +2646,18 @@ function walkinInit() {
                     <label for="${id}">${escapeHtml(addon.name)} <span>+₱${price.toFixed(2)}</span></label>
                 </div>`;
         }).join('');
+        let selectedAddons = [];
+        try { selectedAddons = JSON.parse(button.dataset.selectedAddons || '[]'); } catch (e) { selectedAddons = []; }
+        if (Array.isArray(selectedAddons)) {
+            addonOptions.querySelectorAll('input[name="addons[]"]').forEach(function (input) {
+                input.checked = selectedAddons.includes(input.value);
+            });
+        }
 
         if (addonToggle) addonToggle.disabled = !addonsAvailable;
         if (addonChevron) addonChevron.hidden = !addonsAvailable;
         setAddonPanelExpanded(false);
-        updateAddonSummary(0, 0);
+        updateModalTotal();
     }
 
     if (addonToggle) {
@@ -2644,15 +2728,31 @@ function walkinInit() {
         const button = event.relatedTarget;
         if (!button || !button.dataset.productId) return;
 
-        productModalTitle.textContent = button.dataset.productName || 'Product';
+        const isEditingPromotion = Boolean(button.dataset.cartKey);
+        productModalTitle.textContent = isEditingPromotion
+            ? 'Customize ' + (button.dataset.productName || 'Promotion Item')
+            : (button.dataset.productName || 'Product');
         productIdInput.value = button.dataset.productId || '';
+        addActionInput.value = isEditingPromotion ? 'update_promotion_item' : 'add_item';
+        editCartKeyInput.value = isEditingPromotion ? button.dataset.cartKey : '';
         renderSizeOptions(button);
         renderAddons(button);
         try { activeBundle = button.dataset.bundle ? JSON.parse(button.dataset.bundle) : null; } catch (e) { activeBundle = null; }
         if (bundlePicksEl) bundlePicksEl.innerHTML = '';
         qtyInput.value = '1';
         renderBundlePicks();
-        document.getElementById('walkinSugar50').checked = true;
+        sizeSection.hidden = isEditingPromotion;
+        discountSection.hidden = isEditingPromotion;
+        if (isEditingPromotion) {
+            qtyBlock.hidden = true;
+            const sugarInput = Array.from(addForm.querySelectorAll('input[name="sugar_level"]'))
+                .find(function (input) { return input.value === button.dataset.sugarLevel; });
+            if (sugarInput) sugarInput.checked = true;
+            addSubmitButton.innerHTML = '<i class="bi bi-check2-circle me-1"></i> Save Customizations';
+        } else {
+            document.getElementById('walkinSugar50').checked = true;
+            addSubmitButton.innerHTML = '<i class="bi bi-plus-circle me-1"></i> Add to Order';
+        }
         document.getElementById('walkinDiscountNone').checked = true;
         resetDiscountFields();
         updateModalTotal();
@@ -2801,6 +2901,12 @@ function walkinInit() {
     }
 
     window.addEventListener('click', function (e) {
+        const editButton = e.target.closest('.walkin-edit-promotion-btn');
+        if (editButton) {
+            e.preventDefault();
+            productModalInstance.show(editButton);
+            return;
+        }
         const productCard = e.target.closest('.walkin-product-card[data-product-id]');
         if (productCard && !productCard.classList.contains('is-unavailable')) {
             e.preventDefault();

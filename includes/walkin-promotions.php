@@ -20,6 +20,39 @@ function walkinPromotionImagePath(?string $image): string
     return '../assets/uploads/promotions/' . $image;
 }
 
+function walkinPromotionCustomizationData(PDO $pdo, int $productId): array
+{
+    $productStmt = $pdo->prepare("
+        SELECT price, regular_price, grande_price
+        FROM products
+        WHERE id = ?
+        LIMIT 1
+    ");
+    $productStmt->execute([$productId]);
+    $product = $productStmt->fetch(PDO::FETCH_ASSOC);
+    if (!$product) {
+        return [];
+    }
+
+    $addonStmt = $pdo->prepare("
+        SELECT a.id, a.name, a.price
+        FROM product_addons pa
+        INNER JOIN addons a ON a.id = pa.addon_id
+        WHERE pa.product_id = ?
+          AND a.is_available = 1
+          AND a.is_archived = 0
+        ORDER BY pa.sort_order ASC, a.name ASC
+    ");
+    $addonStmt->execute([$productId]);
+
+    return [
+        'price' => (float)$product['price'],
+        'regular_price' => (float)($product['regular_price'] ?? 0),
+        'grande_price' => (float)($product['grande_price'] ?? 0),
+        'addons' => $addonStmt->fetchAll(PDO::FETCH_ASSOC),
+    ];
+}
+
 function walkinBuildPromotionCartLines(
     PDO $pdo,
     array $promotion
@@ -240,6 +273,93 @@ function walkinAddPromotionToCart(
     }
 
     $_SESSION['selected_promotion_id'] = $promotionId;
+}
+
+function walkinUpdatePromotionItem(
+    PDO $pdo,
+    array &$cart,
+    string $cartKey,
+    string $sugarLevel,
+    array $selectedAddons
+): void {
+    if (!isset($cart[$cartKey]) || !is_array($cart[$cartKey])) {
+        throw new RuntimeException('This promotion item is no longer in the order.');
+    }
+
+    $item = &$cart[$cartKey];
+    $productId = (int)($item['product_id'] ?? 0);
+    if ($productId <= 0 || (int)($item['promotion_source_id'] ?? 0) <= 0) {
+        throw new RuntimeException('Only items added by a promotion can be customized here.');
+    }
+    if (!in_array($sugarLevel, ['0%', '25%', '50%', '75%', '100%'], true)) {
+        throw new RuntimeException('Select a valid sugar level.');
+    }
+
+    $size = localiteaNormalizePromotionSize((string)($item['size'] ?? ''));
+    $productStmt = $pdo->prepare("
+        SELECT price, regular_price, grande_price, is_available, is_archived
+        FROM products
+        WHERE id = ?
+        LIMIT 1
+    ");
+    $productStmt->execute([$productId]);
+    $product = $productStmt->fetch(PDO::FETCH_ASSOC);
+    if (
+        !$product ||
+        (int)$product['is_available'] !== 1 ||
+        (int)$product['is_archived'] !== 0
+    ) {
+        throw new RuntimeException('This product is no longer available to customize.');
+    }
+
+    if ($size === 'regular') {
+        $basePrice = (float)($product['regular_price'] ?? 0);
+    } elseif ($size === 'grande') {
+        $basePrice = (float)($product['grande_price'] ?? 0);
+    } else {
+        $basePrice = (float)($product['price'] ?? 0);
+    }
+    if (!is_finite($basePrice) || $basePrice <= 0) {
+        throw new RuntimeException('This product no longer has a valid price.');
+    }
+
+    $addonStmt = $pdo->prepare("
+        SELECT a.name, a.price
+        FROM product_addons pa
+        INNER JOIN addons a ON a.id = pa.addon_id
+        WHERE pa.product_id = ?
+          AND a.is_available = 1
+          AND a.is_archived = 0
+    ");
+    $addonStmt->execute([$productId]);
+    $allowedAddons = [];
+    foreach ($addonStmt->fetchAll(PDO::FETCH_ASSOC) as $addon) {
+        $allowedAddons[(string)$addon['name']] = (float)$addon['price'];
+    }
+
+    $validAddons = [];
+    $addonsTotal = 0.0;
+    foreach ($selectedAddons as $addonName) {
+        if (!is_string($addonName)) {
+            throw new RuntimeException('One of the selected add-ons is invalid.');
+        }
+        $addonName = trim($addonName);
+        if ($addonName === '') {
+            continue;
+        }
+        if (!array_key_exists($addonName, $allowedAddons)) {
+            throw new RuntimeException('One of the selected add-ons is no longer available.');
+        }
+        if (!in_array($addonName, $validAddons, true)) {
+            $validAddons[] = $addonName;
+            $addonsTotal += $allowedAddons[$addonName];
+        }
+    }
+    sort($validAddons, SORT_NATURAL | SORT_FLAG_CASE);
+
+    $item['sugar_level'] = $sugarLevel;
+    $item['addons'] = $validAddons;
+    $item['price'] = round($basePrice + $addonsTotal, 2);
 }
 
 function walkinCalculatePricing(
