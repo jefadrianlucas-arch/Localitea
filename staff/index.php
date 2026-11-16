@@ -8165,6 +8165,28 @@ document.addEventListener('DOMContentLoaded', function () {
      */
     window.closeLocaliteaModal = closeLocaliteaModal;
 
+    document.addEventListener('click', function (event) {
+        const target = event.target instanceof Element ? event.target : null;
+        const dismissButton = target
+            ? target.closest('.modal [data-bs-dismiss="modal"]')
+            : null;
+
+        if (
+            !dismissButton
+            || (window.bootstrap && bootstrap.Modal)
+        ) {
+            return;
+        }
+
+        const modalElement = dismissButton.closest('.modal');
+        if (modalElement) {
+            event.preventDefault();
+            event.stopPropagation();
+            event.stopImmediatePropagation();
+            closeLocaliteaModal(modalElement);
+        }
+    }, true);
+
     /*
      * Cancelled history modals are rendered inside a <details> section with
      * overflow:hidden. Move only the selected modal to <body> before opening
@@ -11031,6 +11053,10 @@ document.addEventListener(
                 if (overdueReference) {
                     overdueReference.textContent =
                         orderReference + (pickupLabel ? ' · Pickup was scheduled for ' + pickupLabel : '');
+                }
+
+                if (overdueModal && overdueModal.parentElement !== document.body) {
+                    document.body.appendChild(overdueModal);
                 }
 
                 if (overdueModal && typeof window.showLocaliteaModal === 'function') {
