@@ -28,6 +28,10 @@ error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
 require_once '../includes/db.php';
+require_once '../includes/cart-storage.php';
+register_shutdown_function(function () use ($pdo) {
+    saveCustomerCart($pdo);
+});
 require_once '../includes/promotion-engine.php';
 
 $successMessage = '';

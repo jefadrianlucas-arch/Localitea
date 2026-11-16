@@ -1,6 +1,10 @@
 <?php
 session_start();
 require_once '../includes/db.php';
+require_once '../includes/cart-storage.php';
+register_shutdown_function(function () use ($pdo) {
+    saveCustomerCart($pdo);
+});
 
 $isAjaxRequest =
     ($_POST['ajax'] ?? $_GET['ajax'] ?? '') === '1' ||

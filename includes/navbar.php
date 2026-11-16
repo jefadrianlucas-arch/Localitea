@@ -1,5 +1,11 @@
 <?php
 
+/* Keep the saved cart in step with the session cart (e.g. after checkout). */
+if (isset($pdo) && $pdo instanceof PDO) {
+    require_once __DIR__ . '/cart-storage.php';
+    saveCustomerCart($pdo);
+}
+
 $cart_count = isset($_SESSION['cart'])
     ? array_sum(array_column($_SESSION['cart'], 'quantity'))
     : 0;

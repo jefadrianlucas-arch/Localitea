@@ -84,6 +84,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $_SESSION['user_email'] = $customer['email'];
             $_SESSION['user_role'] = 'customer';
 
+            // Bring back the cart this customer had before logging out
+            require_once '../includes/cart-storage.php';
+            loadCustomerCart($pdo, (int)$customer['id']);
+
             header("Location: ../customer/index.php");
             exit;
         }
