@@ -546,10 +546,7 @@ if ($target_order_id > 0) {
             $selected_status =
                 $targetOrder['status'];
 
-            $selected_source =
-                ($targetOrder['order_source'] ?? '') === 'walk_in'
-                    ? 'walk_in'
-                    : 'online';
+            $selected_source = 'all';
             $search = '';
             $page = 1;
         }
@@ -1654,17 +1651,10 @@ if (
 ) {
     $targetStatus = (string)$targetOrder['status'];
 
-    $targetSourceCondition = $selected_source === 'walk_in'
-        ? "AND o.order_source = 'walk_in'"
-        : ($selected_source === 'online'
-            ? "AND COALESCE(o.order_source, 'online') = 'online'"
-            : '');
-
     $targetPageStmt = $pdo->prepare("
         SELECT COUNT(*)
         FROM orders o
         WHERE o.status = ?
-          {$targetSourceCondition}
           AND (
               o.pickup_date < ?
               OR (o.pickup_date = ? AND o.pickup_time < ?)
