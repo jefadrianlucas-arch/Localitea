@@ -307,6 +307,11 @@ if (mb_strlen($search) > 100) {
     $search = mb_substr($search, 0, 100);
 }
 
+$selected_source = strtolower(trim((string)($_GET['source'] ?? $_POST['source_filter'] ?? 'all')));
+if (!in_array($selected_source, ['all', 'online', 'walk_in'], true)) {
+    $selected_source = 'all';
+}
+
 /* =========================================================
    CANCELLED ORDER FILTERS
    Cancelled records are a separate historical section below
@@ -460,7 +465,10 @@ if ($target_order_id > 0) {
             SELECT
                 id,
                 status,
+                order_source,
                 created_at,
+                pickup_date,
+                pickup_time,
                 closed_at
             FROM orders
             WHERE id = ?
@@ -532,6 +540,10 @@ if ($target_order_id > 0) {
             $selected_status =
                 $targetOrder['status'];
 
+            $selected_source =
+                ($targetOrder['order_source'] ?? '') === 'walk_in'
+                    ? 'walk_in'
+                    : 'online';
             $search = '';
             $page = 1;
         }
@@ -561,6 +573,10 @@ function adminOrdersRedirect(
 
     if ($search !== '') {
         $params['q'] = $search;
+    }
+
+    if (($GLOBALS['selected_source'] ?? 'all') !== 'all') {
+        $params['source'] = $GLOBALS['selected_source'];
     }
 
     if ($GLOBALS['cancelled_search'] !== '') {
@@ -1864,6 +1880,12 @@ if (
 /* =========================================================
    STATUS COUNTS
 ========================================================= */
+$countSourceFilter = $selected_source === 'walk_in'
+    ? "WHERE order_source = 'walk_in'"
+    : ($selected_source === 'online'
+        ? "WHERE COALESCE(order_source, 'online') = 'online'"
+        : '');
+
 $countStmt = $pdo->query("
     SELECT
         COUNT(*) AS all_count,
@@ -1877,6 +1899,7 @@ $countStmt = $pdo->query("
         SUM(status = 'completed') AS completed_count,
         SUM(status = 'cancelled') AS cancelled_count
     FROM orders
+    {$countSourceFilter}
 ");
 
 /* =========================================================
@@ -2005,6 +2028,12 @@ if ($search !== '') {
     $params[] = $search_value;
 }
 
+if ($selected_source === 'online') {
+    $where[] = "COALESCE(o.order_source, 'online') = 'online'";
+} elseif ($selected_source === 'walk_in') {
+    $where[] = "o.order_source = 'walk_in'";
+}
+
 $where_sql = $where
     ? 'WHERE ' . implode(' AND ', $where)
     : '';
@@ -2027,12 +2056,8 @@ if ($page > $total_pages) {
 
 $offset = ($page - 1) * $per_page;
 
-/* Active orders are shown oldest first so the Admin sees
- * earlier orders first in the pick-up workflow. */
-/* FIFO: the customer who placed the order first stays at the front.
- * created_at is the primary queue order; id breaks ties when orders share
- * the exact same timestamp. */
-$order_by = 'o.created_at DESC, o.id DESC';
+/* Prioritize scheduled pickups, using order time to break ties. */
+$order_by = 'o.pickup_date ASC, o.pickup_time ASC, o.created_at ASC, o.id ASC';
 
 $orderSql = "
     SELECT
@@ -2051,7 +2076,7 @@ $orders = $orderStmt->fetchAll(PDO::FETCH_ASSOC);
 
 /*
  * Put the requested active order on the page where it belongs.
- * Active orders use created_at ASC, id ASC.
+ * Active orders use scheduled pickup date/time, then creation order.
  */
 if (
     $target_order_id > 0
@@ -2061,25 +2086,36 @@ if (
 ) {
     $targetStatus = (string)$targetOrder['status'];
 
+    $targetSourceCondition = $selected_source === 'walk_in'
+        ? "AND o.order_source = 'walk_in'"
+        : ($selected_source === 'online'
+            ? "AND COALESCE(o.order_source, 'online') = 'online'"
+            : '');
+
     $targetPageStmt = $pdo->prepare("
         SELECT COUNT(*)
         FROM orders o
         WHERE o.status = ?
+          {$targetSourceCondition}
           AND (
-              o.created_at > ?
-              OR (
-                  o.created_at = ?
-                  AND o.id >= ?
-              )
+              o.pickup_date < ?
+              OR (o.pickup_date = ? AND o.pickup_time < ?)
+              OR (o.pickup_date = ? AND o.pickup_time = ? AND o.created_at < ?)
+              OR (o.pickup_date = ? AND o.pickup_time = ? AND o.created_at = ? AND o.id <= ?)
           )
     ");
 
-    $targetCreatedAt = (string)$targetOrder['created_at'];
-
     $targetPageStmt->execute([
         $targetStatus,
-        $targetCreatedAt,
-        $targetCreatedAt,
+        $targetOrder['pickup_date'],
+        $targetOrder['pickup_date'],
+        $targetOrder['pickup_time'],
+        $targetOrder['pickup_date'],
+        $targetOrder['pickup_time'],
+        $targetOrder['created_at'],
+        $targetOrder['pickup_date'],
+        $targetOrder['pickup_time'],
+        $targetOrder['created_at'],
         $target_order_id
     ]);
 
@@ -2619,6 +2655,41 @@ function adminFormatDateTime(?string $value): string {
         : '—';
 }
 
+function adminOrderPickupOverdue(array $order): bool {
+    if (in_array((string)($order['status'] ?? ''), ['completed', 'cancelled'], true)) {
+        return false;
+    }
+
+    $pickupDate = trim((string)($order['pickup_date'] ?? ''));
+    $pickupTime = trim((string)($order['pickup_time'] ?? ''));
+    if ($pickupDate === '' || $pickupTime === '') {
+        return false;
+    }
+
+    if (preg_match('/^\d{2}:\d{2}$/', $pickupTime)) {
+        $pickupTime .= ':00';
+    }
+
+    $pickupText = $pickupDate . ' ' . $pickupTime;
+    $timezone = new DateTimeZone('Asia/Manila');
+    $pickupAt = DateTimeImmutable::createFromFormat('!Y-m-d H:i:s', $pickupText, $timezone);
+    $errors = DateTimeImmutable::getLastErrors();
+
+    if (
+        !$pickupAt
+        || ($errors !== false && ($errors['warning_count'] > 0 || $errors['error_count'] > 0))
+        || $pickupAt->format('Y-m-d H:i:s') !== $pickupText
+    ) {
+        return false;
+    }
+
+    if (($order['order_source'] ?? '') === 'walk_in') {
+        return $pickupDate < (new DateTimeImmutable('today', $timezone))->format('Y-m-d');
+    }
+
+    return $pickupAt < new DateTimeImmutable('now', $timezone);
+}
+
 function adminFormatGcashReference(string $reference): string
 {
     /* Display a 13-digit GCash reference in the same 4-3-6 groups as Staff. */
@@ -2831,6 +2902,7 @@ function adminOrdersUrl(array $overrides = []): string {
 
     $query = [
         'status' => $GLOBALS['selected_status'],
+        'source' => $GLOBALS['selected_source'],
         'q' => $GLOBALS['search'],
         'page' => $GLOBALS['page'],
         'cancelled_q' => $GLOBALS['cancelled_search'],
@@ -2967,6 +3039,13 @@ require_once '../includes/header.php';
         gap: 8px;
         flex-wrap: wrap;
         margin-bottom: 18px;
+    }
+
+    .order-source-filter {
+        width: auto;
+        min-width: 145px;
+        height: 38px;
+        font-size: .82rem;
     }
 
     .search-box {
@@ -4908,6 +4987,12 @@ require_once '../includes/header.php';
             font-size: 16px; /* prevents iOS zoom-on-focus */
         }
 
+        .order-source-filter {
+            min-width: 125px;
+            height: 44px;
+            font-size: 16px;
+        }
+
         .search-actions .btn {
             height: 44px;
             padding-left: 14px;
@@ -5245,6 +5330,11 @@ require_once '../includes/header.php';
 
     .admin-orders-table tbody tr.order-card:hover {
         background: #FDF8F2;
+    }
+
+    .admin-orders-table tbody tr.pickup-overdue-row,
+    .admin-orders-table tbody tr.pickup-overdue-row:hover {
+        background: #FFF0F0;
     }
 
     .admin-orders-table tbody td {
@@ -6004,6 +6094,10 @@ require_once '../includes/header.php';
 
         .admin-orders-table tbody tr.order-card:last-child { margin-bottom: 0; }
 
+        .admin-orders-table tbody tr.pickup-overdue-row {
+            background: #FFF0F0;
+        }
+
         .admin-orders-table tbody tr.order-card.view-order-target {
             background: #FFF8D8;
             outline: 3px solid #F1C40F;
@@ -6518,6 +6612,17 @@ require_once '../includes/header.php';
                     value="<?= htmlspecialchars($selected_status) ?>"
                 >
 
+                <select
+                    name="source"
+                    class="form-select order-source-filter"
+                    aria-label="Filter orders by source"
+                    onchange="this.form.requestSubmit()"
+                >
+                    <option value="all" <?= $selected_source === 'all' ? 'selected' : '' ?>>All orders</option>
+                    <option value="online" <?= $selected_source === 'online' ? 'selected' : '' ?>>Online</option>
+                    <option value="walk_in" <?= $selected_source === 'walk_in' ? 'selected' : '' ?>>Walk-in</option>
+                </select>
+
                 <div class="search-box">
                     <i class="bi bi-search" aria-hidden="true"></i>
 
@@ -6650,10 +6755,14 @@ require_once '../includes/header.php';
                                     );
                                     $discount_rate = (float)($order['discount_rate'] ?? 0);
                                     $discount_amount = (float)($order['discount_amount'] ?? 0);
+                                    $isPickupOverdue = adminOrderPickupOverdue($order);
+                                    $orderSource = ($order['order_source'] ?? '') === 'walk_in'
+                                        ? 'walk_in'
+                                        : 'online';
                                     ?>
 
                                     <tr
-                                        class="order-card <?= (
+                                        class="order-card <?= $isPickupOverdue ? 'table-danger pickup-overdue-row ' : '' ?><?= (
                                             $target_is_active
                                             && $order_id === $target_order_id
                                         ) ? 'view-order-target' : '' ?>"
@@ -6668,6 +6777,9 @@ require_once '../includes/header.php';
                                                     ?: 'ORD-' . $order_id
                                                 ) ?>
                                             </div>
+                                            <span class="badge <?= $orderSource === 'walk_in' ? 'bg-secondary' : 'bg-primary' ?>">
+                                                <?= $orderSource === 'walk_in' ? 'Walk-in' : 'Online' ?>
+                                            </span>
                                             <div class="order-table-date">
                                                 <?= htmlspecialchars(
                                                     adminFormatDateTime($order['created_at'] ?? null)
@@ -6708,6 +6820,9 @@ require_once '../includes/header.php';
                                                     adminFormatTime($order['pickup_time'])
                                                 ) ?>
                                             </div>
+                                            <?php if ($isPickupOverdue): ?>
+                                                <span class="badge bg-danger">Pickup overdue</span>
+                                            <?php endif; ?>
                                         </td>
 
                                         <td>
@@ -6790,8 +6905,12 @@ require_once '../includes/header.php';
                                                         data-total-amount="<?= number_format((float)$order['total_amount'], 2, '.', '') ?>"
                                                         data-proof-src="<?= htmlspecialchars($rowPaymentProof, ENT_QUOTES, 'UTF-8') ?>"
                                                         data-status-filter="<?= htmlspecialchars($selected_status, ENT_QUOTES, 'UTF-8') ?>"
+                                                        data-source-filter="<?= htmlspecialchars($selected_source, ENT_QUOTES, 'UTF-8') ?>"
                                                         data-search="<?= htmlspecialchars($search, ENT_QUOTES, 'UTF-8') ?>"
                                                         data-page="<?= (int)$page ?>"
+                                                        data-pickup-overdue="<?= $isPickupOverdue ? '1' : '0' ?>"
+                                                        data-order-reference="<?= htmlspecialchars($order['order_number'] ?: 'ORD-' . $order_id, ENT_QUOTES, 'UTF-8') ?>"
+                                                        data-pickup-label="<?= htmlspecialchars(($order['pickup_date'] ?? '') . ' ' . adminFormatTime($order['pickup_time'] ?? null), ENT_QUOTES, 'UTF-8') ?>"
                                                         aria-label="Review GCash payment for <?= htmlspecialchars($order['order_number'] ?: 'order ' . $order_id, ENT_QUOTES, 'UTF-8') ?>"
                                                     >
                                                         <i class="bi bi-shield-check" aria-hidden="true"></i>
@@ -6811,10 +6930,18 @@ require_once '../includes/header.php';
                                             <?php elseif ($status === 'pending_verification'): ?>
                                                 <span class="order-table-none">Payment details unavailable</span>
                                             <?php elseif ($tableNextAction): ?>
-                                                <form method="POST" action="orders.php" class="order-table-next-action-form">
+                                                <form
+                                                    method="POST"
+                                                    action="orders.php"
+                                                    class="order-table-next-action-form"
+                                                    data-pickup-overdue="<?= $isPickupOverdue ? '1' : '0' ?>"
+                                                    data-order-reference="<?= htmlspecialchars($order['order_number'] ?: 'ORD-' . $order_id, ENT_QUOTES, 'UTF-8') ?>"
+                                                    data-pickup-label="<?= htmlspecialchars(($order['pickup_date'] ?? '') . ' ' . adminFormatTime($order['pickup_time'] ?? null), ENT_QUOTES, 'UTF-8') ?>"
+                                                >
                                                     <input type="hidden" name="order_id" value="<?= $order_id ?>">
                                                     <input type="hidden" name="status" value="<?= htmlspecialchars($tableNextAction['status'], ENT_QUOTES, 'UTF-8') ?>">
                                                     <input type="hidden" name="status_filter" value="<?= htmlspecialchars($selected_status, ENT_QUOTES, 'UTF-8') ?>">
+                                                    <input type="hidden" name="source_filter" value="<?= htmlspecialchars($selected_source, ENT_QUOTES, 'UTF-8') ?>">
                                                     <input type="hidden" name="q" value="<?= htmlspecialchars($search, ENT_QUOTES, 'UTF-8') ?>">
                                                     <input type="hidden" name="page" value="<?= (int)$page ?>">
                                                     <button
@@ -8886,6 +9013,7 @@ require_once '../includes/header.php';
                     <input type="hidden" name="order_id" id="adminGcashReviewOrderId" value="">
                     <input type="hidden" name="status" value="order_queue">
                     <input type="hidden" name="status_filter" id="adminGcashReviewStatusFilter" value="pending_verification">
+                    <input type="hidden" name="source_filter" id="adminGcashReviewSourceFilter" value="all">
                     <input type="hidden" name="q" id="adminGcashReviewSearch" value="">
                     <input type="hidden" name="page" id="adminGcashReviewPage" value="1">
 
@@ -9411,9 +9539,19 @@ document.addEventListener('DOMContentLoaded', function () {
         const totalAmount = Number(button.getAttribute('data-total-amount') || 0);
         const proofSrc = button.getAttribute('data-proof-src') || '';
 
+        gcashReviewForm.dataset.pickupOverdue =
+            button.getAttribute('data-pickup-overdue') || '0';
+        gcashReviewForm.dataset.overdueConfirmed = '0';
+        gcashReviewForm.dataset.orderReference =
+            button.getAttribute('data-order-reference') || orderNumber;
+        gcashReviewForm.dataset.pickupLabel =
+            button.getAttribute('data-pickup-label') || '';
+
         document.getElementById('adminGcashReviewOrderId').value = orderId;
         document.getElementById('adminGcashReviewStatusFilter').value =
             button.getAttribute('data-status-filter') || 'pending_verification';
+        document.getElementById('adminGcashReviewSourceFilter').value =
+            button.getAttribute('data-source-filter') || 'all';
         document.getElementById('adminGcashReviewSearch').value =
             button.getAttribute('data-search') || '';
         document.getElementById('adminGcashReviewPage').value =
@@ -11217,6 +11355,16 @@ document.addEventListener(
                     'input[name="status"]'
                 );
 
+            const currentSource =
+                currentForm.querySelector(
+                    'select[name="source"]'
+                );
+
+            const newSource =
+                newForm.querySelector(
+                    'select[name="source"]'
+                );
+
             if (
                 currentStatus &&
                 newStatus
@@ -11225,6 +11373,10 @@ document.addEventListener(
                 currentStatus.value =
                     newStatus.value;
 
+            }
+
+            if (currentSource && newSource) {
+                currentSource.value = newSource.value;
             }
 
             const currentActions =
@@ -11728,6 +11880,15 @@ document.addEventListener(
                     )
                 );
 
+                const sourceValue =
+                    String(formData.get('source') || 'all');
+
+                if (sourceValue === 'all') {
+                    currentUrl.searchParams.delete('source');
+                } else {
+                    currentUrl.searchParams.set('source', sourceValue);
+                }
+
                 const searchValue =
                     String(
                         formData.get('q') ||
@@ -11956,6 +12117,21 @@ document.addEventListener(
                 form.dataset.processing === '1'
             ) {
                 return;
+            }
+
+            if (
+                form.dataset.pickupOverdue === '1'
+                && form.dataset.overdueConfirmed !== '1'
+            ) {
+                const orderReference = form.dataset.orderReference || 'This order';
+                const pickupLabel = form.dataset.pickupLabel || 'its scheduled pickup time';
+                if (!window.confirm(
+                    orderReference + ' was scheduled for pickup at ' + pickupLabel
+                    + ', which has already passed. Continue processing this order?'
+                )) {
+                    return;
+                }
+                form.dataset.overdueConfirmed = '1';
             }
 
             /* Prevent repeated submits from this modal instance. */
