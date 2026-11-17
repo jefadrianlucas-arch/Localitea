@@ -1535,6 +1535,22 @@ require_once '../includes/navbar.php';
         line-height: 1.45;
     }
     .gcash-instructions .fw-bold { margin-bottom: .3rem !important; font-size: .82rem; }
+    .gcash-warning {
+        display: flex;
+        gap: 8px;
+        align-items: flex-start;
+        background-color: #FFF4E5;
+        border: 1px solid #F0B96B;
+        border-left: 4px solid #D9822B;
+        border-radius: 12px;
+        padding: 9px 12px;
+        margin-bottom: .75rem;
+        font-size: .76rem;
+        line-height: 1.45;
+        color: #6B4220;
+    }
+    .gcash-warning i { color: #D9822B; font-size: .95rem; line-height: 1.3; flex-shrink: 0; }
+    .gcash-warning strong { color: #5A3410; }
     .gcash-upload-box {
         border: 1.5px dashed #B8A08A;
         background-color: #FBF7F1;
@@ -2880,6 +2896,18 @@ GCASH PAYMENT MODAL
 
                     </ol>
 
+                </div>
+
+
+                <!-- NO-REFUND WARNING -->
+                <div class="gcash-warning" role="alert">
+                    <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                    <div>
+                        <strong>No refund for uncollected orders.</strong>
+                        Once your order is marked <em>Ready for Pick-up</em>, your drink has already been made.
+                        If it is not collected after the pickup grace period (30 minutes),
+                        it will be closed as a no-show and your GCash payment will <strong>not be refunded</strong>.
+                    </div>
                 </div>
 
 
