@@ -43,6 +43,17 @@ if (!in_array($mode, $allowed_modes, true)) {
 $modeLabels = ['daily' => 'Daily', 'weekly' => 'Weekly', 'monthly' => 'Monthly'];
 $modeLabel  = $modeLabels[$mode];
 
+/* Payment filter: all / cash / gcash (same as the Sales Reports page). */
+$pay = strtolower(trim((string)($_GET['pay'] ?? 'all')));
+
+if (!in_array($pay, ['all', 'cash', 'gcash'], true)) {
+    $pay = 'all';
+}
+
+$payLabels = ['all' => 'All payments', 'cash' => 'Cash only', 'gcash' => 'GCash only'];
+$payLabel  = $payLabels[$pay];
+$paySql    = $pay === 'all' ? '' : " AND payment_method = '" . $pay . "'";   // whitelisted above
+
 /* =========================================================
    GENERATED INFO + BUSINESS DETAILS
    >>> Replace the email and phone below with the real ones. <<<
@@ -82,10 +93,11 @@ if ($businessLogoPath !== null && is_file(__DIR__ . '/' . $businessLogoPath)) {
    COMPLETED SALES
 ========================================================= */
 $salesStmt = $pdo->prepare("
-    SELECT id, order_number, claim_number, payment_method, total_amount, created_at, closed_at
+    SELECT id, order_number, claim_number, payment_method, subtotal, total_amount, created_at, closed_at
     FROM orders
     WHERE status = 'completed'
       AND DATE(COALESCE(closed_at, created_at)) BETWEEN ? AND ?
+      $paySql
     ORDER BY COALESCE(closed_at, created_at) ASC, id ASC
 ");
 
@@ -123,83 +135,111 @@ foreach ($salesTransactions as $sale) {
 
 /* =========================================================
    SALES OVERVIEW
+   One row per day / week / month with: orders, gross sales, discounts,
+   net sales, average order, Cash / GCash split and share of the total.
 ========================================================= */
 $salesOverview = [];
 
+$ovNewPeriod = static fn(string $label, string $sort): array => [
+    'label' => $label, 'sort' => $sort,
+    'orders' => 0, 'sales' => 0.0, 'gross' => 0.0, 'discount' => 0.0,
+    'cash' => 0.0, 'gcash' => 0.0,
+];
+
+$rangeStartObj = new DateTime($start_date);
+$rangeEndObj   = new DateTime($end_date);
+
 if ($mode === 'daily') {
+    $currentDate = clone $rangeStartObj;
 
-    $currentDate = new DateTime($start_date);
-    $lastDate    = new DateTime($end_date);
-
-    while ($currentDate <= $lastDate) {
-        $salesOverview[$currentDate->format('Y-m-d')] = [
-            'label' => $currentDate->format('M d'), 'orders' => 0, 'sales' => 0
-        ];
+    while ($currentDate <= $rangeEndObj) {
+        $dayKey = $currentDate->format('Y-m-d');
+        $salesOverview[$dayKey] = $ovNewPeriod($currentDate->format('D, M d'), $dayKey);
         $currentDate->modify('+1 day');
     }
+}
 
-    foreach ($salesTransactions as $sale) {
-        $saleDate = date('Y-m-d', strtotime($sale['closed_at'] ?? $sale['created_at']));
+foreach ($salesTransactions as $sale) {
+    $saleDate = new DateTime($sale['closed_at'] ?? $sale['created_at']);
 
-        if (isset($salesOverview[$saleDate])) {
-            $salesOverview[$saleDate]['orders']++;
-            $salesOverview[$saleDate]['sales'] += (float)$sale['total_amount'];
+    if ($mode === 'daily') {
+        $key   = $saleDate->format('Y-m-d');
+        $label = $saleDate->format('D, M d');
+        $sort  = $key;
+    } elseif ($mode === 'weekly') {
+        $year = (int)$saleDate->format('o');
+        $week = (int)$saleDate->format('W');
+        $key  = $year . '-W' . sprintf('%02d', $week);
+
+        $weekStart = new DateTime();
+        $weekStart->setISODate($year, $week, 1);
+        $weekEnd = clone $weekStart;
+        $weekEnd->modify('+6 days');
+
+        /* Show only the days that are inside the report period. */
+        $shownStart = $weekStart < $rangeStartObj ? $rangeStartObj : $weekStart;
+        $shownEnd   = $weekEnd > $rangeEndObj ? $rangeEndObj : $weekEnd;
+
+        $label = $shownStart->format('M d') . ' - ' . $shownEnd->format('M d');
+        $sort  = $weekStart->format('Y-m-d');
+    } else {
+        $key   = $saleDate->format('Y-m');
+        $label = $saleDate->format('F Y');
+        $sort  = $key;
+    }
+
+    if (!isset($salesOverview[$key])) {
+        $salesOverview[$key] = $ovNewPeriod($label, $sort);
+    }
+
+    $net   = (float)$sale['total_amount'];
+    $gross = isset($sale['subtotal']) ? (float)$sale['subtotal'] : $net;
+
+    $salesOverview[$key]['orders']++;
+    $salesOverview[$key]['sales']    += $net;
+    $salesOverview[$key]['gross']    += $gross;
+    $salesOverview[$key]['discount'] += max(0.0, $gross - $net);
+
+    $saleMethod = strtolower(trim((string)($sale['payment_method'] ?? '')));
+
+    if ($saleMethod === 'cash') {
+        $salesOverview[$key]['cash'] += $net;
+    } elseif ($saleMethod === 'gcash') {
+        $salesOverview[$key]['gcash'] += $net;
+    }
+}
+
+uasort($salesOverview, static fn($a, $b) => strcmp($a['sort'], $b['sort']));
+
+/* Highlights + totals for the overview */
+$ovUnit   = ['daily' => 'day', 'weekly' => 'week', 'monthly' => 'month'][$mode];
+$ovBest   = null;
+$ovLowest = null;
+$ovActive = 0;
+$ovTotals = ['gross' => 0.0, 'discount' => 0.0];
+
+foreach ($salesOverview as $ovPeriod) {
+    $ovTotals['gross']    += $ovPeriod['gross'];
+    $ovTotals['discount'] += $ovPeriod['discount'];
+
+    if ($ovPeriod['orders'] > 0) {
+        $ovActive++;
+
+        if ($ovBest === null || $ovPeriod['sales'] > $ovBest['sales']) {
+            $ovBest = $ovPeriod;
+        }
+        if ($ovLowest === null || $ovPeriod['sales'] < $ovLowest['sales']) {
+            $ovLowest = $ovPeriod;
         }
     }
 }
 
-if ($mode === 'weekly') {
-
-    foreach ($salesTransactions as $sale) {
-        $saleDate = new DateTime($sale['closed_at'] ?? $sale['created_at']);
-        $year = $saleDate->format('o');
-        $week = $saleDate->format('W');
-        $key  = $year . '-W' . $week;
-
-        if (!isset($salesOverview[$key])) {
-            $weekStart = new DateTime();
-            $weekStart->setISODate((int)$year, (int)$week, 1);
-            $weekEnd = clone $weekStart;
-            $weekEnd->modify('+6 days');
-
-            $salesOverview[$key] = [
-                'label'  => $weekStart->format('M d') . ' - ' . $weekEnd->format('M d'),
-                'orders' => 0,
-                'sales'  => 0,
-                'sort'   => $weekStart->format('Y-m-d')
-            ];
-        }
-
-        $salesOverview[$key]['orders']++;
-        $salesOverview[$key]['sales'] += (float)$sale['total_amount'];
-    }
-
-    uasort($salesOverview, function ($a, $b) {
-        return strcmp($a['sort'], $b['sort']);
-    });
-}
-
-if ($mode === 'monthly') {
-
-    foreach ($salesTransactions as $sale) {
-        $saleDate = new DateTime($sale['closed_at'] ?? $sale['created_at']);
-        $key = $saleDate->format('Y-m');
-
-        if (!isset($salesOverview[$key])) {
-            $salesOverview[$key] = ['label' => $saleDate->format('F Y'), 'orders' => 0, 'sales' => 0];
-        }
-
-        $salesOverview[$key]['orders']++;
-        $salesOverview[$key]['sales'] += (float)$sale['total_amount'];
-    }
-
-    ksort($salesOverview);
-}
+$ovAveragePerPeriod = count($salesOverview) > 0 ? $totalSales / count($salesOverview) : 0;
 
 /* =========================================================
    ANALYTICS
 ========================================================= */
-$analytics = salesAnalytics($pdo, $start_date, $end_date);
+$analytics = salesAnalytics($pdo, $start_date, $end_date, $pay);
 
 $paPeso = static fn($v) => '₱' . number_format((float)$v, 2);
 
@@ -224,13 +264,6 @@ if ($analytics) {
     $paProducts   = array_slice($analytics['topProducts'], 0, 5);
     $paCategories = array_slice($analytics['categories'], 0, 5);
 }
-
-/* Overview rows, split in two columns when long. */
-$overviewRows  = array_values($salesOverview);
-$overviewSplit = count($overviewRows) > 12;
-$overviewCols  = $overviewSplit
-    ? array_chunk($overviewRows, (int)ceil(count($overviewRows) / 2))
-    : [$overviewRows];
 
 ?>
 <!DOCTYPE html>
@@ -349,19 +382,6 @@ $overviewCols  = $overviewSplit
         .kpi .k-value { margin-top: 2px; font-size: 15px; font-weight: 700; }
         .kpi .k-sub { margin-top: 1px; font-size: 9px; color: #666; }
 
-        /* ---------- Takeaways ---------- */
-        .takeaways {
-            margin-bottom: 12px;
-            padding: 8px 12px;
-            border: 1px solid #ccc;
-            border-left: 4px solid #333;
-            border-radius: 3px;
-            page-break-inside: avoid;
-        }
-        .takeaways .blk-title { border: 0; padding: 0; margin: 0 0 4px; }
-        .takeaways ul { margin: 0; padding-left: 16px; font-size: 10.5px; }
-        .takeaways li { margin-bottom: 2px; }
-
         /* ---------- Blocks ---------- */
         .grid2 {
             display: grid;
@@ -402,18 +422,38 @@ $overviewCols  = $overviewSplit
         .empty { padding: 14px 0; font-size: 11px; color: #666; text-align: center; }
 
         /* ---------- Overview ---------- */
-        .overview-wrap { display: grid; gap: 18px; grid-template-columns: 1fr; }
-        .overview-wrap.two { grid-template-columns: 1fr 1fr; }
-        .overview-total {
+        .ov-hl {
             display: grid;
-            grid-template-columns: 1fr auto auto;
-            gap: 20px;
-            margin-top: 6px;
-            padding-top: 5px;
-            border-top: 1px solid #333;
-            font-size: 11px;
-            font-weight: 700;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            margin-bottom: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
         }
+        .ov-hl > div { padding: 6px 9px; border-left: 1px solid #ddd; min-width: 0; }
+        .ov-hl > div:first-child { border-left: 0; }
+        .ov-hl span { display: block; font-size: 8.5px; font-weight: 700; letter-spacing: .3px; text-transform: uppercase; color: #666; }
+        .ov-hl strong { display: block; margin-top: 1px; font-size: 11.5px; overflow-wrap: anywhere; }
+        .ov-hl em { display: block; font-style: normal; font-size: 9px; color: #666; }
+
+        .t.ov th, .t.ov td { padding: 3px 4px; font-size: 10px; }
+        .t.ov thead { display: table-header-group; }
+        .t.ov tfoot { display: table-row-group; }
+        .t.ov tr { page-break-inside: avoid; }
+        .t.ov tr.zero td { color: #999; }
+        .t.ov tr.best td { background: #f4efe8; font-weight: 700; }
+        .t.ov tfoot td { padding-top: 5px; border-top: 1.5px solid #333; border-bottom: 0; font-weight: 700; }
+        .t.ov .share-cell { text-align: left; }
+        .t.ov .sbar { display: inline-block; width: 34px; height: 6px; margin-right: 5px; vertical-align: middle; background: #e6e0d8; border-radius: 3px; overflow: hidden; }
+        .t.ov .sbar i { display: block; height: 100%; background: #4A3525; }
+
+        /* ---------- Promotion table: fixed layout, wraps instead of sticking out ---------- */
+        .t.t-promo { table-layout: fixed; width: 100%; }
+        .t.t-promo th, .t.t-promo td { vertical-align: top; overflow-wrap: anywhere; }
+        .t.t-promo th:not(:first-child), .t.t-promo td:not(:first-child) { white-space: normal; }
+        .t.t-promo th:nth-child(2), .t.t-promo td:nth-child(2),
+        .t.t-promo th:nth-child(3), .t.t-promo td:nth-child(3) { text-align: left; }
+        .t.t-promo td small { color: #666; font-size: 9px; }
+        .t td:first-child { overflow-wrap: anywhere; }
 
         .report-footer {
             margin-top: 16px;
@@ -433,7 +473,9 @@ $overviewCols  = $overviewSplit
             .kpis { grid-template-columns: 1fr 1fr; }
             .kpi:nth-child(3) { border-left: 0; }
             .kpi:nth-child(n+3) { border-top: 1px solid #ccc; }
-            .grid2, .overview-wrap.two { grid-template-columns: 1fr; }
+            .grid2 { grid-template-columns: 1fr; }
+            .ov-hl { grid-template-columns: 1fr 1fr; }
+            .t.ov { display: block; overflow-x: auto; }
         }
 
         /* ---------- Print ---------- */
@@ -454,7 +496,7 @@ $overviewCols  = $overviewSplit
             .kpi:nth-child(n) { border-top: 0; }
             .kpi:nth-child(n+2) { border-left: 1px solid #ccc; }
             .grid2 { grid-template-columns: 1fr 1fr; }
-            .overview-wrap.two { grid-template-columns: 1fr 1fr; }
+            .ov-hl { grid-template-columns: repeat(4, minmax(0, 1fr)); }
         }
 
     </style>
@@ -467,9 +509,21 @@ $overviewCols  = $overviewSplit
         <div class="print-mode-label">Sales Overview Layout</div>
         <div class="print-mode-tabs">
             <?php foreach ($allowed_modes as $printMode): ?>
-                <a href="print-sales-report.php?start_date=<?= urlencode($start_date) ?>&end_date=<?= urlencode($end_date) ?>&mode=<?= urlencode($printMode) ?>"
+                <a href="print-sales-report.php?start_date=<?= urlencode($start_date) ?>&end_date=<?= urlencode($end_date) ?>&mode=<?= urlencode($printMode) ?>&pay=<?= urlencode($pay) ?>"
                    class="print-mode-tab <?= $mode === $printMode ? 'active' : '' ?>">
                     <?= htmlspecialchars($modeLabels[$printMode]) ?>
+                </a>
+            <?php endforeach; ?>
+        </div>
+    </div>
+
+    <div>
+        <div class="print-mode-label">Payment</div>
+        <div class="print-mode-tabs">
+            <?php foreach ($payLabels as $payKey => $payText): ?>
+                <a href="print-sales-report.php?start_date=<?= urlencode($start_date) ?>&end_date=<?= urlencode($end_date) ?>&mode=<?= urlencode($mode) ?>&pay=<?= urlencode($payKey) ?>"
+                   class="print-mode-tab <?= $pay === $payKey ? 'active' : '' ?>">
+                    <?= htmlspecialchars($payKey === 'all' ? 'All' : ($payKey === 'cash' ? 'Cash' : 'GCash')) ?>
                 </a>
             <?php endforeach; ?>
         </div>
@@ -520,6 +574,9 @@ $overviewCols  = $overviewSplit
             <b>Period:</b>
             <?= date('F d, Y', strtotime($start_date)) ?> – <?= date('F d, Y', strtotime($end_date)) ?>
             &nbsp;&nbsp;<b>Overview:</b> <?= htmlspecialchars($modeLabel) ?>
+            <?php if ($pay !== 'all'): ?>
+                &nbsp;&nbsp;<b>Payment:</b> <?= htmlspecialchars($payLabel) ?>
+            <?php endif; ?>
         </div>
     </div>
 
@@ -551,18 +608,6 @@ $overviewCols  = $overviewSplit
 
     <?php if ($analytics): ?>
 
-    <!-- KEY TAKEAWAYS -->
-    <?php if (!empty($analytics['insights'])): ?>
-        <div class="takeaways">
-            <div class="blk-title">Key Takeaways</div>
-            <ul>
-                <?php foreach ($analytics['insights'] as $paLine): ?>
-                    <li><?= htmlspecialchars($paLine) ?></li>
-                <?php endforeach; ?>
-            </ul>
-        </div>
-    <?php endif; ?>
-
     <div class="grid2">
 
         <!-- PAYMENT -->
@@ -571,8 +616,12 @@ $overviewCols  = $overviewSplit
             <table class="t">
                 <thead><tr><th>Method</th><th>Orders</th><th>Sales</th></tr></thead>
                 <tbody>
+                    <?php if ($pay !== 'gcash'): ?>
                     <tr><td>Cash</td><td><?= number_format($paymentSummary['Cash']['orders']) ?></td><td><?= $paPeso($paymentSummary['Cash']['sales']) ?></td></tr>
+                    <?php endif; ?>
+                    <?php if ($pay !== 'cash'): ?>
                     <tr><td>GCash</td><td><?= number_format($paymentSummary['GCash']['orders']) ?></td><td><?= $paPeso($paymentSummary['GCash']['sales']) ?></td></tr>
+                    <?php endif; ?>
                     <tr class="total"><td>Total</td><td><?= number_format($totalOrders) ?></td><td><?= $paPeso($totalSales) ?></td></tr>
                 </tbody>
             </table>
@@ -639,34 +688,6 @@ $overviewCols  = $overviewSplit
             </table>
         </div>
 
-        <!-- PROMOTION SALES -->
-        <div class="blk">
-            <div class="blk-title">Promotion Sales</div>
-            <?php if (empty($analytics['promotions'])): ?>
-                <div class="empty">No promotions were used on completed orders in this period.</div>
-            <?php else: ?>
-                <table class="t">
-                    <thead><tr><th>Promotion</th><th>Promo Period</th><th>Status</th><th>Orders</th><th>Free Items</th><th>Value Given Away</th><th>Sales (Paid)</th></tr></thead>
-                    <tbody>
-                        <?php foreach ($analytics['promotions'] as $paPr): ?>
-                            <tr>
-                                <td><?= htmlspecialchars((string)$paPr['title']) ?> <small>(ID #<?= (int)$paPr['promotion_id'] ?>)</small></td>
-                                <?php $paPrPeriod = saPromoPeriod($paPr['start_date'] ?? null, $paPr['end_date'] ?? null); ?>
-                                <td><?= $paPrPeriod !== '' ? htmlspecialchars($paPrPeriod) : '&mdash;' ?><br><small>Sold: <?= htmlspecialchars(saPromoPeriod($paPr['first_sold'] ?? null, $paPr['last_sold'] ?? null)) ?></small></td>
-                                <td><?= htmlspecialchars(saPromoStatus($paPr['is_active'] ?? null, $paPr['is_archived'] ?? null, $paPr['end_date'] ?? null)) ?></td>
-                                <td><?= number_format((int)$paPr['used']) ?></td>
-                                <td><?= number_format((int)$paPr['free_items']) ?></td>
-                                <td><?= $paPeso($paPr['amount']) ?></td>
-                                <td><?= $paPeso($paPr['sales']) ?></td>
-                            </tr>
-                        <?php endforeach; ?>
-                        <tr class="total"><td>Total</td><td></td><td></td><td><?= number_format((int)$analytics['promoSummary']['orders']) ?></td><td><?= number_format((int)$analytics['promoSummary']['free_items']) ?></td><td><?= $paPeso($analytics['promoSummary']['discount']) ?></td><td><?= $paPeso($analytics['promoSummary']['sales']) ?></td></tr>
-                    </tbody>
-                </table>
-                <div class="note">Free items are not counted as sales. "Sales (Paid)" is what customers actually paid on orders that used a promotion.</div>
-            <?php endif; ?>
-        </div>
-
         <!-- OUTCOMES -->
         <div class="blk">
             <div class="blk-title">Orders, Cancellations &amp; Refunds</div>
@@ -693,6 +714,38 @@ $overviewCols  = $overviewSplit
                     echo implode('; ', $paReasons);
                     ?>
                 </div>
+            <?php endif; ?>
+        </div>
+
+        <!-- PROMOTION SALES -->
+        <div class="blk full">
+            <div class="blk-title">Promotion Sales</div>
+            <?php if (empty($analytics['promotions'])): ?>
+                <div class="empty">No promotions were used on completed orders in this period.</div>
+            <?php else: ?>
+                <table class="t t-promo">
+                    <colgroup>
+                        <col style="width:24%"><col style="width:21%"><col style="width:10%"><col style="width:8%">
+                        <col style="width:9%"><col style="width:14%"><col style="width:14%">
+                    </colgroup>
+                    <thead><tr><th>Promotion</th><th>Promo Period</th><th>Status</th><th>Orders</th><th>Free Items</th><th>Value Given</th><th>Sales (Paid)</th></tr></thead>
+                    <tbody>
+                        <?php foreach ($analytics['promotions'] as $paPr): ?>
+                            <tr>
+                                <td><?= htmlspecialchars((string)$paPr['title']) ?> <small>(ID #<?= (int)$paPr['promotion_id'] ?>)</small></td>
+                                <?php $paPrPeriod = saPromoPeriod($paPr['start_date'] ?? null, $paPr['end_date'] ?? null); ?>
+                                <td><?= $paPrPeriod !== '' ? htmlspecialchars($paPrPeriod) : '&mdash;' ?><br><small>Sold: <?= htmlspecialchars(saPromoPeriod($paPr['first_sold'] ?? null, $paPr['last_sold'] ?? null)) ?></small></td>
+                                <td><?= htmlspecialchars(saPromoStatus($paPr['is_active'] ?? null, $paPr['is_archived'] ?? null, $paPr['end_date'] ?? null)) ?></td>
+                                <td><?= number_format((int)$paPr['used']) ?></td>
+                                <td><?= number_format((int)$paPr['free_items']) ?></td>
+                                <td><?= $paPeso($paPr['amount']) ?></td>
+                                <td><?= $paPeso($paPr['sales']) ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                        <tr class="total"><td>Total</td><td></td><td></td><td><?= number_format((int)$analytics['promoSummary']['orders']) ?></td><td><?= number_format((int)$analytics['promoSummary']['free_items']) ?></td><td><?= $paPeso($analytics['promoSummary']['discount']) ?></td><td><?= $paPeso($analytics['promoSummary']['sales']) ?></td></tr>
+                    </tbody>
+                </table>
+                <div class="note">Free items are not counted as sales. "Sales (Paid)" is what customers actually paid on orders that used a promotion.</div>
             <?php endif; ?>
         </div>
 
@@ -739,41 +792,96 @@ $overviewCols  = $overviewSplit
     <!-- SALES OVERVIEW -->
     <div class="blk" style="page-break-inside:auto;">
 
-        <div class="blk-title">Sales Overview (<?= htmlspecialchars($modeLabel) ?>)</div>
+        <div class="blk-title">
+            Sales Overview (<?= htmlspecialchars($modeLabel) ?>)<?= $pay !== 'all' ? ' &ndash; ' . htmlspecialchars($payLabel) : '' ?>
+        </div>
 
-        <?php if (empty($salesOverview)): ?>
+        <?php if ($totalOrders === 0): ?>
 
             <div class="empty">No completed sales transactions were recorded during the selected period.</div>
 
         <?php else: ?>
 
-            <div class="overview-wrap <?= $overviewSplit ? 'two' : '' ?>">
-                <?php foreach ($overviewCols as $colRows): ?>
-                    <table class="t">
-                        <thead>
-                            <tr>
-                                <th><?= $mode === 'daily' ? 'Date' : 'Period' ?></th>
-                                <th>Orders</th>
-                                <th>Sales</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php foreach ($colRows as $period): ?>
-                                <tr>
-                                    <td><?= htmlspecialchars($period['label']) ?></td>
-                                    <td><?= number_format($period['orders']) ?></td>
-                                    <td><?= $paPeso($period['sales']) ?></td>
-                                </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                <?php endforeach; ?>
+            <div class="ov-hl">
+                <div>
+                    <span>Best <?= $ovUnit ?></span>
+                    <strong><?= htmlspecialchars($ovBest['label']) ?></strong>
+                    <em><?= $paPeso($ovBest['sales']) ?> &middot; <?= number_format($ovBest['orders']) ?> orders</em>
+                </div>
+                <div>
+                    <span>Lowest <?= $ovUnit ?> with sales</span>
+                    <strong><?= htmlspecialchars($ovLowest['label']) ?></strong>
+                    <em><?= $paPeso($ovLowest['sales']) ?> &middot; <?= number_format($ovLowest['orders']) ?> orders</em>
+                </div>
+                <div>
+                    <span>Average per <?= $ovUnit ?></span>
+                    <strong><?= $paPeso($ovAveragePerPeriod) ?></strong>
+                    <em>over all <?= count($salesOverview) ?> <?= $ovUnit ?>(s)</em>
+                </div>
+                <div>
+                    <span><?= ucfirst($ovUnit) ?>s with sales</span>
+                    <strong><?= $ovActive ?> of <?= count($salesOverview) ?></strong>
+                    <em><?= number_format(saShare((float)$ovActive, (float)count($salesOverview)), 0) ?>% of <?= $ovUnit ?>s</em>
+                </div>
             </div>
 
-            <div class="overview-total">
-                <div>TOTAL</div>
-                <div><?= number_format($totalOrders) ?> orders</div>
-                <div><?= $paPeso($totalSales) ?></div>
+            <table class="t ov">
+                <thead>
+                    <tr>
+                        <th><?= $mode === 'daily' ? 'Date' : ($mode === 'weekly' ? 'Week' : 'Month') ?></th>
+                        <th>Orders</th>
+                        <th>Gross Sales</th>
+                        <th>Discounts</th>
+                        <th>Net Sales</th>
+                        <th>Avg Order</th>
+                        <?php if ($pay !== 'gcash'): ?><th>Cash</th><?php endif; ?>
+                        <?php if ($pay !== 'cash'): ?><th>GCash</th><?php endif; ?>
+                        <th class="share-cell">Share</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($salesOverview as $ovRow): ?>
+                        <?php
+                        $ovEmpty = $ovRow['orders'] === 0;
+                        $ovIsBest = $ovBest !== null && !$ovEmpty && $ovRow['sort'] === $ovBest['sort'];
+                        $ovShare = $totalSales > 0 ? ($ovRow['sales'] / $totalSales) * 100 : 0;
+                        $ovCell  = static fn(float $v) => $ovEmpty ? '&ndash;' : htmlspecialchars('₱' . number_format($v, 2));
+                        ?>
+                        <tr class="<?= $ovEmpty ? 'zero' : '' ?> <?= $ovIsBest ? 'best' : '' ?>">
+                            <td><?= htmlspecialchars($ovRow['label']) ?></td>
+                            <td><?= number_format($ovRow['orders']) ?></td>
+                            <td><?= $ovCell($ovRow['gross']) ?></td>
+                            <td><?= $ovCell($ovRow['discount']) ?></td>
+                            <td><?= $ovCell($ovRow['sales']) ?></td>
+                            <td><?= $ovCell($ovRow['orders'] > 0 ? $ovRow['sales'] / $ovRow['orders'] : 0) ?></td>
+                            <?php if ($pay !== 'gcash'): ?><td><?= $ovCell($ovRow['cash']) ?></td><?php endif; ?>
+                            <?php if ($pay !== 'cash'): ?><td><?= $ovCell($ovRow['gcash']) ?></td><?php endif; ?>
+                            <td class="share-cell">
+                                <?php if ($ovEmpty): ?>&ndash;<?php else: ?>
+                                    <span class="sbar"><i style="width:<?= number_format($ovShare, 1, '.', '') ?>%"></i></span><?= number_format($ovShare, 1) ?>%
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+                <tfoot>
+                    <tr>
+                        <td>TOTAL</td>
+                        <td><?= number_format($totalOrders) ?></td>
+                        <td><?= $paPeso($ovTotals['gross']) ?></td>
+                        <td><?= $paPeso($ovTotals['discount']) ?></td>
+                        <td><?= $paPeso($totalSales) ?></td>
+                        <td><?= $paPeso($averageOrder) ?></td>
+                        <?php if ($pay !== 'gcash'): ?><td><?= $paPeso($paymentSummary['Cash']['sales']) ?></td><?php endif; ?>
+                        <?php if ($pay !== 'cash'): ?><td><?= $paPeso($paymentSummary['GCash']['sales']) ?></td><?php endif; ?>
+                        <td class="share-cell">100%</td>
+                    </tr>
+                </tfoot>
+            </table>
+
+            <div class="note">
+                Gross = before discounts. Net = what customers actually paid. Only completed orders are counted,
+                dated by the day the order was closed. Free promo items are not counted as sales.
             </div>
 
         <?php endif; ?>

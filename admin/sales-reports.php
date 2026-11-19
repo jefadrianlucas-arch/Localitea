@@ -72,6 +72,19 @@ if (!in_array($report_mode, $availableModes, true)) {
     $report_mode = $availableModes[0];
 }
 
+/* =========================================================
+   PAYMENT FILTER (all / cash / gcash)
+========================================================= */
+$pay_filter = strtolower(trim((string)($_GET['pay'] ?? 'all')));
+
+if (!in_array($pay_filter, ['all', 'cash', 'gcash'], true)) {
+    $pay_filter = 'all';
+}
+
+$payFilterLabels = ['all' => 'All payments', 'cash' => 'Cash only', 'gcash' => 'GCash only'];
+// Whitelisted above, so safe to place in SQL.
+$payFilterSql = $pay_filter === 'all' ? '' : " AND payment_method = '" . $pay_filter . "'";
+
 $reportGeneratedAt = date('Y-m-d H:i:s');
 $reportGeneratedBy = $_SESSION['user_name'] ?? 'Admin User';
 
@@ -175,6 +188,7 @@ $salesStmt = $pdo->prepare("
     FROM orders
     WHERE status = 'completed'
       AND DATE(COALESCE(closed_at, created_at)) BETWEEN ? AND ?
+      $payFilterSql
     ORDER BY COALESCE(closed_at, created_at) DESC, id DESC
 ");
 
@@ -291,7 +305,7 @@ $averageOrder = $totalOrders > 0 ? $totalSales / $totalOrders : 0;
 /* =========================================================
    ANALYTICS
 ========================================================= */
-$analytics = salesAnalytics($pdo, $start_date, $end_date);
+$analytics = salesAnalytics($pdo, $start_date, $end_date, $pay_filter);
 
 /* =========================================================
    PAGINATION
@@ -1252,7 +1266,8 @@ body { background: #F7F5F2; }
     .sales-content { padding: 0; }
     .sr-card, .summary-card { box-shadow: none !important; }
     .sr-tab-content > .tab-pane { display: block !important; opacity: 1 !important; margin-bottom: 14px; }
-    .sa-takeaways .collapse { display: block !important; }
+    /* Key takeaways are for the screen only; they are not part of the printed report. */
+    .sa-takeaways { display: none !important; }
 }
 
 </style>
@@ -1273,6 +1288,9 @@ body { background: #F7F5F2; }
                 <p>
                     Local Milktea House &bull;
                     <?= date('M d, Y', strtotime($start_date)) ?> – <?= date('M d, Y', strtotime($end_date)) ?>
+                    <?php if ($pay_filter !== 'all'): ?>
+                        &bull; <strong><?= htmlspecialchars($payFilterLabels[$pay_filter]) ?></strong>
+                    <?php endif; ?>
                 </p>
             </div>
         </div>
@@ -1300,12 +1318,23 @@ body { background: #F7F5F2; }
                                min="<?= htmlspecialchars($start_date) ?>" required>
                     </div>
 
-                    <div class="col-12 col-md-6">
+                    <div class="col-12 col-md-2">
+                        <label class="filter-label" for="srPayFilter">Payment</label>
+                        <select id="srPayFilter" name="pay" class="filter-input">
+                            <?php foreach ($payFilterLabels as $payKey => $payLabel): ?>
+                                <option value="<?= htmlspecialchars($payKey) ?>" <?= $pay_filter === $payKey ? 'selected' : '' ?>>
+                                    <?= htmlspecialchars($payLabel) ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+
+                    <div class="col-12 col-md-4">
                         <div class="filter-actions justify-content-md-end">
                             <button type="submit" class="btn btn-generate">
                                 <i class="bi bi-bar-chart-line"></i> Generate Report
                             </button>
-                            <a href="print-sales-report.php?start_date=<?= urlencode($start_date) ?>&end_date=<?= urlencode($end_date) ?>"
+                            <a href="print-sales-report.php?start_date=<?= urlencode($start_date) ?>&end_date=<?= urlencode($end_date) ?>&pay=<?= urlencode($pay_filter) ?>"
                                target="_blank" class="btn btn-print" id="printSalesReportBtn">
                                 <i class="bi bi-printer"></i> Print Report
                             </a>
@@ -1427,6 +1456,7 @@ body { background: #F7F5F2; }
                                         'start_date' => $start_date,
                                         'end_date' => $end_date,
                                         'mode' => $modeOption,
+                                        'pay' => $pay_filter !== 'all' ? $pay_filter : '',
                                         'completed_q' => $completed_search,
                                         'completed_period' => $completed_period,
                                         'completed_month' => $completed_period === 'specific_month' ? $completed_month : '',
@@ -2267,6 +2297,7 @@ body { background: #F7F5F2; }
                             'start_date' => $start_date,
                             'end_date' => $end_date,
                             'mode' => $report_mode,
+                            'pay' => $pay_filter !== 'all' ? $pay_filter : '',
                             'completed_q' => $completed_search,
                             'completed_period' => $completed_period,
                             'completed_month' => $completed_period === 'specific_month' ? $completed_month : ''
@@ -2917,8 +2948,13 @@ body { background: #F7F5F2; }
             const printUrl = new URL('print-sales-report.php', window.location.href);
             printUrl.searchParams.set('start_date', startInput.value);
             printUrl.searchParams.set('end_date', endInput.value);
+            const payInput = filterForm.querySelector('[name="pay"]');
+            printUrl.searchParams.set('pay', payInput ? payInput.value : 'all');
             printButton.href = printUrl.toString();
         }
+
+        const payField = filterForm.querySelector('[name="pay"]');
+        if (payField) payField.addEventListener('change', updatePrintLink);
 
         [startInput, endInput].forEach(function (input) {
             if (input) input.addEventListener('change', function () { syncDateLimits(); updatePrintLink(); });

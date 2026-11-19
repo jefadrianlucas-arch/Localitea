@@ -72,10 +72,7 @@ if (isset($_GET['order_promotion'])) {
 
             if ($promotionItem) {
 
-                /*
-                 * Remove previously selected promotion lines so a new
-                 * promotion cannot accidentally combine with the old one.
-                 */
+                // wipe any earlier promo lines from the cart first
                 if (isset($_SESSION['cart']) && is_array($_SESSION['cart'])) {
                     foreach ($_SESSION['cart'] as $cartKey => $existingCartItem) {
                         if (
@@ -87,18 +84,12 @@ if (isset($_GET['order_promotion'])) {
                     }
                 }
 
-                /*
-                 * Remember the promotion the customer explicitly selected.
-                 */
+                // remember which promo they picked
                 $_SESSION['selected_promotion_id'] = $promotionId;
 
                 $targetProductId = (int)$promotionItem['product_id'];
 
-                /*
-                 * For Buy X Get Y, start with the minimum BUY quantity.
-                 * For BOGO the quantity is 1.
-                 * Other promotion types start at 1.
-                 */
+                // buy_x_get_y starts at its buy qty, everything else at 1
                 $promotionQuantity = 1;
 
                 if ($promotionRule['rule_type'] === 'buy_x_get_y') {
@@ -132,10 +123,7 @@ if (isset($_GET['order_promotion'])) {
     exit;
 }
 
-/* =========================================================
-   BEST SELLERS
-========================================================= */
-/* Best sellers are automatic: top sellers from completed orders (see includes/best_sellers.php). */
+// best sellers come from completed orders, see includes/best_sellers.php
 $bestSellerIds = getBestSellerIds($pdo, 4, 30);
 syncBestSellerFlags($pdo, $bestSellerIds);
 
@@ -151,7 +139,7 @@ if (!empty($bestSellerIds)) {
         $bestSellerRows[(int)$row['id']] = $row;
     }
 
-    /* keep the ranking order: #1 seller first */
+    // keep ranking order, #1 first
     foreach ($bestSellerIds as $bestSellerId) {
         if (isset($bestSellerRows[$bestSellerId])) {
             $products[] = $bestSellerRows[$bestSellerId];
@@ -159,11 +147,7 @@ if (!empty($bestSellerIds)) {
     }
 }
 
-/* =========================================================
-   ACTIVE PROMOTIONS
-   Promotions appear on the customer home page only when they
-   are active, not archived, and currently within their dates.
-========================================================= */
+// only show promos that are active, not archived and within their dates
 $promoStmt = $pdo->prepare("\n    SELECT\n        id,\n        title,\n        description,\n        image,\n        start_date,\n        end_date\n    FROM promotions\n    WHERE is_active = 1\n      AND is_archived = 0\n      AND start_date <= CURDATE()\n      AND end_date >= CURDATE()\n    ORDER BY created_at DESC, id DESC\n    LIMIT 4\n");
 $promoStmt->execute();
 $promotions = $promoStmt->fetchAll(PDO::FETCH_ASSOC);
@@ -177,7 +161,7 @@ function customerImagePath(?string $image): string
         return '../assets/images/default-product.png';
     }
 
-    // Support either a filename or a stored relative upload path.
+    // image can be a plain filename or a relative path
     $image = str_replace('\\', '/', $image);
     $image = ltrim($image, '/');
 
@@ -235,10 +219,7 @@ require_once '../includes/navbar.php';
 ?>
 
 <style>
-/* =========================================================
-   LOCALITEA LANDING PAGE — VISUAL REDESIGN ONLY
-   PHP, ordering, promotion and slider functionality preserved.
-   ========================================================= */
+/* landing page styles */
 
 body{
     background:#fbf8f4;
@@ -271,11 +252,7 @@ body{
     border-radius:999px;
 }
 
-/* ===============================
-   HERO — TEXT LEFT / PROMOTION RIGHT
-   Clean, cardless landing-page hero.
-   Promotion image remains dynamic.
-   =============================== */
+/* hero */
 
 .hero-section{
     width:100%;
@@ -376,7 +353,7 @@ body{
     display:block;
 }
 
-/* Hero product image — separate from promotions. */
+/* hero image, not the promo one */
 .hero-visual{
     position:relative;
     width:min(100%, 520px);
@@ -429,9 +406,7 @@ body{
 .steam-two{ left:50%; transform:rotate(-4deg); height:92px; top:63px; }
 .steam-three{ left:57%; transform:rotate(-11deg); height:70px; top:86px; }
 
-/* ===============================
-   HERO RESPONSIVE
-   =============================== */
+/* hero responsive */
 
 @media (max-width:991.98px){
     .hero-section{
@@ -514,9 +489,7 @@ body{
     }
 }
 
-/* ===============================
-   SECTION SHELLS
-   =============================== */
+/* section boxes */
 
 .landing-section{
     margin:0 auto 1.6rem;
@@ -532,9 +505,7 @@ body{
     border-color:#D8C5B2;
 }
 
-/* ===============================
-   BEST SELLERS
-   =============================== */
+/* best sellers */
 
 .best-seller-grid{
     row-gap:18px;
@@ -576,7 +547,7 @@ body{
     transition:transform .25s ease;
 }
 
-/* Make the best-seller image itself the product link. */
+/* image links to the product page */
 .product-image-link{
     display:block;
     width:100%;
@@ -663,9 +634,7 @@ body{
     box-shadow:none !important;
 }
 
-/* ===============================
-   PROMOTION — CLEAN IMAGE-FOCUSED DESIGN
-=============================== */
+/* promo slider (old layout) */
 .promotion-layout{
     display:block;
     max-width:760px;
@@ -849,9 +818,7 @@ body{
     .promotion-slider-btn{top:97px;width:30px;height:30px;font-size:.8rem;}
 }
 
-/* ===============================
-   RESPONSIVE
-   =============================== */
+/* responsive */
 
 @media (max-width:991.98px){
     .hero-section{
@@ -1013,12 +980,7 @@ body{
     }
 }
 
-/* =========================================================
-   FINAL LANDING SIZE TUNING
-   - Larger hero
-   - Best-seller cards sized closer to the reference
-   - White product image/card background
-   ========================================================= */
+/* size tweaks, these override the rules above */
 
 .hero-section{
     padding-top:1.7rem;
@@ -1056,8 +1018,7 @@ body{
 }
 
 
-/* Keep the promotion's beige/brown section background compact.
-   This changes the surrounding section only, not the promotion card itself. */
+/* tighter padding on the promo section */
 .promo-section{
     padding:20px 22px 22px;
     max-width:1180px;
@@ -1086,7 +1047,7 @@ body{
     }
 }
 
-/* Best seller cards — 4 across on desktop, reference-style card sizing */
+/* best seller cards, 4 per row on desktop */
 .best-seller-grid{
     --bs-gutter-x:1rem;
     --bs-gutter-y:1rem;
@@ -1273,11 +1234,7 @@ body{
 
 
 
-/* =========================================================
-   PROMOTIONS — HORIZONTAL CAROUSEL
-   3 cards visible on desktop, 2 on tablet, 1 on mobile.
-   Cards slide one position at a time.
-========================================================= */
+/* promo carousel: 3 cards on desktop, 2 on tablet, 1 on mobile */
 #promotions{
     background:#fff !important;
     border:1px solid #E3D6C8 !important;
@@ -1518,15 +1475,13 @@ body{
     padding:18px;
 }
 
-/* Hide carousel controls when there is nothing to slide. */
+/* no arrows needed when everything fits */
 #promotions .promo-carousel.no-navigation{
     padding-left:0;
     padding-right:0;
 }
 
-/* ===============================
-   PROMOTION CAROUSEL RESPONSIVE
-================================ */
+/* promo carousel responsive */
 @media (max-width:991.98px){
     #promotions{
         padding:24px 18px 28px !important;

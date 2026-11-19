@@ -135,14 +135,22 @@ function saPromoDays(?string $startDate, ?string $endDate): int
     }
 }
 
-function salesAnalytics(PDO $pdo, string $start, string $end): ?array
+function salesAnalytics(PDO $pdo, string $start, string $end, string $pay = 'all'): ?array
 {
     try {
 
         saUsePhilippineTime($pdo);
 
+        /* Payment filter: 'all' (default), 'cash' or 'gcash'.
+         * Whitelisted, so it is safe to put in the SQL text. Every figure in
+         * the report (sales, items, promotions, cancellations, refunds...)
+         * follows it, so the numbers always agree with each other. */
+        $pay      = in_array($pay, ['cash', 'gcash'], true) ? $pay : 'all';
+        $payAnd   = $pay === 'all' ? '' : " AND o.payment_method = '$pay'";   // queries that alias orders as o
+        $payPlain = $pay === 'all' ? '' : " AND payment_method = '$pay'";     // queries on orders without an alias
+
         $saleDate = "DATE(COALESCE(o.closed_at, o.created_at))";
-        $saleRange = "o.status = 'completed' AND $saleDate BETWEEN ? AND ?";
+        $saleRange = "o.status = 'completed' AND $saleDate BETWEEN ? AND ?" . $payAnd;
 
         /* ---------- previous period (same length, directly before) ---------- */
         $startObj = new DateTime($start);
@@ -336,7 +344,7 @@ function salesAnalytics(PDO $pdo, string $start, string $end): ?array
             SELECT status, COUNT(*) AS orders,
                    COALESCE(SUM(total_amount), 0) AS amount
             FROM orders
-            WHERE DATE(created_at) BETWEEN ? AND ?
+            WHERE DATE(created_at) BETWEEN ? AND ?$payPlain
             GROUP BY status
         ");
         $st->execute([$start, $end]);
@@ -368,7 +376,7 @@ function salesAnalytics(PDO $pdo, string $start, string $end): ?array
                     WHERE h.order_id = o.id AND h.to_status = 'cancelled'
                     ORDER BY h.id DESC LIMIT 1) AS from_status
             FROM orders o
-            WHERE o.status = 'cancelled' AND DATE(o.created_at) BETWEEN ? AND ?
+            WHERE o.status = 'cancelled' AND DATE(o.created_at) BETWEEN ? AND ?$payAnd
         ");
         $st->execute([$start, $end]);
         $outcomes['stage'] = [
@@ -393,7 +401,7 @@ function salesAnalytics(PDO $pdo, string $start, string $end): ?array
             SELECT COALESCE(NULLIF(TRIM(cancellation_reason), ''), 'No reason given') AS reason,
                    COUNT(*) AS orders
             FROM orders
-            WHERE status = 'cancelled' AND DATE(created_at) BETWEEN ? AND ?
+            WHERE status = 'cancelled' AND DATE(created_at) BETWEEN ? AND ?$payPlain
             GROUP BY reason
             ORDER BY orders DESC
             LIMIT 5
@@ -406,7 +414,7 @@ function salesAnalytics(PDO $pdo, string $start, string $end): ?array
             SELECT COUNT(*) AS orders, COALESCE(SUM(total_amount), 0) AS amount
             FROM orders
             WHERE refund_status = 'refunded'
-              AND DATE(refund_processed_at) BETWEEN ? AND ?
+              AND DATE(refund_processed_at) BETWEEN ? AND ?$payPlain
         ");
         $st->execute([$start, $end]);
         $refunded = $st->fetch(PDO::FETCH_ASSOC);
@@ -414,7 +422,7 @@ function salesAnalytics(PDO $pdo, string $start, string $end): ?array
         $pending = $pdo->query("
             SELECT COUNT(*) AS orders, COALESCE(SUM(total_amount), 0) AS amount
             FROM orders
-            WHERE refund_status = 'pending'
+            WHERE refund_status = 'pending'$payPlain
         ")->fetch(PDO::FETCH_ASSOC);
 
         $refunds = [
@@ -535,6 +543,10 @@ function salesAnalytics(PDO $pdo, string $start, string $end): ?array
         /* ---------- plain-language takeaways ---------- */
         $insights = [];
 
+        if ($pay !== 'all') {
+            $insights[] = 'This report shows ' . ($pay === 'cash' ? 'Cash' : 'GCash') . ' orders only.';
+        }
+
         if ($current['orders'] === 0) {
             $insights[] = 'No completed sales were recorded in this period.';
         } else {
@@ -625,6 +637,7 @@ function salesAnalytics(PDO $pdo, string $start, string $end): ?array
         }
 
         return [
+            'pay'         => $pay,
             'range'       => ['start' => $start, 'end' => $end, 'days' => $days,
                               'prev_start' => $prevStart, 'prev_end' => $prevEnd],
             'current'     => $current,
