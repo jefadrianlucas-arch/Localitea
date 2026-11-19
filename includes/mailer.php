@@ -216,7 +216,7 @@ function createLocaliteaSmtpMailer(): PHPMailer
         ),
         'from_name' => $getSetting(
             'MAIL_FROM_NAME',
-            $localConfig['from_name'] ?? 'Localitea'
+            $localConfig['from_name'] ?? 'Local Milktea House'
         ),
     ];
 
@@ -266,7 +266,7 @@ function sendVerificationEmail($recipientEmail, $recipientName, $verificationLin
     $mail = createLocaliteaMailer();
 
     $mail->addAddress($recipientEmail, $recipientName);
-    $mail->Subject = 'Verify Your Localitea Account';
+    $mail->Subject = 'Verify Your Local Milktea House Account';
 
     $safeName = htmlspecialchars($recipientName, ENT_QUOTES, 'UTF-8');
     $safeLink = htmlspecialchars($verificationLink, ENT_QUOTES, 'UTF-8');
@@ -274,13 +274,13 @@ function sendVerificationEmail($recipientEmail, $recipientName, $verificationLin
     $mail->Body = '
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 30px; color: #2c221e;">
             <div style="text-align: center; margin-bottom: 25px;">
-                <h2 style="color: #4A3525;">Welcome to Localitea!</h2>
+                <h2 style="color: #4A3525;">Welcome to Local Milktea House!</h2>
             </div>
 
             <p>Hello <strong>' . $safeName . '</strong>,</p>
 
             <p>
-                Thank you for creating a Localitea account.
+                Thank you for creating a Local Milktea House account.
                 Please verify your email address by clicking the button below.
             </p>
 
@@ -296,20 +296,20 @@ function sendVerificationEmail($recipientEmail, $recipientName, $verificationLin
             </p>
 
             <p style="font-size: 14px; color: #666;">
-                If you did not create a Localitea account, you can ignore this email.
+                If you did not create a Local Milktea House account, you can ignore this email.
             </p>
 
             <hr style="border: 0; border-top: 1px solid #ddd; margin: 30px 0;">
 
             <p style="font-size: 12px; color: #999; text-align: center;">
-                Localitea — Online Ordering and Sales Management System
+                Local Milktea House — Online Ordering and Sales Management System
             </p>
         </div>
     ';
 
     $mail->AltBody =
         "Hello $recipientName,\n\n" .
-        "Thank you for creating a Localitea account.\n" .
+        "Thank you for creating a Local Milktea House account.\n" .
         "Please verify your email by opening this link:\n\n" .
         "$verificationLink\n\n" .
         "This link will expire after 30 minutes.";
@@ -324,7 +324,7 @@ function sendPasswordResetEmail($recipientEmail, $recipientName, $resetLink)
     $mail = createLocaliteaMailer();
 
     $mail->addAddress($recipientEmail, $recipientName);
-    $mail->Subject = 'Reset Your Localitea Password';
+    $mail->Subject = 'Reset Your Local Milktea House Password';
 
     $safeName = htmlspecialchars($recipientName, ENT_QUOTES, 'UTF-8');
     $safeLink = htmlspecialchars($resetLink, ENT_QUOTES, 'UTF-8');
@@ -332,13 +332,13 @@ function sendPasswordResetEmail($recipientEmail, $recipientName, $resetLink)
     $mail->Body = '
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 30px; color: #2c221e;">
             <div style="text-align: center; margin-bottom: 25px;">
-                <h2 style="color: #4A3525;">Localitea Password Reset</h2>
+                <h2 style="color: #4A3525;">Local Milktea House Password Reset</h2>
             </div>
 
             <p>Hello <strong>' . $safeName . '</strong>,</p>
 
             <p>
-                We received a request to reset the password for your Localitea account.
+                We received a request to reset the password for your Local Milktea House account.
             </p>
 
             <p>
@@ -363,14 +363,14 @@ function sendPasswordResetEmail($recipientEmail, $recipientName, $resetLink)
             <hr style="border: 0; border-top: 1px solid #ddd; margin: 30px 0;">
 
             <p style="font-size: 12px; color: #999; text-align: center;">
-                Localitea — Online Ordering and Sales Management System
+                Local Milktea House — Online Ordering and Sales Management System
             </p>
         </div>
     ';
 
     $mail->AltBody =
         "Hello $recipientName,\n\n" .
-        "We received a request to reset your Localitea password.\n\n" .
+        "We received a request to reset your Local Milktea House password.\n\n" .
         "Open this link to create a new password:\n\n" .
         "$resetLink\n\n" .
         "This link will expire after 1 hour.";
@@ -396,7 +396,7 @@ function sendOrderPreparingEmail(
     );
 
     $mail->Subject =
-        'Your Localitea Order Is Being Prepared';
+        'Your Local Milktea House Order Is Being Prepared';
 
     $safeName = htmlspecialchars(
         $recipientName,
@@ -450,7 +450,7 @@ function sendOrderPreparingEmail(
             </p>
 
             <p>
-                Just a reminder that your Localitea order
+                Just a reminder that your Local Milktea House order
                 <strong>' . $safeOrder . '</strong>
                 is now being prepared.
             </p>
@@ -490,7 +490,7 @@ function sendOrderPreparingEmail(
                 color: #999;
                 text-align: center;
             ">
-                Localitea — Online Ordering and Sales Management System
+                Local Milktea House — Online Ordering and Sales Management System
             </p>
 
         </div>
@@ -498,7 +498,7 @@ function sendOrderPreparingEmail(
 
     $mail->AltBody =
         "Hello $recipientName,\n\n" .
-        "Just a reminder that your Localitea order " .
+        "Just a reminder that your Local Milktea House order " .
         "$orderIdentifier is now being prepared.\n\n" .
         ($claimNumber !== ''
             ? "Claim Number: $claimNumber\n\n"

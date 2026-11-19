@@ -31,23 +31,23 @@ try {
 
     // Email content
     $mail->isHTML(true);
-    $mail->Subject = 'Localitea SMTP Test';
+    $mail->Subject = 'Local Milktea House SMTP Test';
 
     $mail->Body = '
         <div style="font-family: Arial, sans-serif;">
-            <h2>Localitea Email Test</h2>
+            <h2>Local Milktea House Email Test</h2>
             <p>Hello!</p>
-            <p>This is a test email from the Localitea system.</p>
+            <p>This is a test email from the Local Milktea House system.</p>
             <p>If you received this message, PHPMailer SMTP is working correctly.</p>
         </div>
     ';
 
-    $mail->AltBody = 'This is a test email from the Localitea system.';
+    $mail->AltBody = 'This is a test email from the Local Milktea House system.';
 
     $mail->send();
 
     echo '<h3 style="color: green;">Email sent successfully!</h3>';
-    echo '<p>Check the Localitea testing Gmail inbox.</p>';
+    echo '<p>Check the Local Milktea House testing Gmail inbox.</p>';
 
 } catch (Exception $e) {
 
