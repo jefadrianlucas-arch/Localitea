@@ -1323,8 +1323,8 @@ if ($payment_method === 'gcash') {
  * Initial order status.
  *
  * GCash orders stay in Pending until the payment proof is verified.
- * All cash orders (registered customers and guests) enter the Order Queue,
- * the same place walk-in orders go. Admin then moves them to Confirmed.
+ * All cash orders from registered customers enter the Order Queue, the same
+ * place walk-in orders go. Admin then moves them to Confirmed.
  */
 if ($payment_method === 'gcash') {
     $initial_status = 'pending_verification';
@@ -1348,7 +1348,7 @@ try {
      * MySQL named locks are connection-scoped and survive transaction
      * commits. Acquire the lock before checking capacity, then keep it until
      * the order has been inserted and committed. This prevents concurrent
-     * guest/customer checkouts from both taking the final place in a slot.
+     * customer and walk-in orders from both taking the final place in a slot.
      */
     $pickupLockStmt = $pdo->prepare('SELECT GET_LOCK(?, 10)');
     $pickupLockStmt->execute([$pickupCapacityLockName]);

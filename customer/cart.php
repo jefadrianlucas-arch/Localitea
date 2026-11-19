@@ -652,12 +652,15 @@ $cart_total = round(
 
 $prefillFullName = '';
 $prefillMobile = '';
+$isCustomerLoggedIn =
+    ($_SESSION['user_role'] ?? '') === 'customer' &&
+    filter_var(
+        $_SESSION['user_id'] ?? null,
+        FILTER_VALIDATE_INT,
+        ['options' => ['min_range' => 1]]
+    ) !== false;
 
-if (
-    isset($_SESSION['user_id']) &&
-    isset($_SESSION['user_role']) &&
-    $_SESSION['user_role'] === 'customer'
-) {
+if ($isCustomerLoggedIn) {
     /*
      * Keep your existing customers table structure.
      */
@@ -1848,54 +1851,67 @@ require_once '../includes/navbar.php';
                     <!--
                     ================================================================
                     LEFT SIDE
-                    Guest Details / Pickup / Payment
+                    Customer Details / Pickup / Payment
                     ================================================================
                     -->
 
                     <section class="ck-card ck-details">
 
-                        <!-- Guest Details -->
+                        <!-- Customer Details -->
                         <div class="ck-section">
 
                             <h2 class="ck-section-title">
                                 <span class="ck-section-icon"><i class="bi bi-person"></i></span>
-                                Guest details
+                                <?= $isCustomerLoggedIn ? 'Customer details' : 'Customer account required' ?>
                             </h2>
 
-                            <div class="ck-fields is-single">
+                            <?php if ($isCustomerLoggedIn): ?>
+                                <div class="ck-fields is-single">
 
-                                <div>
-                                    <label for="full_name" class="ck-field-label">Full name</label>
-                                    <input
-                                        type="text"
-                                        name="full_name"
-                                        id="full_name"
-                                        class="form-control custom-input"
-                                        value="<?= htmlspecialchars($prefillFullName) ?>"
-                                        autocomplete="name"
-                                        minlength="2"
-                                        maxlength="100"
-                                        required
-                                    >
+                                    <div>
+                                        <label for="full_name" class="ck-field-label">Full name</label>
+                                        <input
+                                            type="text"
+                                            name="full_name"
+                                            id="full_name"
+                                            class="form-control custom-input"
+                                            value="<?= htmlspecialchars($prefillFullName) ?>"
+                                            autocomplete="name"
+                                            minlength="2"
+                                            maxlength="100"
+                                            required
+                                        >
+                                    </div>
+
+                                    <div>
+                                        <label for="mobile_number" class="ck-field-label">Mobile number</label>
+                                        <input
+                                            type="text"
+                                            name="mobile_number"
+                                            id="mobile_number"
+                                            class="form-control custom-input"
+                                            placeholder="09XXXXXXXXX"
+                                            value="<?= htmlspecialchars($prefillMobile) ?>"
+                                            inputmode="tel"
+                                            autocomplete="tel"
+                                            maxlength="13"
+                                            required
+                                        >
+                                    </div>
                                 </div>
-
-                                <div>
-                                    <label for="mobile_number" class="ck-field-label">Mobile number</label>
-                                    <input
-                                        type="text"
-                                        name="mobile_number"
-                                        id="mobile_number"
-                                        class="form-control custom-input"
-                                        placeholder="09XXXXXXXXX"
-                                        value="<?= htmlspecialchars($prefillMobile) ?>"
-                                        inputmode="tel"
-                                        autocomplete="tel"
-                                        maxlength="13"
-                                        required
-                                    >
+                            <?php else: ?>
+                                <p class="mb-2">
+                                    Guest ordering is unavailable. Sign in to your customer account or create one to place an order.
+                                </p>
+                                <div class="d-flex flex-wrap gap-2">
+                                    <a href="../auth/login.php" class="btn btn-brown-custom">
+                                        Log in
+                                    </a>
+                                    <a href="../auth/register.php" class="btn btn-outline-secondary">
+                                        Create account
+                                    </a>
                                 </div>
-
-                            </div>
+                            <?php endif; ?>
 
                         </div>
 
@@ -2405,13 +2421,23 @@ require_once '../includes/navbar.php';
                                 value="1"
                             >
 
-                            <button
-                                type="submit"
-                                id="checkoutButton"
-                                class="btn btn-brown-custom w-100 py-2"
-                            >
-                                Checkout
-                            </button>
+                            <?php if ($isCustomerLoggedIn): ?>
+                                <button
+                                    type="submit"
+                                    id="checkoutButton"
+                                    class="btn btn-brown-custom w-100 py-2"
+                                >
+                                    Checkout
+                                </button>
+                            <?php else: ?>
+                                <button
+                                    type="button"
+                                    class="btn btn-brown-custom w-100 py-2"
+                                    disabled
+                                >
+                                    Customer account required
+                                </button>
+                            <?php endif; ?>
 
                         </div>
 
