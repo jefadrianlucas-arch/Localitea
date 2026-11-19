@@ -125,9 +125,45 @@ body {
     min-height: 43px;
     border: 1.5px solid #B8A08A;
     border-radius: 9px;
-    padding: 9px 12px;
+    padding: 9px 42px 9px 12px;
     font-size: 0.84rem;
     box-sizing: border-box;
+}
+
+.reset-password-field {
+    position: relative;
+}
+
+.reset-password-toggle {
+    position: absolute;
+    top: 50%;
+    right: 6px;
+    width: 32px;
+    height: 32px;
+    transform: translateY(-50%);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: #6F4E37;
+    padding: 0;
+    cursor: pointer;
+}
+
+.reset-password-toggle:hover {
+    background: #F7F1E8;
+    color: #4A3525;
+}
+
+.reset-password-toggle:focus-visible {
+    outline: 2px solid #6F4E37;
+    outline-offset: 2px;
+}
+
+.reset-password-toggle i {
+    font-size: 0.92rem;
 }
 
 .reset-input:focus {
@@ -224,15 +260,26 @@ body {
                         New Password
                     </label>
 
-                    <input
-                        type="password"
-                        id="newPassword"
-                        name="password"
-                        class="reset-input"
-                        minlength="8"
-                        autocomplete="new-password"
-                        required
-                    >
+                    <div class="reset-password-field">
+                        <input
+                            type="password"
+                            id="newPassword"
+                            name="password"
+                            class="reset-input"
+                            minlength="8"
+                            autocomplete="new-password"
+                            required
+                        >
+                        <button
+                            type="button"
+                            class="reset-password-toggle"
+                            aria-label="Show password"
+                            aria-controls="newPassword"
+                            aria-pressed="false"
+                        >
+                            <i class="bi bi-eye" aria-hidden="true"></i>
+                        </button>
+                    </div>
                 </div>
 
                 <div class="mb-3">
@@ -240,15 +287,26 @@ body {
                         Confirm New Password
                     </label>
 
-                    <input
-                        type="password"
-                        id="confirmPassword"
-                        name="confirm_password"
-                        class="reset-input"
-                        minlength="8"
-                        autocomplete="new-password"
-                        required
-                    >
+                    <div class="reset-password-field">
+                        <input
+                            type="password"
+                            id="confirmPassword"
+                            name="confirm_password"
+                            class="reset-input"
+                            minlength="8"
+                            autocomplete="new-password"
+                            required
+                        >
+                        <button
+                            type="button"
+                            class="reset-password-toggle"
+                            aria-label="Show password"
+                            aria-controls="confirmPassword"
+                            aria-pressed="false"
+                        >
+                            <i class="bi bi-eye" aria-hidden="true"></i>
+                        </button>
+                    </div>
                 </div>
 
                 <button type="submit" class="reset-button">
@@ -259,6 +317,30 @@ body {
 
     </div>
 </div>
+
+<script>
+document.querySelectorAll('.reset-password-toggle').forEach(function (button) {
+    button.addEventListener('click', function () {
+        const input = document.getElementById(
+            button.getAttribute('aria-controls')
+        );
+        const icon = button.querySelector('i');
+
+        if (!input || !icon) {
+            return;
+        }
+
+        const isHidden = input.type === 'password';
+        input.type = isHidden ? 'text' : 'password';
+        button.setAttribute(
+            'aria-label',
+            isHidden ? 'Hide password' : 'Show password'
+        );
+        button.setAttribute('aria-pressed', isHidden ? 'true' : 'false');
+        icon.className = isHidden ? 'bi bi-eye-slash' : 'bi bi-eye';
+    });
+});
+</script>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 
