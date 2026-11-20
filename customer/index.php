@@ -1696,7 +1696,7 @@ body{
 <!-- PROMO FEATURE -->
 <div class="container landing-section promo-section mb-5" id="promotions">
     <h2 class="section-title">Special Promotions</h2>
-    <p class="section-subtitle">Don't miss what's brewing at Localitea.</p>
+    
     <div class="title-line"></div>
 
     <?php if(empty($promotions)): ?>
