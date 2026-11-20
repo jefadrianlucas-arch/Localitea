@@ -1123,8 +1123,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ");
 
             foreach ($lineData as $line) {
+                $lineDiscountType = $promotionDiscount > 0
+                    ? 'none'
+                    : $line['discount_type'];
                 $lineDiscountAmount = 0.00;
-                if ($line['discount_type'] === $discountType && $discountType !== 'none') {
+                if ($lineDiscountType === $discountType && $discountType !== 'none') {
                     $lineDiscountAmount = round($line['subtotal'] * ($discountRate / 100), 2);
                 }
 
@@ -1143,8 +1146,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $line['size'] !== '' ? $line['size'] : null,
                     $addonsJson,
                     $line['sugar_level'] !== '' ? $line['sugar_level'] : null,
-                    $line['discount_type'],
-                    $line['discount_type'] === $discountType ? $discountRate : 0.00,
+                    $lineDiscountType,
+                    $lineDiscountType === $discountType ? $discountRate : 0.00,
                     $lineDiscountAmount,
                 ]);
             }
@@ -2181,7 +2184,15 @@ body { background: #F8F4EF; }
                         $metaParts[] = implode(' · ', $cupParts);
                     }
                     if (!empty($item['addons']) && is_array($item['addons'])) { $metaParts[] = 'Add-ons: ' . implode(', ', $item['addons']); }
-                    if (($item['discount_type'] ?? 'none') !== 'none') { $metaParts[] = strtoupper((string)$item['discount_type']) . ' discount'; if (!empty($item['discount_id_number'])) { $metaParts[] = 'ID: ' . $item['discount_id_name'] . ' (' . $item['discount_id_number'] . ')'; } }
+                    if (
+                        $walkinDiscountAmount > 0 &&
+                        ($item['discount_type'] ?? 'none') === $walkinDiscountType
+                    ) {
+                        $metaParts[] = strtoupper((string)$item['discount_type']) . ' discount';
+                        if (!empty($item['discount_id_number'])) {
+                            $metaParts[] = 'ID: ' . $item['discount_id_name'] . ' (' . $item['discount_id_number'] . ')';
+                        }
+                    }
                     $itemPromotionId = (int)($item['promotion_source_id'] ?? 0);
                     if ($itemPromotionId > 0) {
                         $metaParts[] = 'Promotion: ' . ($walkinPromotionTitles[$itemPromotionId] ?? 'Selected deal');
@@ -2287,6 +2298,7 @@ body { background: #F8F4EF; }
                     <span><?= htmlspecialchars((string)($walkinAppliedPromotion['promotion_title'] ?? 'Promotion')) ?></span>
                     <strong>-₱<?= number_format($walkinPromotionDiscount, 2) ?></strong>
                 </div>
+                <div class="walkin-promotion-note">Promotional pricing applies; PWD/Senior discounts cannot be combined with it.</div>
             <?php endif; ?>
 
             <?php if ($walkinDiscountAmount > 0): ?>
@@ -2295,10 +2307,6 @@ body { background: #F8F4EF; }
                     <strong>-₱<?= number_format($walkinDiscountAmount, 2) ?></strong>
                 </div>
             <?php endif; ?>
-            <?php if ($walkinDiscountAmount > 0 && !empty($walkinPricing['candidate_promotion']['promotion_id'])): ?>
-                <div class="walkin-promotion-note">The <?= htmlspecialchars($walkinDiscountLabel) ?> discount is larger, so the promotion is not applied.</div>
-            <?php endif; ?>
-
             <div class="walkin-total-row grand">
                 <span>Total</span>
                 <strong>₱<?= number_format($walkinTotal, 2) ?></strong>

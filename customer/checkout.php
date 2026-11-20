@@ -873,6 +873,12 @@ $discountEligibleBase = round(
     2
 );
 
+/* Promotional pricing takes precedence; do not stack PWD/Senior savings. */
+if ($promotion_discount > 0) {
+    $selectedDiscountTypes = [];
+    $discountEligibleBase = 0.00;
+}
+
 if (count($selectedDiscountTypes) > 1) {
     checkoutFail(
         "Please use only one discount type per order: PWD or Senior Citizen."
@@ -941,33 +947,12 @@ $customer_discount = round(
     2
 );
 
-/*
- * Do not stack PWD/Senior with an active promotion.
- * The larger applicable discount is used.
- *
- * When the promotion is selected, its own reward items remain intact.
- * When PWD/Senior is larger, the promotion is removed for this order.
- */
+/* Keep the active promotion and never replace it with PWD/Senior savings. */
 $appliedDiscountType = 'none';
 $appliedDiscountRate = 0.00;
 $discount_amount = 0.00;
 
 if (
-    $selectedDiscountType !== 'none' &&
-    $customer_discount > $promotion_discount
-) {
-
-    $appliedDiscountType = $selectedDiscountType;
-    $appliedDiscountRate = $selectedDiscountRate;
-    $discount_amount = $customer_discount;
-
-    $promotion_discount = 0.00;
-    $promotion_reward_items = [];
-    $promotion_free_allocations = [];
-    $promotion_added_reward_value = 0.00;
-
-    $gross_subtotal = $subtotal;
-} elseif (
     $selectedDiscountType !== 'none' &&
     $customer_discount > 0 &&
     $promotion_discount <= 0
@@ -1452,13 +1437,11 @@ try {
 
     /*
      * ================================================================
-     * ENFORCE ONE-TIME PWD / SENIOR DISCOUNT USE
+     * VALIDATE PWD / SENIOR DISCOUNT ELIGIBILITY
      * ================================================================
-     * The discount is consumed only when it is actually applied to this
-     * order. Lock the customer's row to prevent two simultaneous checkouts
-     * from both passing the previous-use check.
-     * A successfully inserted discounted order is the permanent record
-     * that the discount has been used; a rolled-back checkout does not count.
+     * Approved customers may use their discount on every eligible order.
+     * Lock the customer row while validating that the ID still matches the
+     * approved account record.
      */
     if ($appliedDiscountType !== 'none') {
         if (!$isRegisteredCustomer || !$customer_id) {
@@ -1533,22 +1516,6 @@ try {
 
         $verifiedDiscountIdName = $lockedIdName;
         $verifiedDiscountIdNumber = $lockedIdNumber;
-
-        // Any prior order where this discount was actually applied consumes it,
-        // regardless of that order's current status.
-        $previousUseStmt = $pdo->prepare("
-            SELECT id
-            FROM orders
-            WHERE customer_id = ?
-              AND LOWER(COALESCE(discount_type, 'none')) IN ('pwd', 'senior')
-              AND COALESCE(discount_amount, 0) > 0
-            LIMIT 1
-        ");
-        $previousUseStmt->execute([$customer_id]);
-
-        if ($previousUseStmt->fetchColumn()) {
-            checkoutFail('Your one-time PWD/Senior Citizen discount has already been used on a previous order.');
-        }
     }
 
 
@@ -1970,6 +1937,10 @@ $paymentStmt->execute([
         );
 
         if (!in_array($item_discount_type, ['none', 'pwd', 'senior'], true)) {
+            $item_discount_type = 'none';
+        }
+
+        if ($promotion_discount > 0) {
             $item_discount_type = 'none';
         }
 

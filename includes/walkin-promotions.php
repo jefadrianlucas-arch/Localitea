@@ -370,21 +370,6 @@ function walkinCalculatePricing(
     array $discountTypes,
     array $discountRates
 ): array {
-    if (count($discountTypes) > 1) {
-        throw new RuntimeException('Only one discount type is allowed per walk-in order.');
-    }
-
-    $selectedDiscountType = isset($discountTypes['pwd'])
-        ? 'pwd'
-        : (isset($discountTypes['senior']) ? 'senior' : 'none');
-    $selectedDiscountRate = $selectedDiscountType === 'none'
-        ? 0.0
-        : (float)($discountRates[$selectedDiscountType] ?? 0);
-    $customerDiscount = round(
-        $discountEligibleBase * ($selectedDiscountRate / 100),
-        2
-    );
-
     $candidatePromotion = localiteaApplyBestPromotion(
         $pdo,
         $cart,
@@ -402,24 +387,38 @@ function walkinCalculatePricing(
         2
     );
 
+    $selectedDiscountType = 'none';
+    $selectedDiscountRate = 0.0;
+    $customerDiscount = 0.0;
+    if ($promotionDiscount <= 0) {
+        if (count($discountTypes) > 1) {
+            throw new RuntimeException('Only one discount type is allowed per walk-in order.');
+        }
+
+        $selectedDiscountType = isset($discountTypes['pwd'])
+            ? 'pwd'
+            : (isset($discountTypes['senior']) ? 'senior' : 'none');
+        $selectedDiscountRate = $selectedDiscountType === 'none'
+            ? 0.0
+            : (float)($discountRates[$selectedDiscountType] ?? 0);
+        $customerDiscount = round(
+            $discountEligibleBase * ($selectedDiscountRate / 100),
+            2
+        );
+    }
+
     $discountType = 'none';
     $discountRate = 0.0;
     $discountAmount = 0.0;
-    $appliedPromotion = $candidatePromotion;
+    $appliedPromotion = $promotionDiscount > 0 ? $candidatePromotion : [];
 
     if (
         $selectedDiscountType !== 'none' &&
-        $customerDiscount > $promotionDiscount
+        $customerDiscount > 0
     ) {
         $discountType = $selectedDiscountType;
         $discountRate = $selectedDiscountRate;
         $discountAmount = $customerDiscount;
-        $promotionDiscount = 0.0;
-        $rewardItems = [];
-        $addedRewardValue = 0.0;
-        $appliedPromotion = [];
-    } elseif ($promotionDiscount <= 0) {
-        $appliedPromotion = [];
     }
 
     $displaySubtotal = round($subtotal + $addedRewardValue, 2);
@@ -548,7 +547,7 @@ function walkinRenderPromotions(
         <?php endif; ?>
 
         <div class="walkin-promotion-note">
-            Only one promotion is selected per order. PWD/Senior discounts do not stack with promotions; the larger discount is applied.
+            Only one promotion is selected per order. PWD/Senior discounts cannot be combined with promotional pricing.
         </div>
     </div>
     <?php

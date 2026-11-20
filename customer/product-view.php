@@ -4,9 +4,8 @@ if (session_status() !== PHP_SESSION_ACTIVE) {
 }
 require_once '../includes/db.php';
 
-/* Restore approved and one-time-use discount eligibility. */
+/* Restore approved discount eligibility. */
 $approvedCustomerDiscount = null;
-$discountAlreadyUsed = false;
 $loggedInCustomerId = (int)($_SESSION['user_id'] ?? 0);
 $loggedInRole = strtolower((string)($_SESSION['user_role'] ?? ''));
 $isLoggedInCustomer = $loggedInCustomerId > 0 && $loggedInRole === 'customer';
@@ -23,14 +22,10 @@ if ($isLoggedInCustomer) {
             trim((string)($customerDiscountRow['discount_id_image'] ?? '')) !== '') {
             $approvedCustomerDiscount = $customerDiscountRow;
             $approvedCustomerDiscount['discount_type'] = strtolower(trim((string)$customerDiscountRow['discount_type']));
-            $usedStmt = $pdo->prepare("SELECT id FROM orders WHERE customer_id = ? AND LOWER(COALESCE(discount_type, 'none')) = ? AND COALESCE(discount_amount, 0) > 0 LIMIT 1");
-            $usedStmt->execute([$loggedInCustomerId, $approvedCustomerDiscount['discount_type']]);
-            $discountAlreadyUsed = (bool)$usedStmt->fetchColumn();
         }
     } catch (Throwable $e) {
         error_log('Localitea discount eligibility lookup failed: ' . $e->getMessage());
         $approvedCustomerDiscount = null;
-        $discountAlreadyUsed = true;
     }
 }
 
@@ -228,7 +223,7 @@ $isPromotionGet =
     $promotion !== null &&
     $promotionRole === 'get';
 
-$canShowSpecialDiscount = $approvedCustomerDiscount !== null && !$discountAlreadyUsed && $promotion === null;
+$canShowSpecialDiscount = $approvedCustomerDiscount !== null && $promotion === null;
 
 $isPromotionBuy =
     $promotion !== null &&
@@ -1187,8 +1182,6 @@ if ($menuBundleConfig) {
                            data-value="<?= htmlspecialchars((string)$approvedCustomerDiscount['discount_id_name']) ?>">
                     <input type="hidden" name="discount_id_number" id="pvDiscountIdNumber" value=""
                            data-value="<?= htmlspecialchars((string)$approvedCustomerDiscount['discount_id_number']) ?>">
-                    <?php elseif ($discountAlreadyUsed && $approvedCustomerDiscount !== null && $promotion === null): ?>
-                    <div class="pv-note">Your approved PWD/Senior Citizen discount has already been used.</div>
                     <?php elseif ($promotion !== null): ?>
                     <div class="pv-note">PWD/Senior Citizen discounts cannot be applied to promotional items.</div>
                     <?php endif; ?>

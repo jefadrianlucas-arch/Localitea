@@ -85,6 +85,10 @@ if (
         $discountType = 'none';
     }
 
+    if ((int)($cartItem['promotion_source_id'] ?? 0) > 0) {
+        $discountType = 'none';
+    }
+
     /* PWD / Senior Citizen ID details (cleared when the discount is removed). */
     $discountIdName = '';
     $discountIdNumber = '';
@@ -537,6 +541,12 @@ $discountEligibleBase = round(
     2
 );
 
+/* An active promotion takes precedence over PWD/Senior discounts. */
+if ($promotion_discount > 0) {
+    $selectedDiscountTypes = [];
+    $discountEligibleBase = 0.00;
+}
+
 $cartDiscountType =
     !empty($selectedDiscountTypes)
         ? array_key_first($selectedDiscountTypes)
@@ -591,38 +601,13 @@ $customer_discount = round(
 );
 
 
-/*
-|--------------------------------------------------------------------------
-| DO NOT STACK PWD/SENIOR WITH PROMOTION
-|--------------------------------------------------------------------------
-|
-| This preview mirrors checkout.php:
-| - promotion remains when it gives the larger discount
-| - PWD/Senior replaces it when the PWD/Senior discount is larger
-|
-*/
+/* PWD/Senior discounts are unavailable whenever promotional savings apply. */
 
 $displayPromotionDiscount = $promotion_discount;
 $displayDiscountAmount = 0.00;
 $displayDiscountType = 'none';
 
 if (
-    count($selectedDiscountTypes) === 1 &&
-    $cartDiscountType !== 'none' &&
-    $customer_discount > $promotion_discount
-) {
-
-    $displayPromotionDiscount = 0.00;
-    $displayDiscountAmount = $customer_discount;
-    $displayDiscountType = $cartDiscountType;
-
-    /*
-     * A PWD/Senior discount cannot be combined with a promotion reward.
-     * Hide reward value from the gross display when PWD/Senior wins.
-     */
-    $display_subtotal = $subtotal;
-
-} elseif (
     count($selectedDiscountTypes) === 1 &&
     $cartDiscountType !== 'none' &&
     $customer_discount > 0 &&
@@ -2175,13 +2160,26 @@ require_once '../includes/navbar.php';
                                                 );
                                             ?>
 
-                                            <?php if ($itemDiscountType === 'pwd'): ?>
+                                            <?php if (
+                                                $displayDiscountAmount > 0 &&
+                                                $displayDiscountType === $itemDiscountType &&
+                                                $itemDiscountType === 'pwd'
+                                            ): ?>
                                                 <span class="ck-chip is-discount">PWD Discount</span>
-                                            <?php elseif ($itemDiscountType === 'senior'): ?>
+                                            <?php elseif (
+                                                $displayDiscountAmount > 0 &&
+                                                $displayDiscountType === $itemDiscountType &&
+                                                $itemDiscountType === 'senior'
+                                            ): ?>
                                                 <span class="ck-chip is-discount">Senior Citizen Discount</span>
                                             <?php endif; ?>
 
-                                            <?php if ($itemDiscountType !== 'none' && !empty($item['discount_id_number'])): ?>
+                                            <?php if (
+                                                $displayDiscountAmount > 0 &&
+                                                $displayDiscountType === $itemDiscountType &&
+                                                $itemDiscountType !== 'none' &&
+                                                !empty($item['discount_id_number'])
+                                            ): ?>
                                                 <span class="ck-chip">
                                                     ID: <?= htmlspecialchars((string)($item['discount_id_name'] ?? '')) ?>
                                                     (<?= htmlspecialchars((string)$item['discount_id_number']) ?>)
@@ -2396,6 +2394,9 @@ require_once '../includes/navbar.php';
                                         ) ?>
                                     </span>
                                     <span>-₱<?= number_format($promotion_discount, 2) ?></span>
+                                </div>
+                                <div class="small text-muted">
+                                    Promotional pricing applies; PWD/Senior Citizen discounts cannot be combined with it.
                                 </div>
                             <?php endif; ?>
 
@@ -2701,11 +2702,16 @@ require_once '../includes/navbar.php';
                                                         </div>
 
                                                         <?php
+                                                            $promotionBlocksDiscount = $promotion_discount > 0 ||
+                                                                (int)($item['promotion_source_id'] ?? 0) > 0;
                                                             $editDiscountType = strtolower(
                                                                 trim((string)($item['discount_type'] ?? 'none'))
                                                             );
 
                                                             if (!in_array($editDiscountType, ['none', 'pwd', 'senior'], true)) {
+                                                                $editDiscountType = 'none';
+                                                            }
+                                                            if ($promotionBlocksDiscount) {
                                                                 $editDiscountType = 'none';
                                                             }
                                                         ?>
@@ -2738,6 +2744,7 @@ require_once '../includes/navbar.php';
                                                                         id="<?= htmlspecialchars($editModalId) ?>_discount_pwd"
                                                                         value="pwd"
                                                                         <?= $editDiscountType === 'pwd' ? 'checked' : '' ?>
+                                                                        <?= $promotionBlocksDiscount ? 'disabled' : '' ?>
                                                                     >
                                                                     <label
                                                                         class="form-check-label"
@@ -2755,6 +2762,7 @@ require_once '../includes/navbar.php';
                                                                         id="<?= htmlspecialchars($editModalId) ?>_discount_senior"
                                                                         value="senior"
                                                                         <?= $editDiscountType === 'senior' ? 'checked' : '' ?>
+                                                                        <?= $promotionBlocksDiscount ? 'disabled' : '' ?>
                                                                     >
                                                                     <label
                                                                         class="form-check-label"
@@ -2795,7 +2803,9 @@ require_once '../includes/navbar.php';
                                                             </div>
 
                                                             <div class="small text-muted mt-2">
-                                                                Optional. Valid ID must be presented upon pick-up.
+                                                                <?= $promotionBlocksDiscount
+                                                                    ? 'Promotional pricing applies; PWD/Senior Citizen discounts cannot be combined with it.'
+                                                                    : 'Optional. Valid ID must be presented upon pick-up.' ?>
                                                             </div>
                                                         </div>
                                                     </div>
