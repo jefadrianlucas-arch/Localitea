@@ -229,7 +229,7 @@ body {
         <div class="text-center mb-4">
             <h1 class="reset-title">Reset Password</h1>
             <p class="reset-subtitle mb-0">
-                Create a new password for your Localitea customer account.
+                Create a new password for your customer account.
             </p>
         </div>
 
