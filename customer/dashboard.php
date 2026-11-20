@@ -419,7 +419,7 @@ try {
 
 $statusLabels = [
     'pending_verification' => 'Pending Verification',
-    'order_queue'           => 'Awaiting Store Confirmation',
+    'order_queue'           => 'Order Queue',
     'confirmed'             => 'Order Confirmed',
     'preparing'             => 'Preparing',
     'ready'                 => 'Ready for Pick-up',
@@ -447,13 +447,47 @@ function statusDescription($status, $statusDescriptions) {
 }
 
 /* =========================================================
+   PAYMENT-AWARE ORDER FLOW
+   Cash:   Order Queue -> Confirmed -> Preparing -> Ready -> Completed
+   GCash:  Pending Verification -> Confirmed -> Preparing -> Ready -> Completed
+   "Pending Verification" is for GCash orders only; cash orders start in
+   the Order Queue, so the first status is normalised by payment method.
+========================================================= */
+function orderIsGcash(array $order): bool
+{
+    return strtolower(trim((string)($order['payment_method'] ?? ''))) === 'gcash';
+}
+
+function displayOrderStatus(array $order): string
+{
+    $status = (string)($order['status'] ?? '');
+
+    if (in_array($status, ['pending_verification', 'order_queue'], true)) {
+        return orderIsGcash($order) ? 'pending_verification' : 'order_queue';
+    }
+
+    return $status;
+}
+
+function orderTimelineStatuses(array $order): array
+{
+    return [
+        orderIsGcash($order) ? 'pending_verification' : 'order_queue',
+        'confirmed',
+        'preparing',
+        'ready',
+        'completed'
+    ];
+}
+
+/* =========================================================
    NEXT-STEP GUIDE
    Tells the customer exactly what to do for their current order
    status (what to expect, when to go, what to show the staff).
 ========================================================= */
 function orderNextStep(array $order): ?array
 {
-    $status   = (string)($order['status'] ?? '');
+    $status   = displayOrderStatus($order);
     $payment  = strtolower(trim((string)($order['payment_method'] ?? '')));
     $isGcash  = $payment === 'gcash';
     $total    = number_format((float)($order['total_amount'] ?? 0), 2);
@@ -2436,23 +2470,15 @@ require_once '../includes/navbar.php';
         <?php foreach ($activeOrders as $activeOrder): ?>
 
             <?php
-            $activeStatus = $activeOrder['status'];
+            $activeStatus = displayOrderStatus($activeOrder);
 
             $activeItems =
                 $activeOrderItems[$activeOrder['id']] ?? [];
 
-            $activeTimelineStatuses = [
-                'pending_verification',
-                'confirmed',
-                'preparing',
-                'ready',
-                'completed'
-            ];
+            // Cash: Order Queue first. GCash: Pending Verification first.
+            $activeTimelineStatuses = orderTimelineStatuses($activeOrder);
 
-            // Cash/online queue orders are awaiting confirmation, so show the first timeline step.
-            $timelineStatusForDisplay = $activeStatus === 'order_queue'
-                ? 'pending_verification'
-                : $activeStatus;
+            $timelineStatusForDisplay = $activeStatus;
 
             $activeStatusIndex = array_search(
                 $timelineStatusForDisplay,
@@ -2486,7 +2512,7 @@ require_once '../includes/navbar.php';
                         </div>     
                           
 
-                        <span class="status-badge status-<?= htmlspecialchars($activeStatus) ?>" data-active-order-status="<?= (int)$activeOrder['id'] ?>">
+                        <span class="status-badge status-<?= htmlspecialchars($activeStatus) ?>" data-active-order-status="<?= (int)$activeOrder['id'] ?>" data-order-payment="<?= orderIsGcash($activeOrder) ? 'gcash' : 'cash' ?>">
                             <?= htmlspecialchars(
                                 statusLabel(
                                     $activeStatus,
@@ -2612,9 +2638,7 @@ require_once '../includes/navbar.php';
                                     <div class="timeline-name">
 
                                         <?= htmlspecialchars(
-                                            $activeStatus === 'order_queue' && $timelineStatus === 'pending_verification'
-                                                ? 'Awaiting Confirmation'
-                                                : statusLabel($timelineStatus, $statusLabels)
+                                            statusLabel($timelineStatus, $statusLabels)
                                         ) ?>
 
                                     </div>
@@ -3664,9 +3688,11 @@ require_once '../includes/navbar.php';
 
             <?php
 
+            $historyTimeline = orderTimelineStatuses($ord);
+
             $historyStatusIndex = array_search(
-                $ord['status'],
-                $timelineStatuses,
+                displayOrderStatus($ord),
+                $historyTimeline,
                 true
             );
 
@@ -3782,7 +3808,7 @@ require_once '../includes/navbar.php';
                                         <?php
 
                                         $cancelledTimeline = [
-                                            'pending_verification',
+                                            $historyTimeline[0],
                                             'confirmed',
                                             'cancelled'
                                         ];
@@ -3857,7 +3883,7 @@ require_once '../includes/navbar.php';
 
 
                                         <?php foreach (
-                                            $timelineStatuses
+                                            $historyTimeline
                                             as $index => $timelineStatus
                                         ): ?>
 
@@ -3868,7 +3894,7 @@ require_once '../includes/navbar.php';
                                                 $historyStatusIndex >= $index;
 
                                             $isCurrent =
-                                                $ord['status'] === $timelineStatus;
+                                                displayOrderStatus($ord) === $timelineStatus;
 
                                             ?>
 
@@ -4598,7 +4624,7 @@ if ($isHistoryAjax) {
 (function () {
     const statusLabels = {
         pending_verification: 'Pending Verification',
-        order_queue: 'Awaiting Store Confirmation',
+        order_queue: 'Order Queue',
         confirmed: 'Order Confirmed',
         preparing: 'Preparing',
         ready: 'Ready for Pick-up'
@@ -4625,10 +4651,16 @@ if ($isHistoryAjax) {
 
             document.querySelectorAll('[data-active-order-status]').forEach(function (badge) {
                 const id = badge.getAttribute('data-active-order-status');
-                const status = statusById[id];
+                let status = statusById[id];
                 if (!status) {
                     window.location.reload();
                     return;
+                }
+
+                // Pending Verification is GCash-only; cash orders show Order Queue.
+                const isGcash = badge.getAttribute('data-order-payment') === 'gcash';
+                if (status === 'pending_verification' || status === 'order_queue') {
+                    status = isGcash ? 'pending_verification' : 'order_queue';
                 }
 
                 Object.keys(statusLabels).forEach(function (knownStatus) {
