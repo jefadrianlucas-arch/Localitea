@@ -54,6 +54,35 @@ $payLabels = ['all' => 'All payments', 'cash' => 'Cash only', 'gcash' => 'GCash 
 $payLabel  = $payLabels[$pay];
 $paySql    = $pay === 'all' ? '' : " AND payment_method = '" . $pay . "'";   // whitelisted above
 
+/* Optional sections: ?show=payment,channel,... (missing = all shown, "none" = none). */
+$sectionLabels = [
+    'payment'    => 'Payment Summary',
+    'channel'    => 'Order Channel',
+    'products'   => 'Top 5 Products',
+    'categories' => 'Top Categories',
+    'discounts'  => 'Discounts & Promotions',
+    'outcomes'   => 'Orders, Cancellations & Refunds',
+    'promos'     => 'Promotion Sales',
+    'hours'      => 'Busiest Pickup Hours',
+    'customers'  => 'Online Customers',
+];
+
+if (isset($_GET['show'])) {
+    $selectedSections = array_values(array_intersect(
+        array_keys($sectionLabels),
+        array_map('trim', explode(',', strtolower((string)$_GET['show'])))
+    ));
+} else {
+    $selectedSections = array_keys($sectionLabels);
+}
+
+$allSectionsOn = count($selectedSections) === count($sectionLabels);
+$showQs        = $allSectionsOn ? '' : '&show=' . urlencode($selectedSections ? implode(',', $selectedSections) : 'none');
+
+$secAttr = static function (string $key) use ($selectedSections): string {
+    return 'data-section="' . $key . '"' . (in_array($key, $selectedSections, true) ? '' : ' style="display:none"');
+};
+
 /* =========================================================
    GENERATED INFO + BUSINESS DETAILS
    >>> Replace the email and phone below with the real ones. <<<
@@ -322,6 +351,14 @@ if ($analytics) {
         }
         .print-now-btn:hover { background: #3d2b20; }
 
+        .section-picker { flex: 1 0 100%; padding-top: 10px; border-top: 1px dashed #d8c9bb; }
+        .section-picker .sp-links { margin-left: 8px; font-weight: 400; }
+        .section-picker .sp-links a { color: #8B6F5A; text-decoration: none; }
+        .section-picker .sp-links a:hover { text-decoration: underline; }
+        .sp-list { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+        .sp-item { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: #4A3525; cursor: pointer; user-select: none; }
+        .sp-item input { accent-color: #4A3525; margin: 0; cursor: pointer; }
+
         /* ---------- Paper ---------- */
         .report {
             width: 210mm;
@@ -526,7 +563,7 @@ if ($analytics) {
         <div class="print-mode-label">Sales Overview Layout</div>
         <div class="print-mode-tabs">
             <?php foreach ($allowed_modes as $printMode): ?>
-                <a href="print-sales-report.php?start_date=<?= urlencode($start_date) ?>&end_date=<?= urlencode($end_date) ?>&mode=<?= urlencode($printMode) ?>&pay=<?= urlencode($pay) ?>"
+                <a href="print-sales-report.php?start_date=<?= urlencode($start_date) ?>&end_date=<?= urlencode($end_date) ?>&mode=<?= urlencode($printMode) ?>&pay=<?= urlencode($pay) ?><?= $showQs ?>"
                    class="print-mode-tab <?= $mode === $printMode ? 'active' : '' ?>">
                     <?= htmlspecialchars($modeLabels[$printMode]) ?>
                 </a>
@@ -538,7 +575,7 @@ if ($analytics) {
         <div class="print-mode-label">Payment</div>
         <div class="print-mode-tabs">
             <?php foreach ($payLabels as $payKey => $payText): ?>
-                <a href="print-sales-report.php?start_date=<?= urlencode($start_date) ?>&end_date=<?= urlencode($end_date) ?>&mode=<?= urlencode($mode) ?>&pay=<?= urlencode($payKey) ?>"
+                <a href="print-sales-report.php?start_date=<?= urlencode($start_date) ?>&end_date=<?= urlencode($end_date) ?>&mode=<?= urlencode($mode) ?>&pay=<?= urlencode($payKey) ?><?= $showQs ?>"
                    class="print-mode-tab <?= $pay === $payKey ? 'active' : '' ?>">
                     <?= htmlspecialchars($payKey === 'all' ? 'All' : ($payKey === 'cash' ? 'Cash' : 'GCash')) ?>
                 </a>
@@ -547,6 +584,21 @@ if ($analytics) {
     </div>
 
     <button type="button" class="print-now-btn" onclick="window.print()">Print Report</button>
+
+    <div class="section-picker">
+        <div class="print-mode-label">
+            Include in print
+            <span class="sp-links"><a href="#" id="spAll">All</a> &middot; <a href="#" id="spNone">None</a></span>
+        </div>
+        <div class="sp-list">
+            <?php foreach ($sectionLabels as $secKey => $secText): ?>
+                <label class="sp-item">
+                    <input type="checkbox" class="sp-check" value="<?= $secKey ?>" <?= in_array($secKey, $selectedSections, true) ? 'checked' : '' ?>>
+                    <span><?= htmlspecialchars($secText) ?></span>
+                </label>
+            <?php endforeach; ?>
+        </div>
+    </div>
 </div>
 
 
@@ -591,37 +643,12 @@ if ($analytics) {
     </div>
 
 
-    <!-- KPIs -->
-    <div class="kpis">
-        <div class="kpi">
-            <div class="k-label">Total Sales</div>
-            <div class="k-value"><?= $paPeso($totalSales) ?></div>
-            <div class="k-sub"><?= $analytics ? htmlspecialchars($paChange($paCur['net'], $paPrev['net'])) : '&nbsp;' ?></div>
-        </div>
-        <div class="kpi">
-            <div class="k-label">Completed Orders</div>
-            <div class="k-value"><?= number_format($totalOrders) ?></div>
-            <div class="k-sub"><?= $analytics ? htmlspecialchars($paChange($paCur['orders'], $paPrev['orders'])) : '&nbsp;' ?></div>
-        </div>
-        <div class="kpi">
-            <div class="k-label">Average Order</div>
-            <div class="k-value"><?= $paPeso($averageOrder) ?></div>
-            <div class="k-sub"><?= $analytics ? htmlspecialchars($paChange($paCur['avg'], $paPrev['avg'])) : '&nbsp;' ?></div>
-        </div>
-        <div class="kpi">
-            <div class="k-label">Discounts Given</div>
-            <div class="k-value"><?= $analytics ? $paPeso($paCur['discounts']) : '—' ?></div>
-            <div class="k-sub"><?= $analytics ? 'Gross ' . $paPeso($paCur['gross']) : '&nbsp;' ?></div>
-        </div>
-    </div>
-
-
     <?php if ($analytics): ?>
 
     <div class="grid2">
 
         <!-- PAYMENT -->
-        <div class="blk">
+        <div class="blk" <?= $secAttr('payment') ?>>
             <div class="blk-title">Payment Summary</div>
             <table class="t">
                 <thead><tr><th>Method</th><th>Orders</th><th>Sales</th></tr></thead>
@@ -638,7 +665,7 @@ if ($analytics) {
         </div>
 
         <!-- CHANNEL -->
-        <div class="blk">
+        <div class="blk" <?= $secAttr('channel') ?>>
             <div class="blk-title">Order Channel</div>
             <table class="t">
                 <thead><tr><th>Channel</th><th>Orders</th><th>Sales</th><th>Share</th></tr></thead>
@@ -650,7 +677,7 @@ if ($analytics) {
         </div>
 
         <!-- TOP PRODUCTS -->
-        <div class="blk">
+        <div class="blk" <?= $secAttr('products') ?>>
             <div class="blk-title">Top 5 Products</div>
             <?php if (empty($paProducts)): ?>
                 <div class="empty">No items sold in this period.</div>
@@ -667,7 +694,7 @@ if ($analytics) {
         </div>
 
         <!-- CATEGORIES -->
-        <div class="blk">
+        <div class="blk" <?= $secAttr('categories') ?>>
             <div class="blk-title">Top Categories</div>
             <?php if (empty($paCategories)): ?>
                 <div class="empty">No items sold in this period.</div>
@@ -685,7 +712,7 @@ if ($analytics) {
         </div>
 
         <!-- DISCOUNTS -->
-        <div class="blk">
+        <div class="blk" <?= $secAttr('discounts') ?>>
             <div class="blk-title">Discounts &amp; Promotions</div>
             <table class="t">
                 <thead><tr><th>Type</th><th>Orders</th><th>Amount</th></tr></thead>
@@ -699,7 +726,7 @@ if ($analytics) {
         </div>
 
         <!-- OUTCOMES -->
-        <div class="blk">
+        <div class="blk" <?= $secAttr('outcomes') ?>>
             <div class="blk-title">Orders, Cancellations &amp; Refunds</div>
             <table class="t">
                 <thead><tr><th>Measure</th><th>Orders</th><th>Amount</th></tr></thead>
@@ -728,7 +755,7 @@ if ($analytics) {
         </div>
 
         <!-- PROMOTION SALES -->
-        <div class="blk full">
+        <div class="blk full" <?= $secAttr('promos') ?>>
             <div class="blk-title">Promotion Sales</div>
             <?php if (empty($analytics['promotions'])): ?>
                 <div class="empty">No promotions were used on completed orders in this period.</div>
@@ -760,7 +787,7 @@ if ($analytics) {
         </div>
 
         <!-- PEAK HOURS -->
-        <div class="blk">
+        <div class="blk" <?= $secAttr('hours') ?>>
             <div class="blk-title">Busiest Pickup Hours</div>
             <?php if (empty($paHours)): ?>
                 <div class="empty">No orders in this period.</div>
@@ -782,7 +809,7 @@ if ($analytics) {
         </div>
 
         <!-- CUSTOMERS -->
-        <div class="blk">
+        <div class="blk" <?= $secAttr('customers') ?>>
             <div class="blk-title">Online Customers</div>
             <table class="t">
                 <tbody>
@@ -911,5 +938,39 @@ if ($analytics) {
     </div>
 
 </div>
+<script>
+(function () {
+    var checks = document.querySelectorAll('.sp-check');
+    var total  = checks.length;
+
+    function apply() {
+        var on = [];
+        checks.forEach(function (c) {
+            if (c.checked) on.push(c.value);
+            document.querySelectorAll('[data-section="' + c.value + '"]').forEach(function (el) {
+                el.style.display = c.checked ? '' : 'none';
+            });
+        });
+
+        var show = on.length === total ? null : (on.length ? on.join(',') : 'none');
+
+        var url = new URL(window.location.href);
+        if (show === null) url.searchParams.delete('show'); else url.searchParams.set('show', show);
+        history.replaceState(null, '', url.toString());
+
+        document.querySelectorAll('a.print-mode-tab').forEach(function (a) {
+            var u = new URL(a.href, window.location.href);
+            if (show === null) u.searchParams.delete('show'); else u.searchParams.set('show', show);
+            a.href = u.toString();
+        });
+    }
+
+    checks.forEach(function (c) { c.addEventListener('change', apply); });
+
+    function setAll(v) { checks.forEach(function (c) { c.checked = v; }); apply(); }
+    document.getElementById('spAll').addEventListener('click', function (e) { e.preventDefault(); setAll(true); });
+    document.getElementById('spNone').addEventListener('click', function (e) { e.preventDefault(); setAll(false); });
+})();
+</script>
 </body>
 </html>
