@@ -48,6 +48,7 @@ if (!is_string($userAccountCsrfToken) || strlen($userAccountCsrfToken) !== 64) {
 ========================================================= */
 
 $selectedCategory = $_GET['category'] ?? 'All Products';
+$productPage = max(1, (int)($_GET['product_page'] ?? 1));
 
 /* =========================================================
    SETTINGS TAB
@@ -91,6 +92,7 @@ if (!in_array(
 $userAccountSearch = trim(
     (string)($_GET['user_account_search'] ?? '')
 );
+$userAccountPage = max(1, (int)($_GET['user_account_page'] ?? 1));
 
 $userAccounts = [];
 
@@ -1242,8 +1244,18 @@ function renderUserAccountFilterFragment(
     int $userAccountArchivedCount,
     int $userAccountPendingCount,
     array $filteredUserAccounts,
+    int $userAccountPage,
     int $loggedInAdminId
 ): void {
+    $accountsPerPage = 10;
+    $totalAccounts = count($filteredUserAccounts);
+    $totalAccountPages = max(1, (int)ceil($totalAccounts / $accountsPerPage));
+    $userAccountPage = min(max(1, $userAccountPage), $totalAccountPages);
+    $displayUserAccounts = array_slice(
+        $filteredUserAccounts,
+        ($userAccountPage - 1) * $accountsPerPage,
+        $accountsPerPage
+    );
 ?>
 <div id="userAccountAjaxArea">
             <div class="user-account-summary-grid">
@@ -1365,8 +1377,8 @@ function renderUserAccountFilterFragment(
                     </span>
 
                     <div class="user-account-result-count">
-                        <?= count($filteredUserAccounts) ?>
-                        <?= count($filteredUserAccounts) === 1 ? 'account' : 'accounts' ?>
+                        <?= $totalAccounts ?>
+                        <?= $totalAccounts === 1 ? 'account' : 'accounts' ?>
                     </div>
 
                 </div>
@@ -1413,7 +1425,7 @@ function renderUserAccountFilterFragment(
 
                         <tbody>
 
-                            <?php foreach ($filteredUserAccounts as $account): ?>
+                            <?php foreach ($displayUserAccounts as $account): ?>
 
                                 <?php
                                 $role = $account['role'];
@@ -1773,23 +1785,70 @@ function renderUserAccountFilterFragment(
 
                 </div>
 
+                <div class="settings-page-info">
+                    Showing <?= (($userAccountPage - 1) * $accountsPerPage) + 1 ?>–<?= min($userAccountPage * $accountsPerPage, $totalAccounts) ?>
+                    of <?= number_format($totalAccounts) ?> account<?= $totalAccounts !== 1 ? 's' : '' ?>
+                </div>
+
+                <?php if ($totalAccountPages > 1): ?>
+                    <?php
+                    $accountPaginationParams = [
+                        'tab' => 'user_accounts',
+                        'user_account_status' => $userAccountStatus,
+                        'user_account_filter' => $userAccountFilter,
+                        'user_account_search' => $userAccountSearch,
+                    ];
+                    $accountPaginationUrl = static function (int $targetPage) use ($accountPaginationParams): string {
+                        $params = $accountPaginationParams;
+                        $params['user_account_page'] = $targetPage;
+                        return 'settings.php?' . http_build_query($params);
+                    };
+                    $visibleAccountPages = [1];
+                    for (
+                        $paginationCandidate = max(2, $userAccountPage - 2);
+                        $paginationCandidate <= min($totalAccountPages - 1, $userAccountPage + 2);
+                        $paginationCandidate++
+                    ) {
+                        $visibleAccountPages[] = $paginationCandidate;
+                    }
+                    $visibleAccountPages[] = $totalAccountPages;
+                    $visibleAccountPages = array_values(array_unique($visibleAccountPages));
+                    $previousAccountPage = 0;
+                    ?>
+
+                    <div class="settings-pagination pagination-wrap">
+                        <nav aria-label="User account pagination">
+                            <ul class="pagination mb-0">
+                                <li class="page-item <?= $userAccountPage <= 1 ? 'disabled' : '' ?>">
+                                    <a class="page-link user-account-page-link <?= $userAccountPage <= 1 ? 'disabled' : '' ?>"
+                                       href="<?= htmlspecialchars($accountPaginationUrl(max(1, $userAccountPage - 1)), ENT_QUOTES, 'UTF-8') ?>"
+                                       <?= $userAccountPage <= 1 ? 'aria-disabled="true" tabindex="-1"' : '' ?>>Previous</a>
+                                </li>
+
+                                <?php foreach ($visibleAccountPages as $paginationPage): ?>
+                                    <?php if ($previousAccountPage > 0 && $paginationPage > $previousAccountPage + 1): ?>
+                                        <li class="page-item disabled" aria-hidden="true"><span class="page-link">...</span></li>
+                                    <?php endif; ?>
+
+                                    <li class="page-item <?= $paginationPage === $userAccountPage ? 'active' : '' ?>">
+                                        <a class="page-link user-account-page-link"
+                                           href="<?= htmlspecialchars($accountPaginationUrl($paginationPage), ENT_QUOTES, 'UTF-8') ?>"
+                                           <?= $paginationPage === $userAccountPage ? 'aria-current="page"' : '' ?>><?= $paginationPage ?></a>
+                                    </li>
+                                    <?php $previousAccountPage = $paginationPage; ?>
+                                <?php endforeach; ?>
+
+                                <li class="page-item <?= $userAccountPage >= $totalAccountPages ? 'disabled' : '' ?>">
+                                    <a class="page-link user-account-page-link <?= $userAccountPage >= $totalAccountPages ? 'disabled' : '' ?>"
+                                       href="<?= htmlspecialchars($accountPaginationUrl(min($totalAccountPages, $userAccountPage + 1)), ENT_QUOTES, 'UTF-8') ?>"
+                                       <?= $userAccountPage >= $totalAccountPages ? 'aria-disabled="true" tabindex="-1"' : '' ?>>Next</a>
+                                </li>
+                            </ul>
+                        </nav>
+                    </div>
+                <?php endif; ?>
+
             <?php endif; ?>
-
-            <div class="user-account-note">
-
-                <strong>
-                    <i class="bi bi-info-circle me-1"></i>
-                    Account separation:
-                </strong>
-
-                Customer accounts come from the
-                <code>customers</code> table. Staff and Admin roles may exist in
-                <code>users</code>, while administrator profiles are also
-                maintained in the separate <code>admins</code> table. Admins can
-                create new Staff accounts and manage existing accounts according
-                to their role. Your own administrator account remains managed
-                through <code>profile.php</code>. Passwords are never displayed here.
-            </div>
 
 </div>
 <?php
@@ -1816,6 +1875,7 @@ if (
         $userAccountArchivedCount,
         $userAccountPendingCount,
         $filteredUserAccounts,
+        $userAccountPage,
         $loggedInAdminId
     );
     exit;
@@ -3735,6 +3795,15 @@ if ($selectedCategory === 'All Products') {
 
 $products =
     $stmt->fetchAll(PDO::FETCH_ASSOC);
+$productCount = count($products);
+$productsPerPage = 10;
+$totalProductPages = max(1, (int)ceil($productCount / $productsPerPage));
+$productPage = min($productPage, $totalProductPages);
+$products = array_slice(
+    $products,
+    ($productPage - 1) * $productsPerPage,
+    $productsPerPage
+);
 
 $extraSizesByProduct = settingsLoadExtraSizes($pdo);
 
@@ -5023,6 +5092,58 @@ body {
 
 .user-account-management-panel {
     overflow: hidden;
+}
+
+.settings-pagination {
+    display: flex;
+    justify-content: center;
+    margin: 22px 0 0;
+}
+
+.settings-pagination .page-link {
+    margin: 0 2px;
+    border-color: #E8DED4;
+    border-radius: 8px;
+    color: #6F4E37;
+    font-size: .8rem;
+    white-space: nowrap;
+}
+
+.settings-pagination .page-item.active .page-link {
+    border-color: #4A3525;
+    background: #6F4E37;
+    color: #fff;
+}
+
+.settings-pagination .page-item.disabled .page-link,
+.settings-pagination .page-link.disabled {
+    background: #F7F5F2;
+    color: #A79B91;
+    pointer-events: none;
+}
+
+.settings-page-info {
+    margin-top: 10px;
+    color: #8A7F75;
+    font-size: .76rem;
+    text-align: center;
+}
+
+@media (max-width: 768px) {
+    .settings-pagination {
+        justify-content: flex-start;
+        overflow-x: auto;
+        padding-bottom: 4px;
+    }
+
+    .settings-pagination nav {
+        margin: 0 auto;
+    }
+
+    .settings-pagination .pagination {
+        flex-wrap: nowrap;
+        white-space: nowrap;
+    }
 }
 
 #userAccountAjaxArea.user-account-ajax-loading {
@@ -7228,6 +7349,67 @@ document.addEventListener('DOMContentLoaded', function () {
 
             <?php endif; ?>
 
+            <?php if ($productCount > 0): ?>
+                <div class="settings-page-info">
+                    Showing <?= (($productPage - 1) * $productsPerPage) + 1 ?>–<?= min($productPage * $productsPerPage, $productCount) ?>
+                    of <?= number_format($productCount) ?> product<?= $productCount !== 1 ? 's' : '' ?>
+                </div>
+
+                <?php if ($totalProductPages > 1): ?>
+                    <?php
+                    $productPaginationUrl = static function (int $targetPage) use ($selectedCategory): string {
+                        return 'settings.php?' . http_build_query([
+                            'tab' => 'products',
+                            'category' => $selectedCategory,
+                            'product_page' => $targetPage,
+                        ]);
+                    };
+                    $visibleProductPages = [1];
+                    for (
+                        $paginationCandidate = max(2, $productPage - 2);
+                        $paginationCandidate <= min($totalProductPages - 1, $productPage + 2);
+                        $paginationCandidate++
+                    ) {
+                        $visibleProductPages[] = $paginationCandidate;
+                    }
+                    $visibleProductPages[] = $totalProductPages;
+                    $visibleProductPages = array_values(array_unique($visibleProductPages));
+                    $previousProductPage = 0;
+                    ?>
+
+                    <div class="settings-pagination pagination-wrap">
+                        <nav aria-label="Product pagination">
+                            <ul class="pagination mb-0">
+                                <li class="page-item <?= $productPage <= 1 ? 'disabled' : '' ?>">
+                                    <a class="page-link <?= $productPage <= 1 ? 'disabled' : '' ?>"
+                                       href="<?= htmlspecialchars($productPaginationUrl(max(1, $productPage - 1)), ENT_QUOTES, 'UTF-8') ?>"
+                                       <?= $productPage <= 1 ? 'aria-disabled="true" tabindex="-1"' : '' ?>>Previous</a>
+                                </li>
+
+                                <?php foreach ($visibleProductPages as $paginationPage): ?>
+                                    <?php if ($previousProductPage > 0 && $paginationPage > $previousProductPage + 1): ?>
+                                        <li class="page-item disabled" aria-hidden="true"><span class="page-link">...</span></li>
+                                    <?php endif; ?>
+
+                                    <li class="page-item <?= $paginationPage === $productPage ? 'active' : '' ?>">
+                                        <a class="page-link"
+                                           href="<?= htmlspecialchars($productPaginationUrl($paginationPage), ENT_QUOTES, 'UTF-8') ?>"
+                                           <?= $paginationPage === $productPage ? 'aria-current="page"' : '' ?>><?= $paginationPage ?></a>
+                                    </li>
+                                    <?php $previousProductPage = $paginationPage; ?>
+                                <?php endforeach; ?>
+
+                                <li class="page-item <?= $productPage >= $totalProductPages ? 'disabled' : '' ?>">
+                                    <a class="page-link <?= $productPage >= $totalProductPages ? 'disabled' : '' ?>"
+                                       href="<?= htmlspecialchars($productPaginationUrl(min($totalProductPages, $productPage + 1)), ENT_QUOTES, 'UTF-8') ?>"
+                                       <?= $productPage >= $totalProductPages ? 'aria-disabled="true" tabindex="-1"' : '' ?>>Next</a>
+                                </li>
+                            </ul>
+                        </nav>
+                    </div>
+                <?php endif; ?>
+            <?php endif; ?>
+
         </div>
 
 <?php elseif ($selectedTab === 'promotions'): ?>
@@ -7489,9 +7671,6 @@ document.addEventListener('DOMContentLoaded', function () {
                         User Account Settings
                     </div>
 
-                    <div class="promotion-management-subtitle">
-                        View and manage customer, staff, and administrator accounts. New accounts can only be added as Staff.
-                    </div>
                 </div>
 
                 <button
@@ -7514,6 +7693,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 $userAccountArchivedCount,
                 $userAccountPendingCount,
                 $filteredUserAccounts,
+                $userAccountPage,
                 $loggedInAdminId
             );
             ?>
@@ -8057,6 +8237,34 @@ const addModalForm =
                 event.preventDefault();
 
                 const targetUrl = new URL(card.href, window.location.href);
+                loadUserAccountFilter(targetUrl, true);
+            });
+
+            /* Keep account pagination within the existing AJAX list behavior. */
+            document.addEventListener('click', function (event) {
+                const pageLink = event.target.closest('.user-account-page-link');
+
+                if (
+                    !pageLink ||
+                    !managementPanel.contains(pageLink) ||
+                    pageLink.classList.contains('disabled')
+                ) {
+                    return;
+                }
+
+                if (
+                    event.button !== 0 ||
+                    event.ctrlKey ||
+                    event.metaKey ||
+                    event.shiftKey ||
+                    event.altKey
+                ) {
+                    return;
+                }
+
+                event.preventDefault();
+
+                const targetUrl = new URL(pageLink.href, window.location.href);
                 loadUserAccountFilter(targetUrl, true);
             });
 

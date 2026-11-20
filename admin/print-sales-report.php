@@ -332,12 +332,14 @@ if ($analytics) {
             background: #fff;
             font-size: 11px;
             line-height: 1.4;
+            display: flex;
+            flex-direction: column;
         }
 
         /* ---------- Letterhead ---------- */
         .letterhead {
             display: grid;
-            grid-template-columns: 90px minmax(0, 1fr) 130px;
+            grid-template-columns: 90px minmax(0, 1fr);
             align-items: center;
             gap: 12px;
             padding-bottom: 10px;
@@ -456,12 +458,25 @@ if ($analytics) {
         .t td:first-child { overflow-wrap: anywhere; }
 
         .report-footer {
-            margin-top: 16px;
+            margin-top: auto;
             padding-top: 8px;
             border-top: 1px solid #333;
-            text-align: center;
+            display: flex;
+            align-items: flex-end;
+            justify-content: space-between;
+            gap: 12px;
             font-size: 9.5px;
             color: #333;
+        }
+
+        .report-footer-title {
+            font-weight: 700;
+            letter-spacing: .2px;
+        }
+
+        .report-footer .printed-by {
+            flex: 0 0 auto;
+            text-align: right;
         }
 
         /* ---------- Small screens (preview only) ---------- */
@@ -469,7 +484,8 @@ if ($analytics) {
             .report { padding: 14px; }
             .letterhead { grid-template-columns: 1fr; text-align: center; }
             .logo { justify-content: center; }
-            .printed-by { text-align: center; }
+            .report-footer { flex-direction: column; align-items: center; text-align: center; }
+            .report-footer .printed-by { text-align: center; }
             .kpis { grid-template-columns: 1fr 1fr; }
             .kpi:nth-child(3) { border-left: 0; }
             .kpi:nth-child(n+3) { border-top: 1px solid #ccc; }
@@ -486,12 +502,13 @@ if ($analytics) {
             body { padding: 0; background: #fff; }
             .print-controls { display: none !important; }
 
-            .report { width: 210mm; min-height: 0; margin: 0; padding: 11mm 13mm; font-size: 10.5px; }
+            .report { width: 210mm; min-height: 275mm; margin: 0; padding: 11mm 13mm; font-size: 10.5px; }
 
             /* Always keep the compact desktop layout on paper. */
-            .letterhead { grid-template-columns: 90px minmax(0, 1fr) 130px; text-align: left; }
+            .letterhead { grid-template-columns: 90px minmax(0, 1fr); text-align: left; }
             .logo { justify-content: flex-start; }
-            .printed-by { text-align: right; }
+            .report-footer { flex-direction: row; align-items: flex-end; text-align: left; }
+            .report-footer .printed-by { text-align: right; }
             .kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
             .kpi:nth-child(n) { border-top: 0; }
             .kpi:nth-child(n+2) { border-left: 1px solid #ccc; }
@@ -555,13 +572,6 @@ if ($analytics) {
                     <?= htmlspecialchars($businessPhone, ENT_QUOTES, 'UTF-8') ?>
                 </div>
             </div>
-        </div>
-
-        <div class="printed-by">
-            <span class="label">Printed by</span>
-            <strong><?= htmlspecialchars($reportGeneratedBy, ENT_QUOTES, 'UTF-8') ?></strong>
-            <span><?= htmlspecialchars($reportGeneratedByRole, ENT_QUOTES, 'UTF-8') ?></span><br>
-            <span><?= date('M d, Y h:i A', strtotime($reportGeneratedAt)) ?></span>
         </div>
 
     </div>
@@ -891,7 +901,13 @@ if ($analytics) {
 
     <!-- FOOTER -->
     <div class="report-footer">
-        LOCAL MILKTEA HOUSE &mdash; End of Sales Report
+        <div class="report-footer-title">LOCAL MILKTEA HOUSE &mdash; End of Sales Report</div>
+        <div class="printed-by">
+            <span class="label">Printed by</span>
+            <strong><?= htmlspecialchars($reportGeneratedBy, ENT_QUOTES, 'UTF-8') ?></strong>
+            <span><?= htmlspecialchars($reportGeneratedByRole, ENT_QUOTES, 'UTF-8') ?></span><br>
+            <span><?= date('M d, Y h:i A', strtotime($reportGeneratedAt)) ?></span>
+        </div>
     </div>
 
 </div>
