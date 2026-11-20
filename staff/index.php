@@ -208,7 +208,7 @@ function staffVerifyPaymentForStatusTransition(
 
     $verifyGcash = (
         $currentStatus === 'pending_verification'
-        && $newStatus === 'order_queue'
+        && $newStatus === 'confirmed'
     );
 
     $verifyAtCompletion = (
@@ -299,7 +299,7 @@ function staffVerifyPaymentForStatusTransition(
             || !hash_equals($orderProof, $paymentProof)
         ) {
             throw new RuntimeException(
-                'The GCash proof is missing or does not match the payment record. The order cannot be moved to the queue.'
+                'The GCash proof is missing or does not match the payment record. The order cannot be confirmed.'
             );
         }
 
@@ -1158,18 +1158,10 @@ if (
             $orderIdentifier = $orderData['order_number']
                 ?: ($orderData['claim_number'] ?: 'Order');
 
-            /*
-             * IDEMPOTENT GCASH REVIEW
-             *
-             * If a repeated request arrives after the first request has
-             * already verified this GCash payment and moved the order,
-             * return success for that exact completed state. This prevents
-             * a false failure toast without allowing an unverified payment
-             * or a different status transition.
-             */
+            /* A repeated review request is successful only if payment verification is still consistent. */
             $alreadyProcessedGcashReview = (
-                $current_status === 'order_queue'
-                && $new_status === 'order_queue'
+                $current_status === 'confirmed'
+                && $new_status === 'confirmed'
                 && strtolower(trim((string)$orderData['payment_method'])) === 'gcash'
             );
 
@@ -1203,7 +1195,7 @@ if (
 
                 if (!$alreadyVerifiedCorrectly) {
                     throw new RuntimeException(
-                        'The order is already in the queue, but its GCash verification record is inconsistent. Please inspect the payment record.'
+                        'The order is already confirmed, but its GCash verification record is inconsistent. Please inspect the payment record.'
                     );
                 }
 
@@ -1214,8 +1206,8 @@ if (
                     'already_processed' => true,
                     'order_id' => $order_id,
                     'previous_status' => 'pending_verification',
-                    'new_status' => 'order_queue',
-                    'message' => "GCash payment for order {$orderIdentifier} was already verified and the order is in Order Queue.",
+                    'new_status' => 'confirmed',
+                    'message' => "GCash payment for order {$orderIdentifier} was already verified and the order is confirmed.",
                     'email_sent' => null,
                     'email_error' => null
                 ];
@@ -1248,13 +1240,13 @@ if (
 
             } else {
 
-                $isGcashVerificationTransition = (
+                $isGcashConfirmationTransition = (
                     $current_status === 'pending_verification'
-                    && $new_status === 'order_queue'
+                    && $new_status === 'confirmed'
                 );
                 $isProcessingTransition = (
                     in_array($new_status, ['confirmed', 'preparing'], true)
-                    || $isGcashVerificationTransition
+                    || $isGcashConfirmationTransition
                 );
                 if (
                     ($isProcessingTransition || ($current_status === 'preparing' && $new_status === 'ready'))
@@ -1266,7 +1258,7 @@ if (
                 }
 
                 $allowed_transitions = [
-                    'pending_verification' => ['order_queue'],
+                    'pending_verification' => ['confirmed'],
                     'order_queue' => ['confirmed'],
                     'confirmed' => ['preparing'],
                     'preparing' => ['ready'],
@@ -8170,7 +8162,7 @@ require_once '../includes/header.php';
 
                 <div class="modal-body p-3 p-md-4">
                     <input type="hidden" name="order_id" id="staffGcashReviewOrderId" value="">
-                    <input type="hidden" name="status" value="order_queue">
+                    <input type="hidden" name="status" value="confirmed">
                     <input type="hidden" name="status_filter" id="staffGcashReviewStatusFilter" value="pending_verification">
                     <input type="hidden" name="source_filter" id="staffGcashReviewSourceFilter" value="all">
                     <input type="hidden" name="q" id="staffGcashReviewSearch" value="">
@@ -8188,7 +8180,7 @@ require_once '../includes/header.php';
                         Compare the screenshot with the actual GCash transaction history or account received by the store. A screenshot by itself does not prove that the money was received.
                     </div>
                     <div class="alert alert-danger py-2 small mb-3" id="staffGcashOverdueNotice" role="alert" hidden>
-                        This overdue order cannot be verified or moved to the queue. Contact the customer; reject or cancel the order if pickup cannot be resolved.
+                        This overdue order cannot be verified or confirmed. Contact the customer; reject or cancel the order if pickup cannot be resolved.
                     </div>
 
                     <div class="details-section-title mb-2">Uploaded GCash Payment Screenshot</div>
@@ -8234,7 +8226,7 @@ require_once '../includes/header.php';
                         disabled
                     >
                         <i class="bi bi-shield-check me-1"></i>
-                        Verify Payment &amp; Move to Order Queue
+                        Verify Payment &amp; Confirm Order
                     </button>
                 </div>
             </form>
@@ -11745,7 +11737,7 @@ document.addEventListener(
                         try {
                             sessionStorage.setItem(
                                 'localiteaStaffGcashVerifiedToast',
-                                data.message || 'GCash payment was verified and moved to Order Queue.'
+                                data.message || 'GCash payment was verified and the order was confirmed.'
                             );
                         } catch (storageError) {
                             console.warn('Unable to preserve the GCash success toast:', storageError);
@@ -11756,7 +11748,7 @@ document.addEventListener(
 
                     if (typeof window.showAjaxOrderToast === 'function') {
                         window.showAjaxOrderToast(
-                            data.message || 'GCash payment was verified and the order moved to Order Queue.',
+                            data.message || 'GCash payment was verified and the order was confirmed.',
                             'Payment Verified'
                         );
                     }
@@ -11876,7 +11868,7 @@ document.addEventListener(
                     } else if (!preparingToastTicket && typeof window.showAjaxOrderToast === 'function') {
                         window.showAjaxOrderToast(
                             form.id === 'staffGcashReviewForm'
-                                ? 'Payment was verified and the order was moved to Order Queue.'
+                                ? 'Payment was verified and the order was confirmed.'
                                 : 'The order was updated successfully.',
                             form.id === 'staffGcashReviewForm'
                                 ? 'Payment Verified'
