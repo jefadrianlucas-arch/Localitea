@@ -3600,7 +3600,7 @@ if (
     $currentStmt->execute([$id]);
     $currentAvailability = $currentStmt->fetchColumn();
 
-    /* Only block the transition from Available -> Out of Stock. */
+    /* Only block the transition from Available -> Unavailable. */
     if ((int)$currentAvailability === 1) {
         $promotionUsage = settingsPromotionActiveUsage($pdo, $id);
 
@@ -6799,7 +6799,7 @@ document.addEventListener('DOMContentLoaded', function () {
         } elseif (isset($_GET['bestseller_error']) && $_GET['bestseller_error'] === 'not_found') {
             $settingsToast = ['type'=>'warning','icon'=>'bi-exclamation-triangle','message'=>'The selected product was not found.'];
         } elseif (isset($_GET['availability_error']) && $_GET['availability_error']==='promotion_active') {
-            $settingsToast = ['type'=>'warning','icon'=>'bi-exclamation-triangle','message'=>'This product cannot be set to Out of Stock while it is used by an active promotion. Deactivate or update the promotion first.'];
+            $settingsToast = ['type'=>'warning','icon'=>'bi-exclamation-triangle','message'=>'This product cannot be set to Unavailable while it is used by an active promotion. Deactivate or update the promotion first.'];
         } elseif (isset($_GET['delete_success'])) {
             $settingsToast = ['type'=>'success','icon'=>'bi-archive','message'=>'Product deleted successfully!'];
         } elseif (isset($_GET['delete_error']) && $_GET['delete_error']==='promotion_active') {
@@ -7223,7 +7223,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
                                             <?= $product['is_available']
                                                 ? 'Available'
-                                                : 'Out of Stock'
+                                                : 'Unavailable'
                                             ?>
 
                                         </span>
@@ -7241,7 +7241,7 @@ document.addEventListener('DOMContentLoaded', function () {
                                             <a
                                                 href="settings.php?toggle_availability=1&id=<?= (int)$product['id'] ?>&category=<?= urlencode($selectedCategory) ?>"
                                                 class="btn availability-action-btn <?= $product['is_available'] ? 'set-unavailable' : 'set-available' ?>"
-                                                title="<?= $product['is_available'] ? 'Set product as out of stock' : 'Set product as available' ?>"
+                                                title="<?= $product['is_available'] ? 'Set product as unavailable' : 'Set product as available' ?>"
                                             >
                                                 <?= $product['is_available'] ? 'Set Unavailable' : 'Set Available' ?>
                                             </a>
