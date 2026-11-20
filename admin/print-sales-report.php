@@ -58,8 +58,6 @@ $paySql    = $pay === 'all' ? '' : " AND payment_method = '" . $pay . "'";   // 
 $sectionLabels = [
     'payment'    => 'Payment Summary',
     'channel'    => 'Order Channel',
-    'products'   => 'Top 5 Products',
-    'categories' => 'Top Categories',
     'discounts'  => 'Discounts & Promotions',
     'outcomes'   => 'Orders, Cancellations & Refunds',
     'promos'     => 'Promotion Sales',
@@ -289,9 +287,6 @@ if ($analytics) {
     usort($paHours, static fn($a, $b) => (int)$b['orders'] <=> (int)$a['orders']);
     $paHours = array_slice($paHours, 0, 5);
 
-    /* Keep the print short: top 5 products and categories. */
-    $paProducts   = array_slice($analytics['topProducts'], 0, 5);
-    $paCategories = array_slice($analytics['categories'], 0, 5);
 }
 
 ?>
@@ -583,7 +578,11 @@ if ($analytics) {
         </div>
     </div>
 
-    <button type="button" class="print-now-btn" onclick="window.print()">Print Report</button>
+    <div class="print-mode-tabs">
+        <a href="print-product-report.php?start_date=<?= urlencode($start_date) ?>&end_date=<?= urlencode($end_date) ?>&pay=<?= urlencode($pay) ?>"
+           class="print-mode-tab" target="_blank" style="min-width:0;padding:7px 12px;">Product Report &rarr;</a>
+        <button type="button" class="print-now-btn" onclick="window.print()">Print Report</button>
+    </div>
 
     <div class="section-picker">
         <div class="print-mode-label">
@@ -674,41 +673,6 @@ if ($analytics) {
                     <tr><td>Walk-in</td><td><?= number_format($paCh['walk_in']['orders']) ?></td><td><?= $paPeso($paCh['walk_in']['sales']) ?></td><td><?= number_format(saShare($paCh['walk_in']['sales'], $paChTotal), 1) ?>%</td></tr>
                 </tbody>
             </table>
-        </div>
-
-        <!-- TOP PRODUCTS -->
-        <div class="blk" <?= $secAttr('products') ?>>
-            <div class="blk-title">Top 5 Products</div>
-            <?php if (empty($paProducts)): ?>
-                <div class="empty">No items sold in this period.</div>
-            <?php else: ?>
-                <table class="t">
-                    <thead><tr><th>Product</th><th>Qty Sold</th><th>Free</th><th>Item Sales</th></tr></thead>
-                    <tbody>
-                        <?php foreach ($paProducts as $paP): ?>
-                            <tr><td><?= htmlspecialchars((string)$paP['name']) ?></td><td><?= number_format((int)$paP['qty']) ?></td><td><?= (int)$paP['free_qty'] > 0 ? number_format((int)$paP['free_qty']) : '-' ?></td><td><?= $paPeso($paP['sales']) ?></td></tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-            <?php endif; ?>
-        </div>
-
-        <!-- CATEGORIES -->
-        <div class="blk" <?= $secAttr('categories') ?>>
-            <div class="blk-title">Top Categories</div>
-            <?php if (empty($paCategories)): ?>
-                <div class="empty">No items sold in this period.</div>
-            <?php else: ?>
-                <table class="t">
-                    <thead><tr><th>Category</th><th>Qty Sold</th><th>Free</th><th>Item Sales</th></tr></thead>
-                    <tbody>
-                        <?php foreach ($paCategories as $paC): ?>
-                            <tr><td><?= htmlspecialchars((string)$paC['category_name']) ?></td><td><?= number_format((int)$paC['qty']) ?></td><td><?= (int)$paC['free_qty'] > 0 ? number_format((int)$paC['free_qty']) : '-' ?></td><td><?= $paPeso($paC['sales']) ?></td></tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-                <div class="note">Free promo items are not counted as sold or as sales. Item sales are before discounts.</div>
-            <?php endif; ?>
         </div>
 
         <!-- DISCOUNTS -->
