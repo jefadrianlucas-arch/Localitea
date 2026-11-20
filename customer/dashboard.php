@@ -2211,6 +2211,120 @@ require_once '../includes/navbar.php';
         }
     }
 
+    /* Cancellation reason dropdown: same design as the admin cancel modal. */
+    .cancel-reason-dropdown {
+        position: relative;
+        width: 100%;
+    }
+
+    .cancel-reason-dropdown > select.js-cancellation-reason {
+        position: absolute;
+        left: 0;
+        bottom: 0;
+        width: 100%;
+        height: 1px;
+        opacity: 0;
+        pointer-events: none;
+    }
+
+    .cancel-reason-toggle {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        width: 100%;
+        min-height: 44px;
+        padding: 10px 13px;
+        border: 1px solid #d7c4b1;
+        border-radius: 8px;
+        background: #fff;
+        color: #75685d;
+        text-align: left;
+        font-size: .9rem;
+        white-space: normal;
+    }
+
+    .cancel-reason-toggle.has-value {
+        color: #38291f;
+    }
+
+    .cancel-reason-toggle:focus,
+    .cancel-reason-toggle[aria-expanded="true"] {
+        border-color: #8a5938;
+        box-shadow: 0 0 0 .18rem rgba(138, 89, 56, .14);
+        outline: 0;
+    }
+
+    .cancel-reason-toggle i {
+        flex: 0 0 auto;
+        color: #795238;
+        transition: transform .15s ease;
+    }
+
+    .cancel-reason-toggle[aria-expanded="true"] i {
+        transform: rotate(180deg);
+    }
+
+    .cancel-reason-menu {
+        position: fixed;
+        z-index: 2000;
+        max-height: 360px;
+        overflow-x: hidden;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        padding: 6px;
+        border: 1px solid #ddcbb9;
+        border-radius: 9px;
+        background: #fffdfa;
+        box-shadow: 0 10px 24px rgba(44, 29, 19, .2);
+        scrollbar-width: thin;
+        scrollbar-color: #c3a58d #f7f0e9;
+    }
+
+    .cancel-reason-menu[hidden] {
+        display: none !important;
+    }
+
+    .cancel-reason-option {
+        display: block;
+        width: 100%;
+        min-height: 36px;
+        padding: 8px 10px;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        color: #38291f;
+        text-align: left;
+        font-size: .86rem;
+        line-height: 1.35;
+        white-space: normal;
+        cursor: pointer;
+    }
+
+    .cancel-reason-option:hover,
+    .cancel-reason-option:focus-visible {
+        background: #f4e8da;
+        outline: none;
+    }
+
+    .cancel-reason-option.is-selected {
+        background: #eee0d1;
+        color: #5b3925;
+        font-weight: 700;
+    }
+
+    @media (max-width: 575.98px) {
+        .cancel-reason-menu {
+            max-height: 280px;
+        }
+
+        .cancel-reason-option {
+            min-height: 40px;
+            padding: 9px 10px;
+            font-size: .82rem;
+        }
+    }
+
     @media (max-width: 768px) {
         .active-order-card .current-order-header {
             padding: 14px 16px;
@@ -4774,6 +4888,174 @@ if ($isHistoryAjax) {
         select.addEventListener('change', function () {
             syncOtherReason(select, true);
         });
+    });
+})();
+</script>
+
+<script>
+/*
+ * Cancellation reason dropdown (admin-style design).
+ * Enhances each existing <select class="js-cancellation-reason">: the select
+ * stays in the form as the real value, so submit, validation and the "Other"
+ * textarea logic keep working unchanged. The menu is moved to the modal root
+ * and positioned against the viewport so the modal body can't clip it.
+ */
+(function () {
+    document.querySelectorAll('.js-cancellation-reason').forEach(function (select) {
+        const modal = select.closest('.modal');
+        if (!modal || select.dataset.dropdownReady === '1') return;
+        select.dataset.dropdownReady = '1';
+
+        const placeholderOption = select.querySelector('option[value=""]');
+        const placeholder = placeholderOption ? placeholderOption.textContent.trim() : 'Select a reason';
+
+        const wrap = document.createElement('div');
+        wrap.className = 'cancel-reason-dropdown';
+        select.parentNode.insertBefore(wrap, select);
+        wrap.appendChild(select);
+        select.tabIndex = -1;
+        select.setAttribute('aria-hidden', 'true');
+
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'cancel-reason-toggle';
+        toggle.setAttribute('aria-haspopup', 'listbox');
+        toggle.setAttribute('aria-expanded', 'false');
+        const label = document.createElement('span');
+        const chevron = document.createElement('i');
+        chevron.className = 'bi bi-chevron-down';
+        chevron.setAttribute('aria-hidden', 'true');
+        toggle.appendChild(label);
+        toggle.appendChild(chevron);
+        wrap.insertBefore(toggle, select);
+
+        const menu = document.createElement('div');
+        menu.className = 'cancel-reason-menu';
+        menu.setAttribute('role', 'listbox');
+        menu.hidden = true;
+        wrap.appendChild(menu);
+
+        Array.from(select.options).forEach(function (opt) {
+            if (opt.value === '') return;
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'cancel-reason-option';
+            btn.setAttribute('role', 'option');
+            btn.setAttribute('aria-selected', 'false');
+            btn.dataset.value = opt.value;
+            btn.textContent = opt.textContent.trim();
+            menu.appendChild(btn);
+        });
+
+        const menuHome = document.createComment('cancel reason menu home');
+        wrap.insertBefore(menuHome, menu);
+        let isOpen = false;
+
+        function syncLabel() {
+            const current = select.value;
+            let text = placeholder;
+            menu.querySelectorAll('.cancel-reason-option').forEach(function (btn) {
+                const on = current !== '' && btn.dataset.value === current;
+                btn.classList.toggle('is-selected', on);
+                btn.setAttribute('aria-selected', on ? 'true' : 'false');
+                if (on) text = btn.textContent;
+            });
+            label.textContent = text;
+            toggle.classList.toggle('has-value', current !== '');
+        }
+
+        function position() {
+            if (!isOpen) return;
+            const rect = toggle.getBoundingClientRect();
+            const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+            const vw = window.visualViewport ? window.visualViewport.width : window.innerWidth;
+            const left = Math.max(8, Math.min(rect.left, vw - rect.width - 8));
+            const width = Math.max(160, Math.min(rect.width, vw - 16));
+            const maxH = Math.min(360, Math.max(56, vh - rect.bottom - 12));
+            menu.style.top = Math.round(rect.bottom + 5) + 'px';
+            menu.style.left = Math.round(left) + 'px';
+            menu.style.width = Math.round(width) + 'px';
+            menu.style.maxHeight = Math.floor(maxH) + 'px';
+        }
+
+        function close() {
+            menu.hidden = true;
+            isOpen = false;
+            toggle.setAttribute('aria-expanded', 'false');
+            ['top', 'left', 'width', 'max-height'].forEach(function (prop) {
+                menu.style.removeProperty(prop);
+            });
+            if (menuHome.parentNode && menu.parentNode !== menuHome.parentNode) {
+                menuHome.parentNode.insertBefore(menu, menuHome.nextSibling);
+            }
+        }
+
+        function open() {
+            if (isOpen) { position(); return; }
+            modal.appendChild(menu);
+            menu.hidden = false;
+            isOpen = true;
+            toggle.setAttribute('aria-expanded', 'true');
+            position();
+        }
+
+        toggle.addEventListener('click', function () { isOpen ? close() : open(); });
+
+        toggle.addEventListener('keydown', function (e) {
+            if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                open();
+                const first = menu.querySelector('.cancel-reason-option');
+                if (first) first.focus();
+            } else if (e.key === 'Escape' && isOpen) {
+                e.stopPropagation();
+                close();
+            }
+        });
+
+        menu.addEventListener('keydown', function (e) {
+            const items = Array.from(menu.querySelectorAll('.cancel-reason-option'));
+            const idx = items.indexOf(document.activeElement);
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                (items[idx + 1] || items[0]).focus();
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                (items[idx - 1] || items[items.length - 1]).focus();
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                close();
+                toggle.focus();
+            }
+        });
+
+        menu.addEventListener('click', function (e) {
+            const btn = e.target.closest('.cancel-reason-option');
+            if (!btn) return;
+            select.value = btn.dataset.value;
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+            syncLabel();
+            close();
+            toggle.focus();
+        });
+
+        document.addEventListener('click', function (e) {
+            if (isOpen && !wrap.contains(e.target) && !menu.contains(e.target)) close();
+        });
+
+        window.addEventListener('resize', position);
+        if (window.visualViewport) window.visualViewport.addEventListener('resize', position);
+        modal.addEventListener('scroll', position, true);
+        modal.addEventListener('hidden.bs.modal', function () {
+            close();
+            select.value = '';
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+            syncLabel();
+        });
+
+        select.addEventListener('change', syncLabel);
+        syncLabel();
     });
 })();
 </script>

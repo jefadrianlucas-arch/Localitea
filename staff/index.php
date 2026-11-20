@@ -8088,7 +8088,7 @@ require_once '../includes/header.php';
 
                     <button
                         type="button"
-                        class="btn btn-outline-secondary"
+                        class="btn btn-brown"
                         data-bs-dismiss="modal"
                     >
                         Keep Order
@@ -8110,6 +8110,41 @@ require_once '../includes/header.php';
         </div>
     </div>
 </div>
+
+<style>
+/* Staff cancel modal: Keep Order matches the customer dashboard button. */
+#staffCancelOrderModal .modal-footer {
+    gap: 8px;
+}
+
+#staffCancelOrderModal .btn-brown {
+    min-width: 110px;
+    background: #6f4e37;
+    border: 1px solid #6f4e37;
+    color: #ffffff;
+    border-radius: 10px;
+    padding: 8px 16px;
+    font-weight: 700;
+}
+
+#staffCancelOrderModal .btn-brown:hover,
+#staffCancelOrderModal .btn-brown:focus-visible {
+    background: #5b3d2e;
+    border-color: #5b3d2e;
+    color: #ffffff;
+}
+
+@media (max-width: 576px) {
+    #staffCancelOrderModal .modal-footer {
+        flex-wrap: wrap;
+    }
+
+    #staffCancelOrderModal .modal-footer .btn {
+        flex: 1 1 100%;
+        min-height: 42px;
+    }
+}
+</style>
 
 <style>
 /* Overdue orders: Cancel is the only row action. */
