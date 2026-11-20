@@ -839,29 +839,6 @@ if ($analytics) {
 
         <?php else: ?>
 
-            <div class="ov-hl">
-                <div>
-                    <span>Best <?= $ovUnit ?></span>
-                    <strong><?= htmlspecialchars($ovBest['label']) ?></strong>
-                    <em><?= $paPeso($ovBest['sales']) ?> &middot; <?= number_format($ovBest['orders']) ?> orders</em>
-                </div>
-                <div>
-                    <span>Lowest <?= $ovUnit ?> with sales</span>
-                    <strong><?= htmlspecialchars($ovLowest['label']) ?></strong>
-                    <em><?= $paPeso($ovLowest['sales']) ?> &middot; <?= number_format($ovLowest['orders']) ?> orders</em>
-                </div>
-                <div>
-                    <span>Average per <?= $ovUnit ?></span>
-                    <strong><?= $paPeso($ovAveragePerPeriod) ?></strong>
-                    <em>over all <?= count($salesOverview) ?> <?= $ovUnit ?>(s)</em>
-                </div>
-                <div>
-                    <span><?= ucfirst($ovUnit) ?>s with sales</span>
-                    <strong><?= $ovActive ?> of <?= count($salesOverview) ?></strong>
-                    <em><?= number_format(saShare((float)$ovActive, (float)count($salesOverview)), 0) ?>% of <?= $ovUnit ?>s</em>
-                </div>
-            </div>
-
             <table class="t ov">
                 <thead>
                     <tr>
