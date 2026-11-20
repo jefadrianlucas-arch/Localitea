@@ -6325,7 +6325,8 @@ require_once '../includes/header.php';
                                                             ?: 'ORD-' . $order_id
                                                         ) ?>
                                                     </div>
-                                                    <span class="badge <?= $orderSource === 'walk_in' ? 'bg-secondary' : 'bg-primary' ?>">
+                                                    <span class="order-source-badge source-<?= $orderSource ?>">
+                                                        <i class="bi <?= $orderSource === 'walk_in' ? 'bi-shop' : 'bi-globe2' ?>" aria-hidden="true"></i>
                                                         <?= $orderSource === 'walk_in' ? 'Walk-in' : 'Online' ?>
                                                     </span>
                                                     <div class="order-table-date">
